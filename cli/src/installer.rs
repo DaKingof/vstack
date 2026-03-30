@@ -86,6 +86,9 @@ pub fn install_skill(
                 crate::skill::inject_skill_instructions(&skill_md, text);
             }
 
+            // Rebuild AGENTS.md from rule files if skill uses the rules pattern
+            crate::rules::rebuild_agents_md(&canonical).ok();
+
             // Step 2: If this harness IS the canonical path, we're done
             if dest == canonical {
                 format!(
@@ -127,6 +130,9 @@ pub fn install_skill(
                 let skill_md = dest.join("SKILL.md");
                 crate::skill::inject_skill_instructions(&skill_md, text);
             }
+
+            // Rebuild AGENTS.md from rule files
+            crate::rules::rebuild_agents_md(&dest).ok();
 
             format!(
                 "{} → {} (copy, {})",

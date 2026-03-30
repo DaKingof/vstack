@@ -19,6 +19,9 @@ serde_yaml = "0.9"
 serde_json = "1"
 toml = "0.8"
 
+# Regex (lightweight)
+regex-lite = "0.1"
+
 # Filesystem
 walkdir = "2"
 

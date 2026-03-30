@@ -8,6 +8,7 @@ mod harness;
 mod hook;
 mod installer;
 mod mapping;
+mod rules;
 mod skill;
 mod tui;
 
