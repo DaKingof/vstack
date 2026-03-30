@@ -239,9 +239,12 @@ fn create_project_config(path: &Path, agents: &[String], skills: &[String]) {
     out.push_str("#   Second line.\n");
     out.push_str("#   \"\"\"\n");
     out.push_str("#\n");
-    out.push_str("[agent-guidance]\n");
-    for name in agents {
+    out.push_str("[agent-guidance]\n\n");
+    for (i, name) in agents.iter().enumerate() {
         out.push_str(&format!("{} = \"\"\n", name));
+        if i + 1 < agents.len() {
+            out.push('\n');
+        }
     }
 
     // ── agent-instructions ──
@@ -250,9 +253,12 @@ fn create_project_config(path: &Path, agents: &[String], skills: &[String]) {
     out.push_str("# bottom of each agent file. Project-specific rules,\n");
     out.push_str("# conventions, or reminders for this agent.\n");
     out.push_str("#\n");
-    out.push_str("[agent-instructions]\n");
-    for name in agents {
+    out.push_str("[agent-instructions]\n\n");
+    for (i, name) in agents.iter().enumerate() {
         out.push_str(&format!("{} = \"\"\n", name));
+        if i + 1 < agents.len() {
+            out.push('\n');
+        }
     }
 
     // ── skill-instructions ──
@@ -262,9 +268,12 @@ fn create_project_config(path: &Path, agents: &[String], skills: &[String]) {
     out.push_str("# context for how this skill applies to your codebase.\n");
     out.push_str("# Won't overwrite the skill author's own instructions.\n");
     out.push_str("#\n");
-    out.push_str("[skill-instructions]\n");
-    for name in skills {
+    out.push_str("[skill-instructions]\n\n");
+    for (i, name) in skills.iter().enumerate() {
         out.push_str(&format!("{} = \"\"\n", name));
+        if i + 1 < skills.len() {
+            out.push('\n');
+        }
     }
 
     // ── custom-skills ──
@@ -278,9 +287,12 @@ fn create_project_config(path: &Path, agents: &[String], skills: &[String]) {
     out.push_str("#\n");
     out.push_str("# Leave empty [] for no extra skills.\n");
     out.push_str("#\n");
-    out.push_str("[custom-skills]\n");
-    for name in agents {
+    out.push_str("[custom-skills]\n\n");
+    for (i, name) in agents.iter().enumerate() {
         out.push_str(&format!("{} = []\n", name));
+        if i + 1 < agents.len() {
+            out.push('\n');
+        }
     }
 
     // ── custom-hooks ──
