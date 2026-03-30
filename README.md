@@ -112,7 +112,7 @@ Package dependencies are currently skill-to-skill dependencies. A skill can decl
 ```yaml
 dependencies:
   required: [linear, orchestration, decider]
-  optional: [benchmarking]
+  optional: []
 ```
 
 `vstack` builds a dependency graph from installed skills and auto-adds only `required` dependencies. `optional` dependencies are preserved as metadata/documentation, but are not auto-installed.
@@ -292,7 +292,6 @@ These packages are still WIP. They were migrated from a specific project and hav
 
 | Skill | Brief | Arguments |
 |---|---|---|
-| `benchmarking*` | Benchmark recording, baselines, and regression detection workflows. | <ul><li><code>/benchmarking bench</code></li></ul> |
 | `decider*` | Architectural decision document management and indexing. | — |
 | `github*` | GitHub PR, thread, review, CI, and merge workflows. | — |
 | `issue-lifecycle*` | Delegated implementation/review/QA issue workflows. | — |
