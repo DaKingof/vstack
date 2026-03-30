@@ -36,8 +36,7 @@ Workflows reference these companion skills and tools. Install and configure per 
 | Issue tracker CLI (e.g., `linear` skill) | Issue CRUD, cache, comments, labels | `$ISSUE_CLI` |
 | Orchestration skill | Review-finding schema, recommendation-bias patterns | Referenced by name |
 | Decider skill | Decision templates, search CLI, creation workflows | `$DECISIONS_CMD` |
-| Benchmarking skill (optional) | Baseline capture, regression classification, recording | `$BENCH_CLI`, `$BENCH_PARSER` |
-| Visual QA skill (optional) | Screenshot capture, interactive testing | `$VISUAL_QA_CLI`, `$SCREENSHOT_CLI` |
+| Benchmarking skill (optional, project-provided) | Baseline capture, regression classification, recording | `$BENCH_CLI`, `$BENCH_PARSER` |
 
 Project-level configuration:
 
@@ -63,8 +62,8 @@ Project-level configuration:
 | Review finding schema | Orchestration skill (`schemas/review-finding.md`) |
 | Recommendation bias | Orchestration skill (`workflows/recommendation-bias.md`) |
 | Label application | Project label application guide |
-| Benchmark baselines | Benchmarking skill (`workflows/issue-baselines.md`) |
-| Regression classification | Benchmarking skill |
+| Benchmark baselines | Project benchmarking skill if available (`$BENCH_CLI`) |
+| Regression classification | Project benchmarking skill if available |
 
 ## Configuration
 

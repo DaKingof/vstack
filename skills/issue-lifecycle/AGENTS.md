@@ -33,8 +33,7 @@ Workflows reference these companion skills and tools. Install and configure per 
 |------------|---------|----------|
 | Issue tracker CLI (e.g., `linear` skill) | Issue CRUD, cache, comments, labels | `$ISSUE_CLI` |
 | Orchestration skill | Review-finding schema, recommendation-bias patterns | Referenced by name |
-| Benchmarking skill (optional) | Baseline capture, regression classification, recording | `$BENCH_CLI`, `$BENCH_PARSER` |
-| Visual QA skill (optional) | Screenshot capture, interactive testing, target routing | `$VISUAL_QA_CLI`, `$SCREENSHOT_CLI`, `$VISUAL_QA_TARGET_CMD` |
+| Benchmarking skill (optional, project-provided) | Baseline capture, regression classification, recording | `$BENCH_CLI`, `$BENCH_PARSER` |
 
 Project-level configuration:
 
@@ -165,7 +164,7 @@ Follow your agent definition for architecture docs, code paths, skills to load.
 **Check labels** from § 2.1. If `baseline` label present:
 
 1. **Identify affected domain** — determine which component (backend, frontend, etc.) is affected
-2. **Follow** the benchmarking skill's baseline workflow Phase 1 (backend or UI path)
+2. **If a benchmarking skill is available** (`$BENCH_CLI`), follow its baseline workflow to capture pre-implementation baselines
 
 The perf-qa agent uses the baseline file during QA review.
 
@@ -678,7 +677,7 @@ Run your agent-specific review. See your agent file for exact commands and Outpu
 
 **Skip if** not `perf-qa` or no regressions detected (exit code 0).
 
-When `$BENCH_CLI regression` exits with code 1, classify every regressed operation per the benchmarking skill's regression classification rules. Populate `blockers[]` and `qa_metadata.perf_qa.regressions[]` per your agent's Output section.
+When `$BENCH_CLI regression` exits with code 1, classify every regressed operation using the project's benchmarking skill if available. Populate `blockers[]` and `qa_metadata.perf_qa.regressions[]` per your agent's Output section.
 
 #### 2.5 Record Benchmark Results (perf-qa only)
 
@@ -688,7 +687,7 @@ When `$BENCH_CLI regression` exits with code 1, classify every regressed operati
 - **Frontend/UI changes**: Run a project-specific perf capture tool and pipe results to `$BENCH_CLI record`
 - **Manual entry**: `$BENCH_CLI record <component> '<json>'`
 
-See the benchmarking skill for full recording details.
+See the project's benchmarking skill for full recording details if available.
 
 **Note**: Benchmark results may be symlinked to the main repo in worktrees. Results are written directly to main's directory — no commit needed. Record the latest commit SHA from your worktree branch as the benchmark commit in your return output (§ 3).
 

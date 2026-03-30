@@ -114,7 +114,7 @@ Follow your agent definition for architecture docs, code paths, skills to load.
 **Check labels** from § 2.1. If `baseline` label present:
 
 1. **Identify affected domain** — determine which component (backend, frontend, etc.) is affected
-2. **Follow** the benchmarking skill's baseline workflow Phase 1 (backend or UI path)
+2. **If a benchmarking skill is available** (`$BENCH_CLI`), follow its baseline workflow to capture pre-implementation baselines
 
 The perf-qa agent uses the baseline file during QA review.
 

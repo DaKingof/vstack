@@ -44,8 +44,7 @@ The workflow for QA agents (safety, perf-qa, arch-review) triggered via `needs-*
 | Issue tracker CLI (e.g., `linear` skill) | Issue CRUD, cache, comments, labels | `$ISSUE_CLI` |
 | Orchestration skill | Review-finding schema, recommendation-bias patterns | Referenced by name |
 | Decider skill | Decision templates, search CLI, creation workflows | `$DECISIONS_CMD` |
-| Benchmarking skill (optional) | Baseline capture, regression classification, recording | `$BENCH_CLI`, `$BENCH_PARSER` |
-| Visual QA skill (optional) | Screenshot capture, interactive testing, target routing | `$VISUAL_QA_CLI`, `$SCREENSHOT_CLI`, `$VISUAL_QA_TARGET_CMD` |
+| Benchmarking skill (optional, project-provided) | Baseline capture, regression classification, recording | `$BENCH_CLI`, `$BENCH_PARSER` |
 
 ## Configuration
 
