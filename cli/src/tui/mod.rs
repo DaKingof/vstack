@@ -315,7 +315,7 @@ pub fn run_install_flow(
                     source_selector.options.clone(),
                 );
 
-            let harnesses = 'harness_step: loop {
+            let (harnesses, method) = 'harness_step: loop {
                 match run_tabbed_select(&mut harness_select, None)? {
                     SelectResult::Cancelled => return Ok(InstallFlowResult::Cancelled),
                     SelectResult::Back => continue 'scope_step,
@@ -343,9 +343,6 @@ pub fn run_install_flow(
                         Some("Select at least one harness to continue".into());
                     continue 'harness_step;
                 }
-
-                break 'harness_step harnesses;
-            };
 
             // ── Step 4: Install method ─────────────────────────────
             let mut summary_lines = vec![
@@ -443,15 +440,15 @@ pub fn run_install_flow(
 
             match run_tabbed_select(&mut select, None)? {
                 SelectResult::Cancelled => return Ok(InstallFlowResult::Cancelled),
-                SelectResult::Back => continue 'scope_step, // back to step 2
+                SelectResult::Back => continue 'harness_step, // back to step 3
                 SelectResult::SwitchSource(source) => {
                     return Ok(InstallFlowResult::SwitchSource(source));
                 }
                 SelectResult::JumpToStep(1) => continue 'steps,
                 SelectResult::JumpToStep(2) => continue 'scope_step,
-                SelectResult::JumpToStep(3) => continue 'scope_step,
+                SelectResult::JumpToStep(3) => continue 'harness_step,
                 SelectResult::JumpToStep(4) => continue,
-                SelectResult::JumpToStep(_) => continue 'scope_step,
+                SelectResult::JumpToStep(_) => continue 'harness_step,
                 SelectResult::Confirmed => {
                     let method_selected = select.all_selected();
                     let method = if method_selected.iter().any(|(_, l)| *l == "Copy") {
@@ -459,10 +456,13 @@ pub fn run_install_flow(
                     } else {
                         InstallMethod::Symlink
                     };
-                    break 'scope_step (global, harnesses, Vec::new(), method);
+                    break 'harness_step (harnesses, method);
                 }
             }
-        };
+            }; // end harness_step
+
+            break 'scope_step (global, harnesses, Vec::new(), method);
+        }; // end scope_step
 
         break 'steps (
             selected_agents,
@@ -1267,9 +1267,9 @@ fn run_tabbed_select(
                                     break SelectResult::JumpToStep(target_step);
                                 }
                                 if target_step > cur_step
-                                    && let Some(result) = try_confirm_select(select)?
+                                    && try_confirm_select(select)?.is_some()
                                 {
-                                    break result;
+                                    break SelectResult::JumpToStep(target_step);
                                 }
                             }
                         } else if select.layout_tab_bar.contains(pos) && select.tabs.len() > 1 {
