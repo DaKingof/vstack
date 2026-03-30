@@ -134,6 +134,17 @@ trading-design = "Focus on dark theme with green/red accent colors for this proj
 - **Child workflows return JSON to parent.** Subagent workflows (project-management, issue-lifecycle) output JSON in `<output_format>` tags — the calling primary agent writes files.
 - **Never bump the CLI version.** The version in `cli/Cargo.toml` and the matching GitHub release tag are managed manually by the user. Do not change the version or create releases unless explicitly asked.
 
+## Updating Skills (Source Repo)
+
+When adding or modifying a skill rule in this repo:
+
+1. **Add/edit the rule file** in `skills/<name>/rules/` following the format in `rules/_template.md` (YAML frontmatter with title, impact, impactDescription, tags + markdown body starting with `## Title`).
+2. **Update `_sections.md`** if adding a new section category (new prefix).
+3. **Update SKILL.md** quick-reference list to include the new rule's one-liner.
+4. **Edit AGENTS.md directly** — in the source repo, AGENTS.md is the canonical document. Add the rule content under the appropriate `## N.` section as a `### Title` subsection.
+
+Note: In **installed** copies (user projects), AGENTS.md is auto-generated from `rules/` files by `vstack refresh`. The source repo AGENTS.md is NOT auto-generated — it is hand-maintained and serves as the master copy that gets installed.
+
 ## Build & Test
 
 ```bash
