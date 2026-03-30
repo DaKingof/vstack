@@ -39,6 +39,7 @@ Reference these guidelines when:
 - `layout-aos-vs-soa` - SoA when iterating single fields; AoS when accessing multiple fields per element
 - `layout-struct-analysis` - `pahole -C MyStruct` to verify field offsets, padding, cache-line fit
 - `layout-hot-cold-splitting` - Hot fields in 64-byte aligned struct; cold fields separate
+- `layout-cold-function-annotation` - `#[cold]` on error/rejection handlers to keep them out of hot I-cache
 
 ### 2. False Sharing (CRITICAL)
 
