@@ -38,8 +38,10 @@ This makes `vstack` closer to a package manager than a static dotfiles repo.
 - **Dependency resolution**: skills declare required/optional dependencies in `SKILL.md`; required deps are auto-included transitively.
 - **Config-driven attribution**: `vstack.toml` maps extra skills to agents, role-wide skills to agent roles, and hook events to roles.
 - **Project customization**: per-agent guidance, instructions, custom skills, per-skill instructions, and custom hooks via project-level `vstack.toml` — survives upstream updates.
+- **AGENTS.md auto-rebuild**: skills with `rules/` directories get their AGENTS.md rebuilt from individual rule files on every install and refresh. Header, footer, and table of contents are auto-generated.
+- **Project rules**: add project-specific rules as `.md` files in a skill's `project-rules/` directory. They're preserved across updates and assembled into a "Project Rules" section of the skill's AGENTS.md on refresh.
 - **Reconciliation**: installed agents and skills regenerate when packages change, preserving user edits.
-- **`vstack refresh`**: regenerate all agent files and re-inject skill instructions from `vstack.toml`.
+- **`vstack refresh`**: regenerate all agent files, re-inject skill instructions, and rebuild AGENTS.md from rule files.
 - **Version-based update check**: notifies when the CLI version changes, not on every repo push. `vstack update --force` to rebuild from source.
 - **Source registry**: previously used package repos are remembered and reusable from the TUI.
 - **Fast terminal UX**: native Rust TUI with mouse support, built with `ratatui` and `crossterm`.
@@ -169,6 +171,16 @@ agents = "all"     # "all", a role ("engineer"), or a list ["rust", "iced"]
 
 If you edit a generated agent or skill file directly (e.g., add an "Additional Instructions" section), vstack extracts your edits and saves them to `vstack.toml` before the next regeneration — so both approaches work.
 
+### Project Rules
+
+Skills with a `rules/` directory get their AGENTS.md rebuilt from individual rule files on every install and refresh. To add project-specific rules without modifying the source skill:
+
+1. Create a `project-rules/` directory inside the installed skill (e.g., `.agents/skills/rust-conventions/project-rules/`)
+2. Add `.md` files following the rule template format (YAML frontmatter with title/impact + body)
+3. Run `vstack refresh` — your rules appear in a "Project Rules" section of the skill's AGENTS.md
+
+Project rules are preserved across upstream updates. They're backed up before re-copying and restored after.
+
 ### Architecture
 
 ```text
@@ -286,6 +298,7 @@ Windows note:
 | `iced-rs` | Iced 0.14 patterns, reactive UI rules, and Elm-style structure. | — |
 | `price-handling` | Price rounding, epsilon comparison, and market-price handling. | — |
 | `trading-design` | Dense, professional trading-style interface design guidance. | — |
+
 #### Workflow / Platform (WIP)
 
 These packages are still WIP. They were migrated from a specific project and have not been tested as thoroughly in the generalized `vstack` setup yet. GitHub issues are welcome.
@@ -300,7 +313,7 @@ These packages are still WIP. They were migrated from a specific project and hav
 | `project-management*` | TPM planning flows for cycles, prioritization, and roadmaps. | — |
 | `worktree*` | Git worktree creation, env/config linkage, and isolated workflows. | <ul><li><code>/worktree create &lt;ID&gt; [--base &lt;ref&gt;] [--pr &lt;N&gt;]</code></li><li><code>/worktree list</code></li><li><code>/worktree remove &lt;ID|path&gt;</code></li><li><code>/worktree cleanup</code></li><li><code>/worktree path &lt;ID&gt;</code></li><li><code>/worktree exists &lt;ID&gt;</code></li><li><code>/worktree check</code></li><li><code>/worktree push [ID|/path] [--set-upstream|-u] [--no-rebase]</code></li></ul> |
 
-`*` Requires project-local setup before first use, such as `.env.local`, benchmark/decision directories, or command aliases. Check that skill's `README.md` for the exact bootstrap steps.
+`*` Requires project-local setup before first use, such as `.env.local`, decision directories, or command aliases. Check that skill's `README.md` for the exact bootstrap steps.
 
 ### Hooks
 
