@@ -85,6 +85,11 @@ pub fn rebuild_agents_md(skill_dir: &Path) -> Result<bool> {
         out.push('\n');
     }
 
+    // Generation notice — helps AI agents know not to edit this file directly
+    if !header.contains("source of truth") {
+        out.push_str("\n> **Important:** This compiled document may lag behind the individual rule files in `rules/`. When in doubt, the individual rule files are the source of truth. To add project-specific rules, create files in `project-rules/` and run `vstack refresh`.\n");
+    }
+
     // Table of Contents
     out.push_str("\n## Table of Contents\n\n");
     for (i, section) in sections.iter().enumerate() {
