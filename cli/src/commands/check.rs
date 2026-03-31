@@ -1,5 +1,4 @@
 use crate::config::{self, LockEntry, LockFile};
-use crate::harness::Harness;
 use anyhow::Result;
 
 pub fn run() -> Result<()> {
@@ -34,7 +33,7 @@ pub fn run() -> Result<()> {
 
         let mut outdated = 0;
         for entry in lock.entries.values() {
-            let status = check_staleness(entry, global);
+            let status = check_staleness(entry);
             if status == "outdated" {
                 outdated += 1;
             }
@@ -63,100 +62,39 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn skill_install_paths(entry: &LockEntry, global: bool) -> Vec<std::path::PathBuf> {
-    if global {
-        let mut paths = Vec::new();
-        if entry
-            .harnesses
-            .iter()
-            .filter_map(|h| Harness::from_id(h))
-            .any(|h| !matches!(h, Harness::Codex))
-        {
-            paths.push(config::global_state_dir().join("skills").join(&entry.name));
-        }
-        if entry
-            .harnesses
-            .iter()
-            .filter_map(|h| Harness::from_id(h))
-            .any(|h| matches!(h, Harness::Codex))
-        {
-            paths.push(config::codex_home_dir().join("skills").join(&entry.name));
-        }
-        paths
-    } else {
-        vec![
-            config::project_root()
-                .join(".agents")
-                .join("skills")
-                .join(&entry.name),
-        ]
-    }
-}
-
-fn hook_install_paths(entry: &LockEntry, global: bool) -> Vec<std::path::PathBuf> {
-    entry
-        .harnesses
-        .iter()
-        .filter_map(|h| Harness::from_id(h))
-        .filter(|h| matches!(h, Harness::ClaudeCode))
-        .map(|_| {
-            if global {
-                config::claude_global_dir()
-                    .join("hooks")
-                    .join(format!("{}.sh", entry.name))
-            } else {
-                config::project_root()
-                    .join(".claude")
-                    .join("hooks")
-                    .join(format!("{}.sh", entry.name))
-            }
-        })
-        .collect()
-}
-
-fn check_staleness(entry: &LockEntry, global: bool) -> &'static str {
+fn check_staleness(entry: &LockEntry) -> &'static str {
     let root = config::project_root();
+
+    let installed_at = match crate::tui::parse_installed_at(&entry.installed_at) {
+        Some(t) => t,
+        None => return "ok",
+    };
+
     match entry.kind {
         config::ItemKind::Skill => {
-            let installed_paths = skill_install_paths(entry, global);
-            if installed_paths.is_empty() {
-                return "missing";
-            }
-            if installed_paths.iter().any(|path| !path.exists()) {
-                return "missing";
-            }
-            // Walk up to find source — check common locations
-            for source_base in std::slice::from_ref(&root) {
-                let source = source_base
-                    .join("skills")
-                    .join(&entry.name)
-                    .join("SKILL.md");
-                if source.exists() {
-                    let Ok(src) = std::fs::read_to_string(&source) else {
-                        continue;
-                    };
-                    for installed_root in &installed_paths {
-                        let installed = installed_root.join("SKILL.md");
-                        if let Ok(inst) = std::fs::read_to_string(&installed)
-                            && inst != src
-                        {
-                            return "outdated";
-                        }
-                    }
-                }
+            let source_dir = root.join("skills").join(&entry.name);
+            if source_dir.exists() && crate::tui::dir_modified_after(&source_dir, installed_at) {
+                return "outdated";
             }
             "ok"
         }
         config::ItemKind::Hook => {
-            let installed_paths = hook_install_paths(entry, global);
-            if installed_paths.is_empty() {
-                return "ok"; // hooks may not exist for all harnesses
-            }
-            if installed_paths.iter().any(|path| !path.exists()) {
-                return "missing";
+            let source_path = root.join("hooks").join(format!("{}.sh", entry.name));
+            if source_path.exists()
+                && crate::tui::file_modified_after(&source_path, installed_at)
+            {
+                return "outdated";
             }
             "ok"
         }
-        config::ItemKind::Agent => "ok", // agents are regenerated, not compared
+        config::ItemKind::Agent => {
+            let source_path = root.join("agents").join(format!("{}.md", entry.name));
+            if source_path.exists()
+                && crate::tui::file_modified_after(&source_path, installed_at)
+            {
+                return "outdated";
+            }
+            "ok"
+        }
     }
 }

@@ -116,8 +116,8 @@ pub fn run_install_flow(
             SelectResult::SwitchSource(source) => {
                 return Ok(InstallFlowResult::SwitchSource(source));
             }
-            SelectResult::JumpToStep(_) => continue 'steps,
-            SelectResult::Confirmed => {}
+            SelectResult::JumpToStep(1) => continue 'steps,
+            SelectResult::JumpToStep(_) | SelectResult::Confirmed => {}
         }
 
         let update_cli = step1_select
@@ -493,6 +493,7 @@ struct InstalledInfo {
     scope: String,
     harnesses: Vec<String>,
     kind: Option<crate::config::ItemKind>,
+    installed_at: String,
 }
 
 type InstalledState = HashMap<String, InstalledInfo>;
@@ -511,6 +512,7 @@ fn load_installed_state() -> InstalledState {
                     scope: "project".into(),
                     harnesses: entry.harnesses.clone(),
                     kind: Some(entry.kind),
+                    installed_at: entry.installed_at.clone(),
                 },
             );
         }
@@ -524,6 +526,10 @@ fn load_installed_state() -> InstalledState {
                 .entry(name.clone())
                 .and_modify(|info| {
                     info.scope = format!("{}+global", info.scope);
+                    // Keep the earlier installed_at (more conservative for staleness)
+                    if entry.installed_at < info.installed_at {
+                        info.installed_at = entry.installed_at.clone();
+                    }
                     for h in &entry.harnesses {
                         if !info.harnesses.contains(h) {
                             info.harnesses.push(h.clone());
@@ -534,6 +540,7 @@ fn load_installed_state() -> InstalledState {
                     scope: "global".into(),
                     harnesses: entry.harnesses.clone(),
                     kind: Some(entry.kind),
+                    installed_at: entry.installed_at.clone(),
                 });
         }
     }
@@ -541,143 +548,84 @@ fn load_installed_state() -> InstalledState {
     state
 }
 
-fn skill_installed_paths(name: &str, info: &InstalledInfo) -> Vec<std::path::PathBuf> {
-    let has_codex = info
-        .harnesses
-        .iter()
-        .filter_map(|h| Harness::from_id(h))
-        .any(|h| matches!(h, Harness::Codex));
-    let has_other = info
-        .harnesses
-        .iter()
-        .filter_map(|h| Harness::from_id(h))
-        .any(|h| !matches!(h, Harness::Codex));
+/// Parse an ISO 8601 timestamp (e.g. "2026-03-31T18:07:36Z") into a SystemTime.
+pub fn parse_installed_at(ts: &str) -> Option<std::time::SystemTime> {
+    // Quick parse: YYYY-MM-DDTHH:MM:SSZ → seconds since epoch via manual calendar math.
+    // Falls back to None on any malformed input.
+    let b = ts.as_bytes();
+    if b.len() < 20 || b[19] != b'Z' {
+        return None;
+    }
+    let year: u64 = ts[0..4].parse().ok()?;
+    let mon: u64 = ts[5..7].parse().ok()?;
+    let day: u64 = ts[8..10].parse().ok()?;
+    let hour: u64 = ts[11..13].parse().ok()?;
+    let min: u64 = ts[14..16].parse().ok()?;
+    let sec: u64 = ts[17..19].parse().ok()?;
 
-    match info.scope.as_str() {
-        "project" => vec![
-            crate::config::project_root()
-                .join(".agents")
-                .join("skills")
-                .join(name),
-        ],
-        "global" | "project+global" => {
-            let mut paths = Vec::new();
-            if info.scope == "project+global" {
-                paths.push(
-                    crate::config::project_root()
-                        .join(".agents")
-                        .join("skills")
-                        .join(name),
-                );
-            }
-            if has_other {
-                paths.push(crate::config::global_state_dir().join("skills").join(name));
-            }
-            if has_codex {
-                paths.push(crate::config::codex_home_dir().join("skills").join(name));
-            }
-            paths
+    // Days from year
+    let mut days = 0u64;
+    for y in 1970..year {
+        days += if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    for m in 0..(mon.saturating_sub(1) as usize) {
+        days += month_days[m] as u64;
+    }
+    days += day.saturating_sub(1);
+
+    let total_secs = days * 86400 + hour * 3600 + min * 60 + sec;
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(total_secs))
+}
+
+/// Check if any file under `dir` has been modified after `since`.
+pub fn dir_modified_after(dir: &std::path::Path, since: std::time::SystemTime) -> bool {
+    for entry in walkdir::WalkDir::new(dir).min_depth(1) {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_file() {
+            continue;
         }
-        _ => Vec::new(),
-    }
-}
-
-fn hook_installed_paths(name: &str, info: &InstalledInfo) -> Vec<std::path::PathBuf> {
-    let has_claude = info
-        .harnesses
-        .iter()
-        .filter_map(|h| Harness::from_id(h))
-        .any(|h| matches!(h, Harness::ClaudeCode));
-    if !has_claude {
-        return Vec::new();
-    }
-
-    match info.scope.as_str() {
-        "project" => vec![
-            crate::config::project_root()
-                .join(".claude")
-                .join("hooks")
-                .join(format!("{name}.sh")),
-        ],
-        "global" => vec![
-            crate::config::claude_global_dir()
-                .join("hooks")
-                .join(format!("{name}.sh")),
-        ],
-        "project+global" => vec![
-            crate::config::project_root()
-                .join(".claude")
-                .join("hooks")
-                .join(format!("{name}.sh")),
-            crate::config::claude_global_dir()
-                .join("hooks")
-                .join(format!("{name}.sh")),
-        ],
-        _ => Vec::new(),
-    }
-}
-
-/// Check if any file in a skill's source differs from an installed canonical copy.
-fn is_skill_outdated(source_dir: &std::path::Path, info: &InstalledInfo) -> bool {
-    let name = source_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    let installed_paths = skill_installed_paths(name, info);
-    if installed_paths.is_empty() || installed_paths.iter().all(|path| !path.exists()) {
-        return false;
-    }
-
-    for installed_root in installed_paths {
-        if !installed_root.exists() {
+        if let Ok(meta) = entry.metadata()
+            && let Ok(mtime) = meta.modified()
+            && mtime > since
+        {
             return true;
-        }
-        for entry in walkdir::WalkDir::new(source_dir).min_depth(1) {
-            let Ok(entry) = entry else { continue };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let Ok(rel) = entry.path().strip_prefix(source_dir) else {
-                continue;
-            };
-            let installed_file = installed_root.join(rel);
-            if !installed_file.exists() {
-                return true; // new file in source
-            }
-            let Ok(src) = std::fs::read(entry.path()) else {
-                continue;
-            };
-            let Ok(inst) = std::fs::read(&installed_file) else {
-                return true;
-            };
-            if src != inst {
-                return true;
-            }
         }
     }
     false
 }
 
-/// Check if a hook's source differs from its installed copy
-fn is_hook_outdated(source_path: &std::path::Path, name: &str, info: &InstalledInfo) -> bool {
-    let installed_paths = hook_installed_paths(name, info);
-    if installed_paths.is_empty() {
-        return false;
-    }
+/// Check if a single file has been modified after `since`.
+pub fn file_modified_after(path: &std::path::Path, since: std::time::SystemTime) -> bool {
+    path.metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .is_some_and(|mtime| mtime > since)
+}
 
-    let Ok(src) = std::fs::read_to_string(source_path) else {
+/// Check if a skill's source directory was modified after install.
+fn is_skill_outdated(source_dir: &std::path::Path, info: &InstalledInfo) -> bool {
+    let Some(installed_at) = parse_installed_at(&info.installed_at) else {
         return false;
     };
+    dir_modified_after(source_dir, installed_at)
+}
 
-    for installed in installed_paths {
-        let Ok(inst) = std::fs::read_to_string(&installed) else {
-            return true;
-        };
-        if inst != src {
-            return true;
-        }
-    }
-    false
+/// Check if a hook's source file was modified after install.
+fn is_hook_outdated(source_path: &std::path::Path, info: &InstalledInfo) -> bool {
+    let Some(installed_at) = parse_installed_at(&info.installed_at) else {
+        return false;
+    };
+    file_modified_after(source_path, installed_at)
+}
+
+/// Check if an agent's source file was modified after install.
+fn is_agent_outdated(source_path: &std::path::Path, info: &InstalledInfo) -> bool {
+    let Some(installed_at) = parse_installed_at(&info.installed_at) else {
+        return false;
+    };
+    file_modified_after(source_path, installed_at)
 }
 
 fn installed_scope_label(scope: &str) -> String {
@@ -712,7 +660,7 @@ fn build_item_tabs(
                 locked: false,
                 installed: is_installed,
                 installed_scope: installed_info.map(|info| installed_scope_label(&info.scope)),
-                outdated: false, // agent staleness requires mtime check, skip for now
+                outdated: installed_info.is_some_and(|info| is_agent_outdated(&a.source_path, info)),
             };
             match a.role {
                 crate::agent::AgentRole::Engineer => engineers.push(item),
@@ -833,7 +781,7 @@ fn build_item_tabs(
                     installed: is_installed,
                     installed_scope: installed_info.map(|info| installed_scope_label(&info.scope)),
                     outdated: installed_info
-                        .is_some_and(|info| is_hook_outdated(&h.source_path, &h.name, info)),
+                        .is_some_and(|info| is_hook_outdated(&h.source_path, info)),
                 }
             })
             .collect();

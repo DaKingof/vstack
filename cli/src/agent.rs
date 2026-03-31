@@ -18,6 +18,9 @@ pub struct Agent {
     /// Body markdown (everything after frontmatter)
     #[serde(skip)]
     pub body: String,
+    /// Path to the source .md file
+    #[serde(skip)]
+    pub source_path: std::path::PathBuf,
 }
 
 fn default_model() -> String {
@@ -59,7 +62,9 @@ impl Agent {
     pub fn from_file(path: &Path) -> Result<Self> {
         let content =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        Self::parse(&content)
+        let mut agent = Self::parse(&content)?;
+        agent.source_path = path.to_path_buf();
+        Ok(agent)
     }
 
     /// Parse from string content
