@@ -195,7 +195,7 @@ case "${1:-}" in
 
     if [[ -n "$BASE" ]]; then
       # Check if worktree already exists on this branch
-      EXISTING_WT=$(git -C "$PROJECT_ROOT" worktree list --porcelain | grep -B2 "branch refs/heads/$BASE$" | grep "^worktree " | cut -d' ' -f2)
+      EXISTING_WT=$(git -C "$PROJECT_ROOT" worktree list --porcelain | grep -B2 "branch refs/heads/$BASE$" | grep "^worktree " | cut -d' ' -f2 || true)
       if [[ -n "$EXISTING_WT" ]]; then
         echo "$EXISTING_WT"
         exit 0
