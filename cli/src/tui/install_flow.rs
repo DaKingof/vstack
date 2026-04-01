@@ -982,6 +982,16 @@ fn run_tabbed_select(
                         if let Some(item) = get_cursor_item(select) {
                             if item.outdated {
                                 let name = item.label.clone();
+                                // CLI binary: run update directly and exit
+                                if name == "vstack (cli)" {
+                                    io::stdout().execute(DisableMouseCapture)?;
+                                    io::stdout().execute(LeaveAlternateScreen)?;
+                                    terminal::disable_raw_mode()?;
+                                    eprintln!("Updating vstack...\n");
+                                    let _ = crate::commands::update::run(false);
+                                    eprintln!("\nRestart vstack to use the new version.");
+                                    std::process::exit(0);
+                                }
                                 break SelectResult::UpdateInPlace(vec![name]);
                             }
                         }

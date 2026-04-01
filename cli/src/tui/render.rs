@@ -1069,7 +1069,7 @@ fn draw_repo_dialog(frame: &mut Frame, select: &mut TabbedSelect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::{ItemGroup, SelectItem, Tab};
+    use crate::tui::multiselect::{ItemGroup, SelectItem, Tab};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
