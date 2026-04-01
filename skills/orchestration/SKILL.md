@@ -14,6 +14,8 @@ metadata:
 
 > **IMMEDIATE**: Before proceeding, load the `linear` and `github` skills now. Orchestration workflows depend on both.
 
+> **MODE SWITCH**: Loading this skill puts you in **orchestrator mode**. You are a coordinator — do not write code yourself. Delegate all implementation, review, and QA work to specialist sub-agents using the workflows in this skill. Your job is to plan, delegate, track state, and present results.
+
 > **Note**: `README.md` in this directory is for human setup/configuration only — not for AI agents. Follow this file (`SKILL.md`) as the authoritative skill definition.
 
 Multi-agent session coordination with front-to-back issue workflows, delegation patterns, workflow state management, and review pipelines. Designed to survive context compaction and coordinate persistent agent sessions.
