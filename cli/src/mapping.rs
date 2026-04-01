@@ -149,44 +149,40 @@ impl ProjectConfig {
             }
         }
 
-        // Write back to vstack.toml using toml::Value to preserve structure
+        // Write back to vstack.toml surgically — preserve comments and structure
         let path = project_root.join("vstack.toml");
-        let mut doc: toml::Value = if path.exists() {
-            std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|c| toml::from_str(&c).ok())
-                .unwrap_or(toml::Value::Table(Default::default()))
-        } else {
-            toml::Value::Table(Default::default())
-        };
-
-        let table = doc.as_table_mut().unwrap();
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut out = content;
 
         if needs_guidance {
             if let Some(ref text) = extracted.guidance {
-                let section = table
-                    .entry("agent-guidance")
-                    .or_insert_with(|| toml::Value::Table(Default::default()));
-                if let Some(t) = section.as_table_mut() {
-                    t.entry(agent_name)
-                        .or_insert_with(|| toml::Value::String(text.clone()));
+                let entry = format!("{} = \"\"\n", agent_name);
+                let value = format!("{} = \"{}\"\n", agent_name, text.replace('"', "\\\""));
+                // Try replacing the empty placeholder, else append to section
+                if out.contains(&entry) {
+                    out = out.replace(&entry, &value);
+                } else {
+                    let new_entry = format!("{} = \"{}\"\n", agent_name, text.replace('"', "\\\""));
+                    out = insert_entries_into_section(&out, "[agent-guidance]", &new_entry);
                 }
             }
         }
 
         if needs_instructions {
             if let Some(ref text) = extracted.instructions {
-                let section = table
-                    .entry("agent-instructions")
-                    .or_insert_with(|| toml::Value::Table(Default::default()));
-                if let Some(t) = section.as_table_mut() {
-                    t.entry(agent_name)
-                        .or_insert_with(|| toml::Value::String(text.clone()));
+                let entry = format!("{} = \"\"\n", agent_name);
+                let value = format!("{} = \"{}\"\n", agent_name, text.replace('"', "\\\""));
+                if out.contains(&entry) {
+                    out = out.replace(&entry, &value);
+                } else {
+                    let new_entry =
+                        format!("{} = \"{}\"\n", agent_name, text.replace('"', "\\\""));
+                    out = insert_entries_into_section(&out, "[agent-instructions]", &new_entry);
                 }
             }
         }
 
-        let _ = std::fs::write(&path, toml::to_string_pretty(&doc).unwrap_or_default());
+        let _ = std::fs::write(&path, out);
     }
 }
 
@@ -203,35 +199,41 @@ pub fn write_agent_skills(
     agent_skill_map: &HashMap<String, Vec<String>>,
 ) {
     let path = project_root.join("vstack.toml");
-    let mut doc: toml::Value = if path.exists() {
-        std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|c| toml::from_str(&c).ok())
-            .unwrap_or(toml::Value::Table(Default::default()))
-    } else {
-        toml::Value::Table(Default::default())
-    };
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
 
-    let table = doc.as_table_mut().unwrap();
-    let section = table
-        .entry("agent-skills")
-        .or_insert_with(|| toml::Value::Table(Default::default()));
-    if let Some(t) = section.as_table_mut() {
-        for (agent, skills) in agent_skill_map {
-            // Only populate agents that don't already have an entry.
-            // This preserves user edits (additions and removals).
-            t.entry(agent).or_insert_with(|| {
-                toml::Value::Array(
-                    skills
-                        .iter()
-                        .map(|s| toml::Value::String(s.clone()))
-                        .collect(),
-                )
-            });
+    // Parse the existing file to discover which agents already have entries.
+    // We only ADD agents that are missing — never clobber user edits.
+    let parsed: ProjectConfig = toml::from_str(&existing).unwrap_or_default();
+
+    // Sort agents for deterministic output
+    let mut agents: Vec<&String> = agent_skill_map.keys().collect();
+    agents.sort();
+
+    let mut new_entries = String::new();
+    for agent in agents {
+        if parsed.agent_skills.contains_key(agent.as_str()) {
+            continue; // User's list is authoritative — don't overwrite
+        }
+        let skills = &agent_skill_map[agent];
+        new_entries.push_str(&format!("{} = [", agent));
+        if skills.is_empty() {
+            new_entries.push_str("]\n");
+        } else {
+            new_entries.push('\n');
+            for s in skills {
+                new_entries.push_str(&format!("    \"{}\",\n", s));
+            }
+            new_entries.push_str("]\n");
         }
     }
 
-    let _ = std::fs::write(&path, toml::to_string_pretty(&doc).unwrap_or_default());
+    if new_entries.is_empty() {
+        return;
+    }
+
+    // Insert the new entries into the [agent-skills] section
+    let out = insert_entries_into_section(&existing, "[agent-skills]", &new_entries);
+    let _ = std::fs::write(&path, out);
 }
 
 /// Create or update vstack.toml at the project root.
@@ -454,6 +456,59 @@ fn insert_keys_into_section(content: &str, section_header: &str, new_keys: &[&St
         result.push(section_header.to_string());
         for name in new_keys {
             result.push(format!("{} = \"\"", name));
+        }
+    }
+
+    result.join("\n")
+}
+
+/// Insert raw TOML text after existing keys in a `[section]`, preserving all
+/// comments and surrounding content.  If the section doesn't exist, appends it.
+fn insert_entries_into_section(content: &str, section_header: &str, entries: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result: Vec<String> = Vec::new();
+    let mut i = 0;
+    let mut inserted = false;
+
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        result.push(lines[i].to_string());
+
+        if trimmed == section_header {
+            // Scan forward past existing keys/values (including multi-line arrays)
+            i += 1;
+            while i < lines.len() {
+                let next = lines[i].trim();
+                // Stop at next section header or section-separator comment
+                if next.starts_with('[') && !next.starts_with("# [") {
+                    break;
+                }
+                if next.starts_with("# ──") {
+                    break;
+                }
+                // Stop at blank line that isn't inside a multi-line array
+                if next.is_empty() {
+                    break;
+                }
+                result.push(lines[i].to_string());
+                i += 1;
+            }
+            // Insert new entries here, right after existing keys
+            for line in entries.lines() {
+                result.push(line.to_string());
+            }
+            inserted = true;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    if !inserted {
+        result.push(String::new());
+        result.push(section_header.to_string());
+        for line in entries.lines() {
+            result.push(line.to_string());
         }
     }
 
