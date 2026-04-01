@@ -8,19 +8,24 @@ Cross-harness distribution system for AI coding skills, agents, and hooks. Insta
 cli/src/
 ├── main.rs              CLI entry, clap subcommands (add, remove, list, init, check)
 ├── agent.rs             Agent parsing, skill/hook matching heuristics
-├── skill.rs             Skill parsing, frontmatter dependency resolution
+├── skill.rs             Skill parsing, frontmatter dependency resolution, dep reference injection
 ├── hook.rs              Hook parsing (YAML-in-comments frontmatter from .sh files)
-├── config.rs            Lock file (JSON), project root detection, global/project scope
-├── mapping.rs           vstack.toml config loader — skill/hook-to-agent mappings
+├── config.rs            Lock file (JSON), project root detection, staleness/mtime helpers
+├── mapping.rs           Source vstack.toml loader — MappingConfig (agent-skills, role-skills, hook-events)
+├── project_config.rs    Project vstack.toml — ProjectConfig, ensure/write/update, TOML template
+├── resolve.rs           Shared helpers — skill-pair resolution, read_existing_extras, is_vstack_source
 ├── installer.rs         Symlink/copy logic, per-harness hook installation, removal
 ├── harness/
 │   ├── mod.rs           Harness enum, detection, routing
-│   ├── claude.rs        → .claude/agents/*.md (skills + hooks frontmatter, "Load These Skills")
+│   ├── claude.rs        → .claude/agents/*.md (skills + hooks frontmatter, "Required Skills")
 │   ├── cursor.rs        → .cursor/rules/*.mdc (description + alwaysApply + skills section)
 │   ├── opencode.rs      → .opencode/agents/*.md (YAML frontmatter + skills section)
 │   └── codex.rs         → .codex/agents/*.toml (developer_instructions + skills section)
 └── tui/
-    ├── mod.rs           3-step install flow, Installed tab, removal, update confirmation
+    ├── mod.rs           Re-exports and shared types
+    ├── install_flow.rs  Install wizard, event loop, inline update, tab mutation
+    ├── state.rs         Installed state, staleness detection, tab building
+    ├── summary.rs       Post-install summary screen
     ├── multiselect.rs   Selection state, scroll, toggle, confirm dialog
     └── render.rs        Ratatui rendering (header, list, status, help bar, dialog overlay)
 
@@ -38,7 +43,7 @@ skill-templates/         Templates for new skills
 - **Agent `role` drives access control.** `reviewer` → read-only/subagent. `engineer` → full access/primary. `manager` → analysis only.
 - **Skill dependencies use frontmatter.** `dependencies: { required: [...], optional: [...] }` in SKILL.md.
 - **Hooks diverge by harness.** Claude Code gets native shell hooks + settings.json + agent frontmatter. Cursor gets safety `.mdc` rules. OpenCode gets `.opencode/agents/*.md` + instructions. Codex gets inline prose in `developer_instructions`.
-- **Skill/hook attribution is config-driven.** `vstack.toml` maps skills to agents (by name prefix + explicit overrides) and hooks to agents (by event type + role). Agents get a `skills:` frontmatter field and a "Load These Skills" body section.
+- **Skill/hook attribution is config-driven.** Source `vstack.toml` `[agent-skills]` is authoritative — explicit entries skip prefix matching. `[role-skills]` adds skills to all agents of a role. Project `vstack.toml` also has `[agent-skills]` populated at install time; users can add/remove skills and refresh. Agents get a `skills:` frontmatter field and a "Required Skills" body section.
 - **Reconciliation is automatic.** After every `vstack add`, all installed agents are regenerated with the current full set of installed skills and hooks. Adding a skill after an agent updates that agent.
 - **Project root walks up from CWD.** `config::project_root()` finds `.vstack-lock.json`, `.claude/`, `.cursor/`, `.codex/`, `.opencode/`, or `.agents/` by walking parent dirs — works from subdirectories.
 
@@ -78,11 +83,12 @@ dependencies:
 ### Mapping config (`vstack.toml`)
 ```toml
 [agent-skills]
-iced = ["iced-rs", "iced-shadcn"]
+rust = ["rust-arch", "rust-async", "rust-cargo", "rust-conventions", "rust-cross", "rust-debugging", "rust-ffi", "rust-no-std", "rust-safety"]
+iced = ["iced-rs", "iced-shadcn", "trading-design", "price-handling"]
 
 [role-skills]
-engineer = ["issue-lifecycle", "github", "worktree"]
-reviewer = ["issue-lifecycle"]
+engineer = ["issue-lifecycle", "github", "worktree", "decider", "linear"]
+reviewer = ["issue-lifecycle", "linear"]
 
 [hook-events]
 "PreToolUse:Bash" = "all"
@@ -95,11 +101,10 @@ reviewer = ["issue-lifecycle"]
 The same `vstack.toml` (or a separate one in the target project) can include per-agent customization sections. These survive `vstack add` updates — they are re-applied from config on every install/reconciliation.
 
 ```toml
-# Attach local skills to agents (name + description shown in "Load These Skills")
-[custom-skills]
-rust = [
-  { name = "my-testing", description = "Custom integration testing patterns" },
-]
+# Skills attached to each agent's frontmatter — single source of truth.
+# Populated at install time. Add your own skills or remove ones you don't want.
+[agent-skills]
+rust = ["rust-arch", "rust-async", "rust-cargo", "my-custom-skill"]
 
 # "Execute on Launch" — what the agent should do when first invoked
 [agent-guidance]
