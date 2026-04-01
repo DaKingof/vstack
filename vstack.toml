@@ -1,15 +1,23 @@
 # vstack.toml — skill/hook mapping configuration
 # The CLI reads this from the source repo root during installation.
-# Prefix matching still applies automatically (agent "rust" → skills "rust-*").
-# These are additional explicit mappings.
+#
+# [agent-skills] is the single source of truth for which skills appear in each
+# agent's frontmatter.  When an agent has an explicit entry here, prefix matching
+# is skipped — only the listed skills (plus role-skills) are attached.
+# Removing a skill from an agent's list and running `vstack refresh` removes it
+# from that agent's frontmatter.
+#
+# Agents without an entry here still use automatic prefix matching (agent "foo" → skills "foo-*").
 
-# Extra skill mappings per agent (beyond prefix matching)
+# Skill mappings per agent
 [agent-skills]
+rust = ["rust-arch", "rust-async", "rust-cargo", "rust-conventions", "rust-cross", "rust-debugging", "rust-ffi", "rust-no-std", "rust-safety"]
 iced = ["iced-rs", "iced-shadcn", "trading-design", "price-handling"]
-safety = ["rust-safety"]
-arch = ["rust-arch"]
-structure = ["rust-arch"]
-test = ["rust-conventions"]
+reviewer-arch = ["rust-arch"]
+reviewer-perf = ["perf-cache", "perf-ebpf", "perf-latency", "perf-lock-free", "perf-profiling", "perf-simd", "perf-threading", "perf-zero-alloc"]
+reviewer-safety = ["rust-safety"]
+reviewer-structure = ["rust-arch"]
+reviewer-test = ["rust-conventions"]
 
 # Skills given to all agents of a role
 [role-skills]

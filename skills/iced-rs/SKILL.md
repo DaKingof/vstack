@@ -1,6 +1,6 @@
 ---
 name: iced-rs
-description: Iced 0.14 UI patterns, framework constraints, and development practices for reactive applications. Use when implementing Iced views, widgets, layouts, pane_grid, Canvas, or subscriptions.
+description: "Iced 0.14 UI patterns: views, widgets, layouts, pane_grid, Canvas, subscriptions, and framework constraints."
 license: MIT
 user-invocable: true
 metadata:

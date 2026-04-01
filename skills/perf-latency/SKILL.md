@@ -1,6 +1,6 @@
 ---
 name: perf-latency
-description: Microsecond-precision latency measurement. Use when benchmarking hot paths, measuring P99 latency, tracking performance regressions, implementing Criterion or Divan benchmarks, or validating latency budgets.
+description: "Microsecond-precision latency measurement: P99 benchmarking, Criterion/Divan, regression tracking, and latency budgets."
 license: MIT
 user-invocable: true
 metadata:

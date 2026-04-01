@@ -1,6 +1,6 @@
 ---
 name: rust-safety
-description: Safety audit checklists, SAFETY comment standards, and violation reporting for unsafe Rust code. Use when reviewing unsafe blocks, auditing unsafe code, documenting safety invariants, or verifying lock-free structures.
+description: "Safety audit checklists, SAFETY comment standards, and violation reporting for unsafe Rust code."
 license: MIT
 user-invocable: true
 metadata:

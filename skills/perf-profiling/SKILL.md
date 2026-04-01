@@ -1,6 +1,6 @@
 ---
 name: perf-profiling
-description: Linux performance profiling for low-latency systems. Use for CPU hot path analysis, cache optimization, NUMA locality, latency spikes, jitter diagnosis, or memory leaks.
+description: "Linux performance profiling: CPU hot paths, cache optimization, NUMA locality, latency spikes, and jitter diagnosis."
 license: MIT
 user-invocable: true
 metadata:

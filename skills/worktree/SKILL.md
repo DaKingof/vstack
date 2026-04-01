@@ -1,6 +1,6 @@
 ---
 name: worktree
-description: "Git worktree management — create, list, remove isolated working copies with env/config symlinks. Use when user says /worktree or needs to manage worktrees."
+description: "Git worktree management: create, list, remove isolated working copies with env/config symlinks."
 license: MIT
 user-invocable: true
 argument-hint: "create <ID> [--base <ref>] [--pr <N>] | list | remove <ID|path>"
@@ -45,7 +45,9 @@ All optional. `.env.local` itself is always symlinked into worktrees.
 
 ## Skill Invocation
 
-When user runs `/worktree`, parse arguments and run the `scripts/worktree` script relative to this skill's install location:
-- `/worktree create PROJ-123` → `scripts/worktree create PROJ-123`
-- `/worktree list` → `scripts/worktree list`
-- `/worktree remove PROJ-123` → `scripts/worktree remove PROJ-123`
+When user runs `/worktree`, parse arguments and run `$WORKTREE_CLI`:
+- `/worktree create PROJ-123` → `$WORKTREE_CLI create PROJ-123`
+- `/worktree list` → `$WORKTREE_CLI list`
+- `/worktree remove PROJ-123` → `$WORKTREE_CLI remove PROJ-123`
+
+> `$WORKTREE_CLI` is set in `.env.local` (defaults to `.agents/skills/worktree/scripts/worktree`).

@@ -1,6 +1,6 @@
 ---
 name: price-handling
-description: f64 price patterns with epsilon comparison and tick-size rounding. Use when handling prices, comparisons, rounding, feed parsing, or display formatting.
+description: "f64 price patterns: epsilon comparison, tick-size rounding, feed parsing, and display formatting."
 license: MIT
 user-invocable: true
 metadata:

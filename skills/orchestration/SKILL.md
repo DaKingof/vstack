@@ -1,6 +1,6 @@
 ---
 name: orchestration
-description: "Multi-agent session coordination — front-to-back issue workflows, delegation patterns, workflow state, task prefixing, review pipelines. Invoke as /orchestration <command>: start, dev-start, dev-fix, ci-fix, review-pr, review-pr-comments, submit-pr, merge-pr, audit-issues, cycle-plan, roadmap, parallel-check, research-spike, research-complete, initialize, post-summary, start-retro."
+description: "Multi-agent session coordination: issue workflows, delegation, review pipelines, cycle planning, and research spikes."
 license: MIT
 user-invocable: true
 dependencies:
@@ -28,9 +28,25 @@ Reference these guidelines when:
 - Creating or routing review findings to issue trackers
 - Planning roadmaps, cycles, or research spikes
 
+## Prerequisites — Load Before Any Workflow
+
+Before executing any workflow in this skill, you MUST load these dependency skills.
+Do not guess commands or improvise — load the skill first.
+
+| Skill | Domain |
+|-------|--------|
+| `linear` | All issue tracking operations (create, update, query, sync) |
+| `github` | All PR and branch operations (create, review, merge, CI) |
+| `worktree` | Parallel session management (create, list, remove worktrees) |
+| `issue-lifecycle` | Specialist agent delegation workflows |
+| `project-management` | Roadmap, cycle planning, prioritization |
+| `decider` | Architectural decision documents |
+
+**Do not proceed with any workflow step until you have loaded the relevant dependency skill.**
+
 ## Commands
 
-When invoked as `/orchestration <command> [args]`, route to the corresponding workflow. Load companion skills (`issue-lifecycle`, `project-management`) as needed.
+When invoked as `/orchestration <command> [args]`, route to the corresponding workflow.
 
 ### Session
 

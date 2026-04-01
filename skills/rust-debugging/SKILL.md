@@ -1,6 +1,6 @@
 ---
 name: rust-debugging
-description: Debugging Rust programs with GDB/LLDB, panic triage, tokio-console, tracing, and IDE integration. Use when diagnosing crashes, analyzing panics, setting up debug tooling, or introspecting async runtime behavior.
+description: "Debugging Rust programs: GDB/LLDB, panic triage, tokio-console, tracing, and IDE debug integration."
 license: MIT
 user-invocable: true
 metadata:

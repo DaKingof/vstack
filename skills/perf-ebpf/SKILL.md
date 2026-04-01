@@ -1,6 +1,6 @@
 ---
 name: perf-ebpf
-description: eBPF/Aya kernel-level observability in Rust. Covers Aya framework project setup, program types, map patterns, bpftrace diagnostics, verifier debugging, and program inspection. Use when writing eBPF programs, diagnosing kernel-level performance, or tracing application behavior.
+description: "eBPF/Aya kernel-level observability in Rust: project setup, program types, map patterns, bpftrace, and verifier debugging."
 license: MIT
 user-invocable: true
 metadata:

@@ -1,6 +1,6 @@
 ---
 name: perf-threading
-description: Topology-aware thread pinning, core isolation, SPSC patterns, and page fault prevention for Rust low-latency systems. Use when designing threading architecture, pinning threads, selecting channels, or eliminating jitter sources.
+description: "Topology-aware thread pinning, core isolation, SPSC patterns, and page fault prevention for Rust low-latency systems."
 license: MIT
 user-invocable: true
 metadata:

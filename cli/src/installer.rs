@@ -168,6 +168,68 @@ pub fn install_skill(
     })
 }
 
+/// Inject dependency quick-reference sections into installed skills that have dependencies.
+/// Must be called AFTER all skills are installed so that dependency SKILL.md files exist.
+/// Touches each canonical copy — for project installs that's `.agents/skills/`, for global
+/// installs that's both `global_state_dir/skills/` and `codex_home_dir/skills/`.
+pub fn inject_dependency_references(skills: &[Skill], global: bool) {
+    // Collect all canonical roots to inject into.  Project installs have one
+    // canonical dir; global installs have two (general + Codex-specific).
+    let roots: Vec<std::path::PathBuf> = if global {
+        vec![
+            crate::config::global_state_dir().join("skills"),
+            crate::config::codex_home_dir().join("skills"),
+        ]
+    } else {
+        vec![crate::config::project_root()
+            .join(".agents")
+            .join("skills")]
+    };
+
+    for skill in skills {
+        let required_deps: Vec<&crate::skill::SkillDep> = skill
+            .resolved_deps
+            .iter()
+            .filter(|d| !d.optional)
+            .collect();
+        if required_deps.is_empty() {
+            continue;
+        }
+
+        // Build the reference entries once using the first root that has the deps
+        let mut refs = Vec::new();
+        for dep in &required_deps {
+            let mut description = dep.name.clone();
+            let mut entry_point = None;
+
+            for root in &roots {
+                let dep_md = root.join(&dep.name).join("SKILL.md");
+                if dep_md.exists() {
+                    description = crate::skill::Skill::from_file(&dep_md)
+                        .map(|s| s.description)
+                        .unwrap_or_else(|_| dep.name.clone());
+                    entry_point = crate::skill::extract_entry_point(&dep_md);
+                    break;
+                }
+            }
+
+            refs.push(crate::skill::DepRefEntry {
+                name: dep.name.clone(),
+                description,
+                entry_point,
+            });
+        }
+
+        // Inject into every canonical root that has this skill
+        for root in &roots {
+            let skill_md = root.join(&skill.name).join("SKILL.md");
+            if skill_md.exists() {
+                crate::skill::inject_dependency_reference(&skill_md, &refs);
+            }
+        }
+    }
+}
+
 /// Install a hook to a specific harness.
 ///
 /// - Claude Code: copy script + add to settings.json hooks

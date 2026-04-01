@@ -482,13 +482,25 @@ impl MappingConfig {
         agent_role: &crate::agent::AgentRole,
         available: &[String],
     ) -> Vec<String> {
-        let mut matched = crate::agent::prefixed_skill_matches(agent_name, available);
-        let mut matched_set = HashSet::new();
         let available_set: HashSet<&str> = available.iter().map(|skill| skill.as_str()).collect();
         let name = agent_name.to_lowercase();
-        for skill in &matched {
-            matched_set.insert(skill.clone());
-        }
+
+        // Check if this agent has an explicit [agent-skills] entry (full name or
+        // stripped reviewer- prefix).  When an explicit entry exists, it is
+        // authoritative — prefix matching is skipped so that removing a skill
+        // from the toml actually removes it from the agent's frontmatter.
+        let has_explicit = self.agent_skills.contains_key(&name)
+            || name
+                .strip_prefix("reviewer-")
+                .is_some_and(|suffix| self.agent_skills.contains_key(suffix));
+
+        let mut matched: Vec<String> = if has_explicit {
+            Vec::new()
+        } else {
+            crate::agent::prefixed_skill_matches(agent_name, available)
+        };
+
+        let mut matched_set: HashSet<String> = matched.iter().cloned().collect();
         let mut push_unique = |skill: &str| {
             if available_set.contains(skill) && matched_set.insert(skill.to_string()) {
                 matched.push(skill.to_string());
@@ -702,13 +714,35 @@ mod tests {
     #[test]
     fn reviewer_agent_checks_stripped_prefix() {
         let mut config = MappingConfig::default();
+        // When an explicit agent-skills entry exists, prefix matching is skipped.
+        // The reviewer-iced agent inherits from the "iced" entry via prefix stripping.
         config
             .agent_skills
-            .insert("iced".into(), vec!["trading-design".into()]);
+            .insert("iced".into(), vec!["iced-rs".into(), "trading-design".into()]);
         let available = vec!["iced-rs".into(), "trading-design".into()];
         let matched = config.skills_for_agent("reviewer-iced", &AgentRole::Reviewer, &available);
         assert!(matched.contains(&"iced-rs".to_string()));
         assert!(matched.contains(&"trading-design".to_string()));
+    }
+
+    #[test]
+    fn explicit_entry_skips_prefix_matching() {
+        let mut config = MappingConfig::default();
+        // Agent "rust" has explicit entry — prefix matching should NOT run.
+        // Only the listed skills (plus role-skills) should be attached.
+        config
+            .agent_skills
+            .insert("rust".into(), vec!["rust-arch".into(), "rust-async".into()]);
+        let available = vec![
+            "rust-arch".into(),
+            "rust-async".into(),
+            "rust-cargo".into(), // available but not in explicit list
+        ];
+        let matched = config.skills_for_agent("rust", &AgentRole::Engineer, &available);
+        assert!(matched.contains(&"rust-arch".to_string()));
+        assert!(matched.contains(&"rust-async".to_string()));
+        // rust-cargo would be found by prefix matching, but explicit entry skips it
+        assert!(!matched.contains(&"rust-cargo".to_string()));
     }
 
     #[test]

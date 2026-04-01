@@ -1,6 +1,6 @@
 ---
 name: rust-conventions
-description: Rust code style, testing patterns, modularity, and completeness rules. Use when writing, reviewing, or refactoring Rust code — covers clippy pedantic, imports, test structure, file organization, flaky test avoidance, and definition of done.
+description: "Rust code style, testing patterns, modularity, and completeness: clippy pedantic, imports, test structure, and DoD."
 license: MIT
 user-invocable: true
 metadata:

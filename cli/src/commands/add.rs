@@ -400,6 +400,9 @@ pub fn run(
         }
     }
 
+    // Inject dependency quick-reference sections into skills that have deps
+    installer::inject_dependency_references(&selected_skills, global);
+
     // Update lock file
     let lock_path = config::lock_file_path(global);
     let mut lock = LockFile::load(&lock_path).unwrap_or_default();

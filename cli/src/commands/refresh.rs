@@ -166,6 +166,14 @@ pub fn run(global: bool) -> Result<()> {
         skills_refreshed += 1;
     }
 
+    // Inject dependency quick-reference sections into skills that have deps
+    let installed_source_skills: Vec<_> = all_source_skills
+        .iter()
+        .filter(|s| installed_skills.contains(&s.name))
+        .cloned()
+        .collect();
+    installer::inject_dependency_references(&installed_source_skills, global);
+
     // Update lock file timestamps so mtime-based outdated checks stay in sync
     let mut lock = config::LockFile::load(&lock_path)?;
     let now = config::now_iso();

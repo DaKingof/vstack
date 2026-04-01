@@ -1,6 +1,6 @@
 ---
 name: iced-shadcn
-description: "Plan, build, and audit shadcn-inspired Iced components. Covers architecture, family decomposition, implementation patterns, and parity audits against shadcn Base UI. Use for component work involving overlay/menu primitives, shared foundations, or parity evaluation."
+description: "Plan, build, and audit shadcn-inspired Iced components: architecture, family decomposition, and parity audits."
 license: MIT
 dependencies:
   required: [iced-rs]

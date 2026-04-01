@@ -1,6 +1,6 @@
 ---
 name: rust-arch
-description: Architecture anti-patterns, review scoring rubrics, error handling, and layered design patterns. Use when evaluating component designs, detecting architectural drift, reviewing PR architecture, or assessing technical debt.
+description: "Architecture anti-patterns, review scoring, error handling, and layered design patterns for Rust components."
 license: MIT
 user-invocable: true
 metadata:

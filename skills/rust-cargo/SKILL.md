@@ -1,6 +1,6 @@
 ---
 name: rust-cargo
-description: Cargo workflows, workspace management, feature flags, build tooling, build performance optimization, and release/CI configuration. Use when setting up workspaces, configuring builds, optimizing compile times, or preparing release profiles.
+description: "Cargo workflows: workspace management, feature flags, build optimization, and release/CI configuration."
 license: MIT
 user-invocable: true
 metadata:

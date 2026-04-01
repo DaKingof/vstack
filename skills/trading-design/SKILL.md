@@ -1,6 +1,6 @@
 ---
 name: trading-design
-description: Professional trading UI design principles — monospace-forward typography, zero-radius sharp corners, grid-based layouts, density, two-hue color, panel architecture, data display conventions. Stack-agnostic guide for building interfaces that prioritize signal through noise. Use when designing, implementing, or reviewing trading UI.
+description: "Trading UI design: monospace typography, sharp corners, grid layouts, density, two-hue color, and panel architecture."
 license: MIT
 user-invocable: true
 metadata:

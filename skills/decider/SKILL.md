@@ -1,6 +1,6 @@
 ---
 name: decider
-description: Architectural decision document management — templates, creation workflows, search/query, supersession tracking, and INDEX maintenance. Use when creating, searching, updating, or superseding decision entries (DXXX documents).
+description: "Architectural decision document management: templates, creation, search, supersession tracking, and INDEX maintenance."
 license: MIT
 user-invocable: true
 metadata:

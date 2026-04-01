@@ -1,6 +1,6 @@
 ---
 name: linear
-description: Linear API CLI for issues, projects, cycles, milestones, initiatives, labels, and comments. Use when querying or modifying Linear issues, planning cycles, managing projects, or any task involving Linear data.
+description: "Linear API CLI for issues, projects, cycles, milestones, initiatives, labels, and comments."
 license: MIT
 user-invocable: true
 metadata:
@@ -26,8 +26,10 @@ Reference these guidelines when:
 ## Entry Point
 
 ```bash
-scripts/linear.sh <resource> <action> [options]
+$ISSUE_CLI <resource> <action> [options]
 ```
+
+> `$ISSUE_CLI` is set in `.env.local` (defaults to `.agents/skills/linear/scripts/linear.sh`).
 
 ## Hierarchy
 

@@ -22,7 +22,9 @@ pub fn generate_agent(
     let mut output = String::new();
     output.push_str("---\n");
     output.push_str(&format!("name: {}\n", agent.name));
-    output.push_str(&format!("description: {}\n", agent.description));
+    // Quote description to handle YAML-special chars (colons, hashes, etc.)
+    let desc = agent.description.replace('"', "\\\"");
+    output.push_str(&format!("description: \"{}\"\n", desc));
 
     // Map model to Claude Code format
     let model = agent.model_id("claude-code");
@@ -99,7 +101,7 @@ fn format_hooks_yaml_with_custom(
     for (event, matchers) in &by_event {
         yaml.push_str(&format!("  {}:\n", event));
         for (matcher, commands) in matchers {
-            yaml.push_str(&format!("    - matcher: {}\n", matcher));
+            yaml.push_str(&format!("    - matcher: \"{}\"\n", matcher));
             yaml.push_str("      hooks:\n");
             for cmd in commands {
                 yaml.push_str("        - type: command\n");

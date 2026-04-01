@@ -300,16 +300,30 @@ pub fn custom_hooks_section(hooks: &[CustomHookEntry]) -> String {
     section
 }
 
-/// Generate a "Load These Skills" markdown section
+/// Generate a "Required Skills" markdown section with imperative loading instructions.
 pub fn load_skills_section(skills: &[(String, String)]) -> String {
     if skills.is_empty() {
         return String::new();
     }
     let mut section = String::from(
-        "## Load These Skills\n\nLoad the relevant skill before working on these areas:\n\n",
+        "## Required Skills — Load Before Proceeding\n\n\
+         You MUST load the relevant skill before attempting ANY operation in its domain.\n\
+         Do not guess commands or improvise — load the skill first.\n\n\
+         | Domain | Skill |\n\
+         |--------|-------|\n",
     );
     for (name, desc) in skills {
-        section.push_str(&format!("- **{}** → `{}`\n", desc, name));
+        // Use the topic portion before ": " or ". " as the domain label
+        let domain = if let Some(pos) = desc.find(": ") {
+            &desc[..pos]
+        } else if let Some(pos) = desc.find(". ") {
+            &desc[..pos]
+        } else {
+            desc.as_str()
+        };
+        // Escape pipe chars that would break the markdown table
+        let domain = domain.replace('|', "\\|");
+        section.push_str(&format!("| {} | `{}` |\n", domain, name));
     }
     section
 }
@@ -472,17 +486,16 @@ Does testing things.
         let skills = vec![
             (
                 "rust-arch".into(),
-                "Architecture patterns for Rust. More details here.".into(),
+                "Architecture patterns for Rust: more details here.".into(),
             ),
             ("github".into(), "GitHub CLI integration".into()),
         ];
         let section = load_skills_section(&skills);
-        assert!(section.contains("## Load These Skills"));
-        assert!(
-            section
-                .contains("**Architecture patterns for Rust. More details here.** → `rust-arch`")
-        );
-        assert!(section.contains("**GitHub CLI integration** → `github`"));
+        assert!(section.contains("## Required Skills"));
+        assert!(section.contains("Do not guess commands"));
+        // Table rows: domain is text before first ": " or ". "
+        assert!(section.contains("| Architecture patterns for Rust | `rust-arch` |"));
+        assert!(section.contains("| GitHub CLI integration | `github` |"));
     }
 
     #[test]

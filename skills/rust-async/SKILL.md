@@ -1,6 +1,6 @@
 ---
 name: rust-async
-description: Rust async internals, runtime patterns, and concurrency composition. Use when writing async Rust code — covers Future/Poll model, Pin/Unpin, spawn_blocking, select!/join!, cancellation safety, tokio task patterns, backpressure, and debugging.
+description: "Rust async internals: Future/Poll, Pin/Unpin, tokio patterns, cancellation safety, backpressure, and debugging."
 license: MIT
 user-invocable: true
 metadata:

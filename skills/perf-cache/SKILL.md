@@ -1,6 +1,6 @@
 ---
 name: perf-cache
-description: CPU cache optimization for Rust — data layout, false sharing, prefetching, huge pages, and measurement. Use when writing hot-path code, analyzing cache misses, or optimizing struct layout for L1/L2/LLC efficiency.
+description: "CPU cache optimization for Rust: data layout, false sharing, prefetching, huge pages, and L1/L2/LLC measurement."
 license: MIT
 user-invocable: true
 metadata:

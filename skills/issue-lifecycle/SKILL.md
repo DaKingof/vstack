@@ -1,6 +1,6 @@
 ---
 name: issue-lifecycle
-description: Agent workflows for issue implementation, review fix delegation, pre-submission PR review, and QA review. Designed for specialist agents receiving delegations from an orchestrator.
+description: "Agent workflows for issue implementation, review fix delegation, pre-submission PR review, and QA review."
 license: MIT
 user-invocable: true
 dependencies:

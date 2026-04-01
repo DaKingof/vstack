@@ -1,6 +1,6 @@
 ---
 name: github
-description: GitHub API CLI for PR operations — threads, comments, reviews, CI logs, merging, and cross-PR analysis. Use when querying PR data, managing review threads, posting comments, checking CI status, or automating merge workflows.
+description: "GitHub API CLI for PR operations: threads, comments, reviews, CI logs, merging, and cross-PR analysis."
 license: MIT
 user-invocable: true
 metadata:
@@ -26,8 +26,10 @@ Reference these guidelines when:
 ## Entry Point
 
 ```bash
-scripts/github.sh <command> [options]
+$GIT_HOST_CLI <command> [options]
 ```
+
+> `$GIT_HOST_CLI` is set in `.env.local` (defaults to `.agents/skills/github/scripts/github.sh`).
 
 ## Commands
 

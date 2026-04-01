@@ -1,6 +1,6 @@
 ---
 name: perf-zero-alloc
-description: Zero-allocation patterns for Rust hot paths. Use when optimizing hot paths, eliminating allocations, implementing object pools, selecting lock-free queues, or verifying allocation-free execution.
+description: "Zero-allocation patterns for Rust hot paths: object pools, lock-free queues, and allocation-free verification."
 license: MIT
 user-invocable: true
 metadata:

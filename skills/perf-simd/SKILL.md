@@ -1,6 +1,6 @@
 ---
 name: perf-simd
-description: SIMD intrinsics, auto-vectorization verification, and runtime dispatch for Rust hot paths. Use when writing, reviewing, or optimizing vectorized code — covers auto-vectorization blockers, manual AVX2/AVX-512 intrinsics, portable SIMD, and CPU feature detection.
+description: "SIMD intrinsics and auto-vectorization for Rust: AVX2/AVX-512, portable SIMD, runtime dispatch, and CPU feature detection."
 license: MIT
 user-invocable: true
 metadata:

@@ -1,6 +1,6 @@
 ---
 name: project-management
-description: TPM analysis workflows for roadmap planning, cycle planning, prioritization, and progress tracking. Returns JSON recommendations — orchestrator or user executes.
+description: "TPM analysis workflows: roadmap planning, cycle planning, prioritization, and progress tracking. Returns JSON."
 license: MIT
 user-invocable: true
 dependencies:

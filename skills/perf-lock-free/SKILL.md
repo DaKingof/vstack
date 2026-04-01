@@ -1,6 +1,6 @@
 ---
 name: perf-lock-free
-description: Lock-free correctness verification with loom, atomic patterns, and crossbeam-epoch safety. Use when implementing SPSC queues, verifying atomics, debugging concurrency issues, or choosing safety verification tools.
+description: "Lock-free correctness verification: loom, atomic patterns, crossbeam-epoch, SPSC queues, and concurrency debugging."
 license: MIT
 user-invocable: true
 metadata:

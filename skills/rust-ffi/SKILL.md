@@ -1,6 +1,6 @@
 ---
 name: rust-ffi
-description: Rust Foreign Function Interface patterns for safe C interop. Use when writing FFI bindings, wrapping C libraries, or exposing Rust APIs to C — covers repr(C), string handling, ownership transfer, bindgen/cbindgen, safe wrappers, and build/linking.
+description: "Rust FFI patterns for safe C interop: repr(C), string handling, ownership transfer, bindgen/cbindgen, and linking."
 license: MIT
 user-invocable: true
 metadata:

@@ -1,6 +1,6 @@
 ---
 name: rust-cross
-description: Rust cross-compilation for different architectures and OSes — target triples, toolchain setup, cross/zigbuild tools, static binaries, and CI matrix testing. Use when building Rust for non-native targets or setting up multi-platform CI.
+description: "Rust cross-compilation: target triples, toolchain setup, cross/zigbuild, static binaries, and CI matrix testing."
 license: MIT
 user-invocable: true
 metadata:

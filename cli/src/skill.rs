@@ -80,6 +80,110 @@ pub fn inject_skill_instructions(skill_md_path: &Path, instructions: &str) {
     let _ = std::fs::write(skill_md_path, new_content);
 }
 
+const DEP_REFERENCE_HEADER: &str = "## Dependency Quick Reference";
+
+/// A resolved dependency reference with metadata for inlining.
+pub struct DepRefEntry {
+    pub name: String,
+    pub description: String,
+    pub entry_point: Option<String>,
+}
+
+/// Inject a "## Dependency Quick Reference" section into an installed SKILL.md.
+/// Placed before "## Project Instructions" if present, otherwise at the bottom.
+pub fn inject_dependency_reference(skill_md_path: &Path, deps: &[DepRefEntry]) {
+    if deps.is_empty() {
+        return;
+    }
+    let Ok(content) = std::fs::read_to_string(skill_md_path) else {
+        return;
+    };
+
+    let clean = strip_dep_reference(&content);
+
+    let mut section = format!(
+        "\n\n{}\n\nThese skills are dependencies. Load each one for full reference.\n\n\
+         | Skill | Purpose | Entry Point |\n\
+         |-------|---------|-------------|\n",
+        DEP_REFERENCE_HEADER,
+    );
+    for dep in deps {
+        let ep = dep
+            .entry_point
+            .as_deref()
+            .unwrap_or("(load skill for details)");
+        // Truncate description at a char boundary for table readability
+        let desc = if dep.description.chars().count() > 80 {
+            let truncated: String = dep.description.chars().take(77).collect();
+            format!("{truncated}…")
+        } else {
+            dep.description.clone()
+        };
+        // Escape pipe chars that would break the markdown table
+        let desc = desc.replace('|', "\\|");
+        let ep = ep.replace('|', "\\|");
+        section.push_str(&format!("| `{}` | {} | `{}` |\n", dep.name, desc, ep));
+    }
+
+    // Insert before "## Project Instructions" if present, otherwise append
+    let marker = format!("\n{}", SKILL_INSTRUCTIONS_HEADER);
+    let new_content = if let Some(pos) = clean.find(&marker) {
+        format!(
+            "{}{}{}",
+            clean[..pos].trim_end(),
+            section,
+            &clean[pos..]
+        )
+    } else {
+        format!("{}{}", clean.trim_end(), section)
+    };
+
+    let _ = std::fs::write(skill_md_path, new_content);
+}
+
+fn strip_dep_reference(content: &str) -> String {
+    let marker = format!("\n{}", DEP_REFERENCE_HEADER);
+    if let Some(start) = content.find(&marker) {
+        let after = &content[start + marker.len()..];
+        if let Some(next) = after.find("\n## ") {
+            let end = start + marker.len() + next;
+            format!("{}{}", &content[..start], &content[end..])
+        } else {
+            content[..start].to_string()
+        }
+    } else {
+        content.to_string()
+    }
+}
+
+/// Extract the entry point line from a SKILL.md body (the first code block after "## Entry Point").
+pub fn extract_entry_point(skill_md_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(skill_md_path).ok()?;
+    let mut in_entry = false;
+    let mut in_code = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("## Entry Point") || trimmed.starts_with("## Skill Invocation") {
+            in_entry = true;
+            continue;
+        }
+        if in_entry && trimmed.starts_with("## ") {
+            break;
+        }
+        if in_entry && trimmed.starts_with("```") {
+            if in_code {
+                break;
+            }
+            in_code = true;
+            continue;
+        }
+        if in_entry && in_code && !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
 fn strip_project_instructions(content: &str) -> String {
     let marker = format!("\n{}", SKILL_INSTRUCTIONS_HEADER);
     if let Some(start) = content.find(&marker) {
