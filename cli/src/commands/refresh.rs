@@ -93,23 +93,25 @@ pub fn run(global: bool) -> Result<()> {
             continue;
         };
 
-        let matched_skill_names =
-            mapping.skills_for_agent(&agent.name, &agent.role, &installed_skills);
-        let mut skill_pairs: Vec<(String, String)> = matched_skill_names
+        // Use project [agent-skills] if present (authoritative), else source mapping
+        let skill_names: Vec<String> =
+            if let Some(project_list) = project_config.agent_skills_for(&agent.name) {
+                project_list.clone()
+            } else {
+                mapping.skills_for_agent(&agent.name, &agent.role, &installed_skills)
+            };
+
+        let skill_pairs: Vec<(String, String)> = skill_names
             .iter()
-            .filter_map(|sname| {
-                all_source_skills
+            .map(|sname| {
+                let desc = all_source_skills
                     .iter()
                     .find(|s| &s.name == sname)
-                    .map(|s| (s.name.clone(), s.description.clone()))
+                    .map(|s| s.description.clone())
+                    .unwrap_or_else(|| sname.clone());
+                (sname.clone(), desc)
             })
             .collect();
-
-        for cs in project_config.custom_skills_for(&agent.name) {
-            if !skill_pairs.iter().any(|(n, _)| *n == cs.0) {
-                skill_pairs.push(cs);
-            }
-        }
 
         let matched_hooks: Vec<crate::hook::Hook> = mapping
             .hooks_for_agent(&agent.role, &installed_hooks)

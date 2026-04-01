@@ -2,23 +2,22 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-/// Custom skill entry from project config
-#[derive(Debug, Clone, Deserialize)]
-pub struct CustomSkill {
-    pub name: String,
-    pub description: String,
-}
-
 /// Project-level agent customization config.
 ///
 /// Loaded from `vstack.toml` at the project root. These sections are
-/// independent of the source repo's mapping sections (`[agent-skills]`,
-/// `[role-skills]`, `[hook-events]`) and survive updates.
+/// independent of the source repo's mapping sections and survive updates.
+///
+/// `[agent-skills]` is the single source of truth for which skills appear
+/// in each agent's frontmatter. Users can add or remove entries and run
+/// `vstack refresh` to apply.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ProjectConfig {
-    #[serde(rename = "custom-skills")]
-    pub custom_skills: HashMap<String, Vec<CustomSkill>>,
+    /// Skills attached to each agent's frontmatter.  This is the
+    /// authoritative list — editing it and running `vstack refresh`
+    /// updates the generated agent files.
+    #[serde(rename = "agent-skills")]
+    pub agent_skills: HashMap<String, Vec<String>>,
     #[serde(rename = "agent-guidance")]
     pub agent_guidance: HashMap<String, String>,
     #[serde(rename = "agent-instructions")]
@@ -71,17 +70,11 @@ impl ProjectConfig {
         toml::from_str(&content).unwrap_or_default()
     }
 
-    /// Get custom skill pairs for an agent
-    pub fn custom_skills_for(&self, agent_name: &str) -> Vec<(String, String)> {
-        self.custom_skills
-            .get(agent_name)
-            .map(|skills| {
-                skills
-                    .iter()
-                    .map(|s| (s.name.clone(), s.description.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
+    /// Get the project-level skill list for an agent, if one exists.
+    /// Returns `None` when the agent has no `[agent-skills]` entry,
+    /// which tells callers to fall back to source mapping.
+    pub fn agent_skills_for(&self, agent_name: &str) -> Option<&Vec<String>> {
+        self.agent_skills.get(agent_name)
     }
 
     /// Get guidance text for an agent
@@ -197,6 +190,50 @@ impl ProjectConfig {
     }
 }
 
+/// Write computed agent→skill mappings into the project vstack.toml.
+///
+/// For each agent: if the project toml already has an `[agent-skills]` entry,
+/// preserve it (the user may have added or removed skills).  For agents that
+/// have NO entry yet, write the computed list from source mapping.
+///
+/// This must be called AFTER `ensure_project_config` and AFTER the skill
+/// mapping is computed.
+pub fn write_agent_skills(
+    project_root: &Path,
+    agent_skill_map: &HashMap<String, Vec<String>>,
+) {
+    let path = project_root.join("vstack.toml");
+    let mut doc: toml::Value = if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|c| toml::from_str(&c).ok())
+            .unwrap_or(toml::Value::Table(Default::default()))
+    } else {
+        toml::Value::Table(Default::default())
+    };
+
+    let table = doc.as_table_mut().unwrap();
+    let section = table
+        .entry("agent-skills")
+        .or_insert_with(|| toml::Value::Table(Default::default()));
+    if let Some(t) = section.as_table_mut() {
+        for (agent, skills) in agent_skill_map {
+            // Only populate agents that don't already have an entry.
+            // This preserves user edits (additions and removals).
+            t.entry(agent).or_insert_with(|| {
+                toml::Value::Array(
+                    skills
+                        .iter()
+                        .map(|s| toml::Value::String(s.clone()))
+                        .collect(),
+                )
+            });
+        }
+    }
+
+    let _ = std::fs::write(&path, toml::to_string_pretty(&doc).unwrap_or_default());
+}
+
 /// Create or update vstack.toml at the project root.
 ///
 /// - If the file doesn't exist, generates a full template with commented placeholders.
@@ -276,24 +313,20 @@ fn create_project_config(path: &Path, agents: &[String], skills: &[String]) {
         }
     }
 
-    // ── custom-skills ──
-    out.push_str("\n\n# ── Custom Skills ────────────────────────────────────\n");
-    out.push_str("# Attach extra skills to agents beyond automatic\n");
-    out.push_str("# prefix matching. Add entries like:\n");
+    // ── agent-skills ──
+    out.push_str("\n\n# ── Agent Skills ─────────────────────────────────────\n");
+    out.push_str("# Skills attached to each agent's frontmatter.\n");
+    out.push_str("# This is the single source of truth — add or remove\n");
+    out.push_str("# skills here and run `vstack refresh` to apply.\n");
     out.push_str("#\n");
-    out.push_str("#   my-agent = [\n");
-    out.push_str("#     { name = \"my-skill\", description = \"What it does\" },\n");
-    out.push_str("#   ]\n");
+    out.push_str("# Populated automatically at install time from source\n");
+    out.push_str("# mappings. You can freely add your own skills to any\n");
+    out.push_str("# agent's list (they don't need to be in the vstack\n");
+    out.push_str("# repo — local skill directories work too).\n");
     out.push_str("#\n");
-    out.push_str("# Leave empty [] for no extra skills.\n");
-    out.push_str("#\n");
-    out.push_str("[custom-skills]\n\n");
-    for (i, name) in agents.iter().enumerate() {
-        out.push_str(&format!("{} = []\n", name));
-        if i + 1 < agents.len() {
-            out.push('\n');
-        }
-    }
+    out.push_str("[agent-skills]\n");
+    // Actual skill lists are written by write_agent_skills() after
+    // the mapping is computed, so we just emit the section header here.
 
     // ── custom-hooks ──
     out.push_str("\n\n# ── Custom Hooks ─────────────────────────────────────\n");
@@ -748,11 +781,8 @@ mod tests {
     #[test]
     fn project_config_parses_all_sections() {
         let toml = r#"
-[custom-skills]
-rust = [
-  { name = "my-testing", description = "Custom testing patterns" },
-  { name = "my-lint", description = "Custom lint rules" },
-]
+[agent-skills]
+rust = ["rust-arch", "rust-async", "my-custom-skill"]
 
 [agent-guidance]
 rust = "Use when working on backend Rust services."
@@ -761,10 +791,10 @@ rust = "Use when working on backend Rust services."
 rust = "Always run clippy before committing."
 "#;
         let config: ProjectConfig = toml::from_str(toml).unwrap();
-        let skills = config.custom_skills_for("rust");
-        assert_eq!(skills.len(), 2);
-        assert_eq!(skills[0].0, "my-testing");
-        assert_eq!(skills[1].1, "Custom lint rules");
+        let skills = config.agent_skills_for("rust").unwrap();
+        assert_eq!(skills.len(), 3);
+        assert_eq!(skills[0], "rust-arch");
+        assert_eq!(skills[2], "my-custom-skill");
 
         assert_eq!(
             config.guidance_for("rust"),
@@ -775,8 +805,8 @@ rust = "Always run clippy before committing."
             Some("Always run clippy before committing.")
         );
 
-        // Unknown agent returns empty/None
-        assert!(config.custom_skills_for("unknown").is_empty());
+        // Unknown agent returns None
+        assert!(config.agent_skills_for("unknown").is_none());
         assert!(config.guidance_for("unknown").is_none());
         assert!(config.instructions_for("unknown").is_none());
     }
@@ -784,25 +814,27 @@ rust = "Always run clippy before committing."
     #[test]
     fn project_config_missing_file_returns_default() {
         let config = ProjectConfig::load(std::path::Path::new("/nonexistent/path"));
-        assert!(config.custom_skills.is_empty());
+        assert!(config.agent_skills.is_empty());
         assert!(config.agent_guidance.is_empty());
         assert!(config.agent_instructions.is_empty());
     }
 
     #[test]
-    fn project_config_ignores_mapping_sections() {
-        // A vstack.toml with both source mapping and project customization sections
+    fn project_config_agent_skills_authoritative() {
+        // Project [agent-skills] is the single source of truth
         let toml = r#"
 [agent-skills]
-iced = ["iced-rs"]
+iced = ["iced-rs", "trading-design", "my-custom"]
 
 [agent-guidance]
 rust = "Use for Rust work."
 "#;
         let config: ProjectConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.guidance_for("rust"), Some("Use for Rust work."));
-        // custom_skills is empty — [agent-skills] is a different section
-        assert!(config.custom_skills.is_empty());
+        let iced_skills = config.agent_skills_for("iced").unwrap();
+        assert_eq!(iced_skills, &["iced-rs", "trading-design", "my-custom"]);
+        // Agent without entry → None (falls back to source mapping)
+        assert!(config.agent_skills_for("rust").is_none());
     }
 
     #[test]

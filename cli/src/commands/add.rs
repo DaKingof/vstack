@@ -325,28 +325,40 @@ pub fn run(
     let mut results = Vec::new();
     let mut log_lines: Vec<String> = Vec::new();
 
+    // Collect computed agent→skill mappings to write to project vstack.toml
+    let mut agent_skill_map: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+
     for harness in &harnesses {
         for a in &selected_agents {
-            // Compute matched skills for this agent
+            // Use project [agent-skills] if present (authoritative); otherwise
+            // compute from source mapping and seed the project toml with it.
             let available_skill_names: Vec<String> =
                 selected_skills.iter().map(|s| s.name.clone()).collect();
-            let matched = mapping.skills_for_agent(&a.name, &a.role, &available_skill_names);
-            let mut skill_pairs: Vec<(String, String)> = matched
+            let skill_names: Vec<String> =
+                if let Some(project_list) = project_config.agent_skills_for(&a.name) {
+                    project_list.clone()
+                } else {
+                    mapping.skills_for_agent(&a.name, &a.role, &available_skill_names)
+                };
+
+            // Map names to (name, description) pairs for frontmatter
+            let skill_pairs: Vec<(String, String)> = skill_names
                 .iter()
-                .filter_map(|name| {
-                    selected_skills
+                .map(|name| {
+                    let desc = selected_skills
                         .iter()
                         .find(|s| &s.name == name)
-                        .map(|s| (s.name.clone(), s.description.clone()))
+                        .map(|s| s.description.clone())
+                        .unwrap_or_else(|| name.clone());
+                    (name.clone(), desc)
                 })
                 .collect();
 
-            // Merge custom skills from project config
-            for cs in project_config.custom_skills_for(&a.name) {
-                if !skill_pairs.iter().any(|(n, _)| *n == cs.0) {
-                    skill_pairs.push(cs);
-                }
-            }
+            // Record for writing to project toml (only once per agent)
+            agent_skill_map
+                .entry(a.name.clone())
+                .or_insert_with(|| skill_names.clone());
 
             // Compute matched hooks
             let matched_hooks: Vec<hook::Hook> = mapping
@@ -398,6 +410,11 @@ pub fn run(
             let detail = installer::install_hook(h, *harness, global, &selected_agents)?;
             log_lines.push(detail);
         }
+    }
+
+    // Write computed agent→skill mappings to project vstack.toml
+    if !global {
+        crate::mapping::write_agent_skills(&config::project_root(), &agent_skill_map);
     }
 
     // Inject dependency quick-reference sections into skills that have deps
@@ -721,24 +738,25 @@ fn reconcile_agents(
             continue;
         };
 
-        let matched_skill_names =
-            mapping.skills_for_agent(&agent.name, &agent.role, &installed_skills);
-        let mut skill_pairs: Vec<(String, String)> = matched_skill_names
+        // Use project [agent-skills] if present, else source mapping
+        let skill_names: Vec<String> =
+            if let Some(project_list) = project_config.agent_skills_for(&agent.name) {
+                project_list.clone()
+            } else {
+                mapping.skills_for_agent(&agent.name, &agent.role, &installed_skills)
+            };
+
+        let skill_pairs: Vec<(String, String)> = skill_names
             .iter()
-            .filter_map(|sname| {
-                source_skills
+            .map(|sname| {
+                let desc = source_skills
                     .iter()
                     .find(|s| &s.name == sname)
-                    .map(|s| (s.name.clone(), s.description.clone()))
+                    .map(|s| s.description.clone())
+                    .unwrap_or_else(|| sname.clone());
+                (sname.clone(), desc)
             })
             .collect();
-
-        // Merge custom skills from project config
-        for cs in project_config.custom_skills_for(&agent.name) {
-            if !skill_pairs.iter().any(|(n, _)| *n == cs.0) {
-                skill_pairs.push(cs);
-            }
-        }
 
         let matched_hooks: Vec<crate::hook::Hook> = mapping
             .hooks_for_agent(&agent.role, &source_hooks)
