@@ -151,8 +151,8 @@ impl ProjectConfig {
 
         // Write back to vstack.toml surgically — preserve comments and structure
         let path = project_root.join("vstack.toml");
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
-        let mut out = content;
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut out = existing.clone();
 
         if needs_guidance {
             if let Some(ref text) = extracted.guidance {
@@ -182,7 +182,9 @@ impl ProjectConfig {
             }
         }
 
-        let _ = std::fs::write(&path, out);
+        if out != existing {
+            let _ = std::fs::write(&path, out);
+        }
     }
 }
 
@@ -233,7 +235,9 @@ pub fn write_agent_skills(
 
     // Insert the new entries into the [agent-skills] section
     let out = insert_entries_into_section(&existing, "[agent-skills]", &new_entries);
-    let _ = std::fs::write(&path, out);
+    if out != existing {
+        let _ = std::fs::write(&path, out);
+    }
 }
 
 /// Create or update vstack.toml at the project root.
@@ -382,7 +386,11 @@ fn update_project_config(path: &Path, agents: &[String], skills: &[String]) {
     }
 
     append_skills_reference(&mut out, skills);
-    let _ = std::fs::write(path, out);
+    // Only write if content actually changed to avoid bumping mtime,
+    // which would make staleness checks flag everything as outdated.
+    if out != existing {
+        let _ = std::fs::write(path, out);
+    }
 }
 
 /// Returns true if a name does NOT appear as a TOML key in the file.

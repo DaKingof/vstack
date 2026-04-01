@@ -416,52 +416,7 @@ pub fn run_install_flow(
                 name: "Summary".into(),
                 groups: vec![ItemGroup {
                     label: String::new(),
-                    items: vec![
-                        SelectItem {
-                            label: count_lines.join(", "),
-                            description: String::new(),
-                            selected: false,
-                            tag: None,
-                            suffix: None,
-                            locked: true,
-                            installed: false,
-                            installed_scope: None,
-                            outdated: false,
-                        },
-                        SelectItem {
-                            label: format!("Scope: {scope_label}"),
-                            description: String::new(),
-                            selected: false,
-                            tag: None,
-                            suffix: None,
-                            locked: true,
-                            installed: false,
-                            installed_scope: None,
-                            outdated: false,
-                        },
-                        SelectItem {
-                            label: format!("Harnesses: {harness_list}"),
-                            description: String::new(),
-                            selected: false,
-                            tag: None,
-                            suffix: None,
-                            locked: true,
-                            installed: false,
-                            installed_scope: None,
-                            outdated: false,
-                        },
-                        SelectItem {
-                            label: format!("Method: {method_label}"),
-                            description: String::new(),
-                            selected: false,
-                            tag: None,
-                            suffix: None,
-                            locked: true,
-                            installed: false,
-                            installed_scope: None,
-                            outdated: false,
-                        },
-                    ],
+                    items: Vec::new(),
                 }],
             }];
 
@@ -472,6 +427,13 @@ pub fn run_install_flow(
                     source_selector.current_label.clone(),
                     source_selector.options.clone(),
                 );
+            install_select.install_summary = vec![
+                count_lines.join(", "),
+                format!("Scope: {scope_label}"),
+                format!("Harnesses: {harness_list}"),
+                format!("Method: {method_label}"),
+            ];
+            install_select.action_button_focused = true;
 
             match run_tabbed_select(&mut install_select, None)? {
                 SelectResult::Cancelled => return Ok(InstallFlowResult::Cancelled),
@@ -947,8 +909,8 @@ fn run_tabbed_select(
                     }
                     KeyCode::Down => {
                         if is_final_step(select) && !select.action_button_focused {
-                            let last_index = select.item_count().saturating_sub(1);
-                            if select.item_count() > 0 && select.cursor >= last_index {
+                            let count = select.item_count();
+                            if count == 0 || select.cursor >= count.saturating_sub(1) {
                                 select.action_button_focused = true;
                             } else {
                                 select.move_down();

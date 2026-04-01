@@ -393,13 +393,16 @@ pub fn run(
         }
     }
 
-    // Write computed agent→skill mappings to project vstack.toml
+    // Inject dependency quick-reference sections into skills that have deps
+    installer::inject_dependency_references(&selected_skills, global);
+
+    // Write computed agent→skill mappings to project vstack.toml.
+    // Must happen BEFORE lock timestamps are captured so that the
+    // vstack.toml mtime doesn't post-date installed_at (which would
+    // make every item appear outdated on next launch).
     if !global {
         crate::project_config::write_agent_skills(&config::project_root(), &agent_skill_map);
     }
-
-    // Inject dependency quick-reference sections into skills that have deps
-    installer::inject_dependency_references(&selected_skills, global);
 
     // Update lock file
     let lock_path = config::lock_file_path(global);

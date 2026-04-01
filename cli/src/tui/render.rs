@@ -317,6 +317,17 @@ fn draw_list(frame: &mut Frame, area: Rect, select: &mut TabbedSelect) {
     let mut row_items: Vec<Option<usize>> = Vec::new();
     let mut flat_idx = 0usize;
 
+    // Render plain-text install summary (no selectable items)
+    if is_final_step && !select.install_summary.is_empty() {
+        for line in &select.install_summary {
+            all_rows.push(ListItem::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(line.clone(), Style::default().fg(Color::DarkGray)),
+            ])));
+            row_items.push(None);
+        }
+    }
+
     for (gi, group) in tab.groups.iter().enumerate() {
         if !group.label.is_empty() && tab.groups.len() > 1 {
             // Blank line between sections (not before first)

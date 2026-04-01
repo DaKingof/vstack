@@ -104,6 +104,8 @@ pub struct TabbedSelect {
     pub rendered_total_rows: usize,
     /// Visible list height from the last render.
     pub list_visible_rows: usize,
+    /// Plain text summary lines rendered above the Install button on the final step.
+    pub install_summary: Vec<String>,
 }
 
 impl TabbedSelect {
@@ -136,6 +138,7 @@ impl TabbedSelect {
             rendered_list_rows: Vec::new(),
             rendered_total_rows: 0,
             list_visible_rows: 0,
+            install_summary: Vec::new(),
         }
     }
 
