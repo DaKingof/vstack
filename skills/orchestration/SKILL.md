@@ -10,6 +10,8 @@ metadata:
   version: "1.1.0"
 ---
 
+@AGENTS.md
+
 # Orchestration
 
 ## STOP — Required Setup
@@ -19,7 +21,8 @@ Do not skip ahead to workflows or commands.
 
 1. Load the `linear` skill now.
 2. Load the `github` skill now.
-3. Only after both skills are loaded, continue to the workflows below.
+3. Read and follow all guidelines in `.agents/skills/orchestration/AGENTS.md`.
+4. Only after both skills are loaded, continue to the workflows below.
 
 If you cannot load a skill, stop and tell the user. Do not proceed without them.
 
