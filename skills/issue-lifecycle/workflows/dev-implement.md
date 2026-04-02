@@ -301,36 +301,31 @@ Development-only feature exception: do not apply `needs-perf-test` for work isol
 
 **Target issue**: Post to the issue you just implemented (for bundled work: current sub-issue, not parent).
 
+You MUST use the exact section structure below. Do not flatten into a single paragraph.
+Every `###` section is required — write "(none)" if a section doesn't apply.
+
 ```bash
 .agents/skills/linear/scripts/linear.sh comments create [ISSUE_ID] --body "## Completion Summary
 
 **Agent**: [AGENT_NAME]
 **Branch**: \`[BRANCH]\`
+**Commit**: [SHORT_HASH]
 
-### Files Created/Modified
-- \`path/to/file\` - Description
+### Files Changed
+- \`path/to/file\` — what changed and why
 
 ### Key Decisions
-1. Decision and rationale
-2. DXXX recorded (if research-informed)
-
-### Skills/Docs/Rules Updated
-- \`skill-name\`: Updated X
-(Skip if none)
-
-### Domain Metrics
-[Your agent-specific metrics: frame time, latency, etc.]
-(Skip if not applicable)
+- Decision and rationale
+- DXXX recorded (if research-informed)
 
 ### Discovered Work
 - [Type]: Description (estimate: N)
-Future work beyond current scope. NOT for the next agent — for backlog/orchestrator.
-(Skip if none)
 
 ### Handoff Notes
-Context the next agent needs to complete its current-scope work (e.g., struct changes, API contracts, file locations). Do NOT put aspirational suggestions or future work here — those belong in Discovered Work.
-(Skip if none)"
+Context the next agent needs (struct changes, API contracts, file locations)."
 ```
+
+**Do not** omit sections, merge them into prose, or reduce to a one-line summary.
 
 ---
 
