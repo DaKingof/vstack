@@ -31,7 +31,7 @@ cli/src/
 
 vstack.toml              Skill/hook-to-agent mapping config (read by CLI at install time)
 agents/                  12 canonical agents — role field drives per-harness access control
-skills/                  29 skill packages — each has SKILL.md with optional dependencies
+skills/                  28 skill packages — each has SKILL.md with optional dependencies
 hooks/                   6 safety hooks — bash scripts with YAML comment headers
 skill-templates/         Templates for new skills
 ```
@@ -159,6 +159,6 @@ When adding or modifying a skill rule:
 
 ```bash
 cd cli && cargo build                    # build
-cd cli && cargo test                     # 21 unit tests
+cd cli && cargo test                     # 55 unit tests
 cd cli && cargo run -- add .. --all -y   # integration test against this repo
 ```
