@@ -81,6 +81,10 @@ pub fn run(global: bool) -> Result<()> {
     // Refresh agents
     let mut agents_refreshed = 0usize;
     let mut skills_refreshed = 0usize;
+    // Tracks agents whose project [agent-skills] got new upstream additions:
+    // agent_name → (full merged list, newly added skill names)
+    let mut upstream_skill_updates: std::collections::HashMap<String, (Vec<String>, Vec<String>)> =
+        std::collections::HashMap::new();
     let agent_entries: Vec<_> = lock
         .entries
         .iter()
@@ -93,12 +97,29 @@ pub fn run(global: bool) -> Result<()> {
             continue;
         };
 
-        // Use project [agent-skills] if present (authoritative), else source mapping
+        // Start from project [agent-skills] if present, else source mapping.
+        // Then merge any new skills from the source mapping that aren't already
+        // in the list — this ensures upstream additions propagate to projects.
+        let source_skills =
+            mapping.skills_for_agent(&agent.name, &agent.role, &installed_skills);
         let skill_names: Vec<String> =
             if let Some(project_list) = project_config.agent_skills_for(&agent.name) {
-                project_list.clone()
+                let mut merged = project_list.clone();
+                let existing: std::collections::HashSet<String> =
+                    merged.iter().cloned().collect();
+                for s in &source_skills {
+                    if !existing.contains(s) {
+                        merged.push(s.clone());
+                    }
+                }
+                if merged.len() > project_list.len() {
+                    let added: Vec<String> = merged[project_list.len()..].to_vec();
+                    project_config.agent_skills.insert(agent.name.clone(), merged.clone());
+                    upstream_skill_updates.insert(agent.name.clone(), (merged.clone(), added));
+                }
+                merged
             } else {
-                mapping.skills_for_agent(&agent.name, &agent.role, &installed_skills)
+                source_skills
             };
 
         let skill_pairs =
@@ -149,6 +170,18 @@ pub fn run(global: bool) -> Result<()> {
             }
         }
         agents_refreshed += 1;
+    }
+
+    // Persist upstream skill additions to project vstack.toml
+    if !global && !upstream_skill_updates.is_empty() {
+        let merged_map: std::collections::HashMap<String, Vec<String>> = upstream_skill_updates
+            .iter()
+            .map(|(k, (list, _))| (k.clone(), list.clone()))
+            .collect();
+        crate::project_config::merge_upstream_agent_skills(&project_root, &merged_map);
+        for (agent, (_, added)) in &upstream_skill_updates {
+            eprintln!("  + {} — added upstream skills: {}", agent, added.join(", "));
+        }
     }
 
     // Refresh skills — re-copy from source

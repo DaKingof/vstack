@@ -192,6 +192,121 @@ impl ProjectConfig {
 
 /// Write computed agent→skill mappings into the project vstack.toml.
 ///
+/// Merge upstream skill additions into existing `[agent-skills]` entries.
+///
+/// For each agent in `updates`, if the project toml already has an entry,
+/// replace it with the updated list (which includes upstream additions).
+/// Agents without an existing entry are ignored — `write_agent_skills`
+/// handles those.
+pub fn merge_upstream_agent_skills(
+    project_root: &Path,
+    updates: &HashMap<String, Vec<String>>,
+) {
+    if updates.is_empty() {
+        return;
+    }
+    let path = project_root.join("vstack.toml");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let mut out = content.clone();
+    for (agent, skills) in updates {
+        // Build the replacement value
+        let new_value = if skills.is_empty() {
+            "[]".to_string()
+        } else if skills.len() <= 3 {
+            format!(
+                "[{}]",
+                skills
+                    .iter()
+                    .map(|s| format!("\"{}\"", s))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            let mut v = "[\n".to_string();
+            for s in skills {
+                v.push_str(&format!("    \"{}\",\n", s));
+            }
+            v.push(']');
+            v
+        };
+
+        // Replace the existing entry using regex-like line matching.
+        // Handles both inline arrays and multi-line arrays.
+        out = replace_toml_array_value(&out, "[agent-skills]", agent, &new_value);
+    }
+
+    if out != content {
+        let _ = std::fs::write(&path, out);
+    }
+}
+
+/// Replace a TOML array value for a key within a specific section.
+/// Handles both `key = [...]` (inline) and multi-line arrays.
+fn replace_toml_array_value(
+    content: &str,
+    section_header: &str,
+    key: &str,
+    new_value: &str,
+) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result: Vec<String> = Vec::new();
+    let mut i = 0;
+    let mut in_section = false;
+
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+
+        // Track which section we're in
+        if trimmed.starts_with('[') && !trimmed.starts_with("# [") {
+            in_section = trimmed == section_header;
+        }
+
+        if in_section {
+            // Check if this line starts the key we want to replace
+            let key_prefix = format!("{} = ", key);
+            let key_prefix_tight = format!("{}= ", key);
+            if trimmed.starts_with(&key_prefix) || trimmed.starts_with(&key_prefix_tight) {
+                // Check if it's a multi-line array (value starts with [ but doesn't close)
+                if let Some(after_eq) = trimmed.split_once('=').map(|(_, v)| v.trim()) {
+                    if after_eq.starts_with('[') && !after_eq.contains(']') {
+                        // Multi-line array — skip until closing ]
+                        i += 1;
+                        while i < lines.len() && !lines[i].trim().starts_with(']') {
+                            i += 1;
+                        }
+                        // Skip the closing ] line too
+                        if i < lines.len() {
+                            i += 1;
+                        }
+                    } else {
+                        // Single-line — skip just this line
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+                // Write replacement
+                result.push(format!("{} = {}", key, new_value));
+                continue;
+            }
+        }
+
+        result.push(lines[i].to_string());
+        i += 1;
+    }
+
+    let mut out = result.join("\n");
+    // Preserve trailing newline if original had one
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// For each agent: if the project toml already has an `[agent-skills]` entry,
 /// preserve it (the user may have added or removed skills).  For agents that
 /// have NO entry yet, write the computed list from source mapping.
