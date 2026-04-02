@@ -47,21 +47,15 @@ This skill is a dependency for three workflow skills:
 
 ## Configuration
 
-### Required
-
-| Variable | Purpose | Example |
+| Variable | Purpose | Default |
 |----------|---------|---------|
-| `DECISIONS_DIR` | Path to decision documents directory | `docs/decisions` |
+| `DECISIONS_DIR` | Path to decision documents directory | Auto-discovers `docs/decisions/`, `decisions/`, `doc/decisions/`, or `adr/` with `INDEX.md` |
+
+Override auto-discovery by setting `DECISIONS_DIR` in `.env.local` or exporting it.
 
 ## Getting Started
 
-To make this skill work in a project:
-
-1. Create a decision documents directory.
-2. Create an `INDEX.md` file in that directory.
-3. Set `DECISIONS_DIR` and `DECISIONS_CMD`.
-
-Minimal bootstrap:
+1. Create a decision documents directory with an `INDEX.md`:
 
 ```bash
 mkdir -p docs/decisions
@@ -79,15 +73,7 @@ See the decider skill templates and schemas for the full format.
 EOF
 ```
 
-### CLI Setup
-
-Set the decisions directory in `.env.local`:
-
-```bash
-export DECISIONS_DIR="docs/decisions"
-```
-
-Verify setup:
+2. Verify setup:
 
 ```bash
 decisions list
