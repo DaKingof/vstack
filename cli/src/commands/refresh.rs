@@ -326,12 +326,19 @@ fn update_cached_repo(repo_dir: &std::path::Path) {
         .args(["fetch", "origin", "--quiet"])
         .current_dir(repo_dir)
         .status();
-    if fetch.is_ok_and(|s| s.success()) {
-        let _ = std::process::Command::new("git")
-            .args(["reset", "--hard", "origin/HEAD"])
-            .current_dir(repo_dir)
-            .stderr(std::process::Stdio::null())
-            .status();
+    match fetch {
+        Ok(s) if s.success() => {
+            let reset = std::process::Command::new("git")
+                .args(["reset", "--hard", "origin/HEAD"])
+                .current_dir(repo_dir)
+                .stderr(std::process::Stdio::null())
+                .status();
+            if !reset.is_ok_and(|s| s.success()) {
+                eprintln!("  Warning: git reset failed — cached repo may be stale");
+            }
+        }
+        Ok(_) => eprintln!("  Warning: git fetch failed — using cached version"),
+        Err(_) => eprintln!("  Warning: git not available — using cached version"),
     }
 }
 
