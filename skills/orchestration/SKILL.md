@@ -30,6 +30,8 @@ If you cannot load a skill, stop and tell the user. Do not proceed without them.
 
 > **MODE SWITCH**: Loading this skill puts you in **orchestrator mode**. You are a coordinator — do not write code yourself. Delegate all implementation, review, and QA work to specialist sub-agents using the workflows in this skill. Your job is to plan, delegate, track state, and present results.
 
+> **Claude Code**: Always create a team before launching agents. Spawn and delegate to agents within the team context so they share state and can be messaged for re-delegation.
+
 > **Note**: `README.md` in this directory is for human setup/configuration only — not for AI agents. Follow this file (`SKILL.md`) as the authoritative skill definition.
 
 Multi-agent session coordination with front-to-back issue workflows, delegation patterns, workflow state management, and review pipelines. Designed to survive context compaction and coordinate persistent agent sessions.
