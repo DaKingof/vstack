@@ -80,37 +80,11 @@ TEAM=$(.agents/skills/orchestration/scripts/workflow-state get [ISSUE_ID] '.team
 
 **Determine agent list**: If `agents` context provided, use only those. Otherwise default to all configured review agents.
 
-**If in team session** (`$TEAM` set):
-
-1. **Spawn review agents**:
-   - **If re-review** (`CYCLES > 0` AND `review_agents` in state): DO NOT spawn. Agents already alive. Proceed to step 2.
-   - **Otherwise** (first cycle, regardless of lifecycle): Spawn each agent:
-     ```
-     # For each agent in [AGENTS]:
-     Spawn agent: type=[AGENT], name=[AGENT], team=[TEAM], prompt=SPAWN_PROMPT
-     ```
-   - Store in state:
-     ```bash
-     .agents/skills/orchestration/scripts/workflow-state set [ISSUE_ID] review_agents '[AGENT_LIST_JSON]'
-     ```
-
-2. **Delegate via messages** (one per agent, all in parallel):
-   ```
-   # For each agent in [AGENTS]:
-   Send message to [AGENT]: content=DELEGATION, summary="Review changes"
-   ```
-
-**If standalone** (no team):
-
-- **If re-review** (`CYCLES > 0`) AND `review_agent_ids` in state:
-  Resume existing agents — they retain full prior review context:
-  ```
-  # For each agent in [AGENTS] with stored ID:
-  Resume agent: id=[AGENT_ID], prompt=DELEGATION
-  ```
-- **Otherwise**: Launch new sub-agents:
-  ```
-  Launch sub-agent: type=[AGENT_TYPE], prompt=DELEGATION
+Delegate to each review agent in `[AGENTS]` in parallel with the prompt below.
+- **If re-review** (`CYCLES > 0`): reuse existing agents if possible — they retain prior review context.
+- Store agents in state:
+  ```bash
+  .agents/skills/orchestration/scripts/workflow-state set [ISSUE_ID] review_agents '[AGENT_LIST_JSON]'
   ```
 
 **Delegation prompt:** Follow exactly, fill placeholders, add nothing else. Omit lines/sections with empty placeholders.
@@ -284,23 +258,7 @@ If >4 suggestion items: show first 3 + `All N fixes`. Refine via "Other".
 
 **For each QA agent, execute steps 3–7:**
 
-3. **Spawn QA agent**:
-
-   **If in team session**:
-   ```
-   Spawn agent: type=[QA_AGENT], name=[QA_AGENT], team=[TEAM], prompt=SPAWN_PROMPT
-   ```
-
-   **If standalone**:
-   ```
-   Spawn agent: type=[QA_AGENT], prompt=SPAWN_PROMPT
-   ```
-
-4. **Delegate**:
-
-   **If in team session**: Send message to [QA_AGENT]: content=DELEGATION, summary="QA review [ISSUE_ID]"
-
-   **If standalone**: Launch as sub-agent task with DELEGATION prompt.
+3. **Delegate to QA agent** (`[QA_AGENT]`) with the prompt below:
 
    <delegation_format>
    Workflow: issue-lifecycle skill qa-review workflow
@@ -320,13 +278,7 @@ If >4 suggestion items: show first 3 + `All N fixes`. Refine via "Other".
    - Do NOT re-report fixed or escalated items. Only report NEW issues or regressions introduced by the fixes.
    </delegation_format>
 
-5. **Wait for completion.**
-
-6. **Shutdown QA agent**:
-
-   **If in team session**: Send shutdown_request to [QA_AGENT]
-
-   **If standalone**: Agent task already returned.
+4. **Wait for completion.**
 
 7. **Process agent return.** Agent returns `verdict`, `json_path`, and (for performance QA agent) `benchmark_commit`.
    - **Update state**: `.agents/skills/orchestration/scripts/workflow-state append [ISSUE_ID] json_paths "[json_path]"`

@@ -163,14 +163,7 @@ After all issues processed → § 3.
    - If parent has `agent:multi`: consult **all distinct `agent:[TYPE]` agents** from children (parallel agent launches, ephemeral)
    - Otherwise: consult the agent from `agent:[TYPE]` label
 
-2. **Single agent — create consultation team** (skip for multi-agent):
-   - Create agent team: `consult-[ISSUE_ID]`
-   - Spawn agent: type=[AGENT_TYPE], name="consult-[AGENT_TYPE]", team="consult-[ISSUE_ID]"
-   - Wait for agent to go idle
-
-3. **Delegate consultation**: Follow exactly, fill placeholders, add nothing else. Omit lines/sections with empty placeholders.
-   - **Single agent**: Send delegation message to "consult-[AGENT_TYPE]" with prompt below
-   - **Multi-agent**: Embed prompt in agent launch per agent (parallel, ephemeral — no team)
+2. **Delegate consultation** to `[AGENT_TYPE]` agent(s). For multi-agent, delegate in parallel. Follow exactly, fill placeholders, add nothing else. Omit lines/sections with empty placeholders.
 
    <delegation_format>
    CONSULTATION ONLY.

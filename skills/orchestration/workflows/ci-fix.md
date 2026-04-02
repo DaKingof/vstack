@@ -104,13 +104,7 @@ Infer agent type from component paths or issue labels.
 
 **Create tracking task**: Create task: "🐲 [AGENT]: Fix CI [ERROR_TYPE]", Update task status to in_progress.
 
-**If in team** (`$TEAM` set) — message existing dev teammate:
-```
-Send delegation message to [AGENT]: content=DELEGATION, summary="Fix CI [ERROR_TYPE]"
-```
-Wait for completion message. Update tracking task to completed.
-
-**If standalone** (no team) — launch sub-agent from table above. Update tracking task to completed on return.
+Delegate to `[AGENT]` with the prompt below. Wait for completion. Update tracking task to completed.
 
 Follow exactly, fill placeholders, add nothing else. Omit lines/sections with empty placeholders.
 

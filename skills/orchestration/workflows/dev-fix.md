@@ -82,17 +82,7 @@ WT_PATH=$(.agents/skills/worktree/scripts/worktree path $ISSUE_ID 2>/dev/null ||
    TEAM=$(.agents/skills/orchestration/scripts/workflow-state get $ISSUE_ID '.team_name // empty')
    ```
 
-4. **Delegate:**
-
-   **If in team session** and agent alive (`dev_agent` or team member):
-   ```
-   Send delegation message to [DEV_AGENT]: content=DELEGATION, summary="Fix items"
-   ```
-
-   **If standalone** (no team):
-   ```
-   Launch sub-agent: type=[AGENT_TYPE], prompt=DELEGATION
-   ```
+4. **Delegate** to `[AGENT_TYPE]` agent (reuse existing dev agent if available):
 
    <delegation_format>
    Ultrathink.

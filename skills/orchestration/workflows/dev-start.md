@@ -58,27 +58,8 @@ TEAM=$(.agents/skills/orchestration/scripts/workflow-state get [ISSUE_ID] '.team
 
 ### If Single Issue
 
-**If in team session** (`$TEAM` set):
-
-1. **Spawn dev teammate** (if not alive) — check team config for existing agent:
-   ```
-   Spawn agent: type=[AGENT_TYPE], name=[AGENT], team=[TEAM]
-   ```
-
-2. **Delegate via message**:
-   ```
-   Send delegation message to [AGENT]: content=DELEGATION, summary="Implement [ISSUE_ID]"
-   ```
-
-3. **Wait for completion message**. Parse: Branch, Commit, QA Labels, Summary.
-
-**If standalone** (no team):
-
-Launch sub-agent:
-```
-Launch sub-agent: type=[AGENT_TYPE], prompt=DELEGATION
-```
-Wait for return. Parse: Branch, Commit, QA Labels, Summary.
+Delegate to a `[AGENT_TYPE]` agent with the prompt below.
+Wait for completion. Parse: Branch, Commit, QA Labels, Summary.
 
 **Single issue delegation prompt:**
 
@@ -108,27 +89,8 @@ c. Include in next delegation as the `Handoff from prior agents:` field (see del
 
 If no handoff notes found, omit the section.
 
-**If in team session** (`$TEAM` set):
-
-1. **Spawn dev teammate** (if not alive) — check team config for existing agent:
-   ```
-   Spawn agent: type=[AGENT_TYPE], name=[AGENT], team=[TEAM]
-   ```
-
-2. **Delegate via message**:
-   ```
-   Send delegation message to [AGENT]: content=DELEGATION, summary="Implement [ISSUE_ID] bundle"
-   ```
-
-3. **Wait for completion message**. Parse: Branch, Commit, QA Labels, Summary.
-
-**If standalone** (no team):
-
-Launch sub-agent:
-```
-Launch sub-agent: type=[AGENT_TYPE], prompt=DELEGATION
-```
-Wait for return. Parse: Branch, Commit, QA Labels, Summary.
+Delegate to a `[AGENT_TYPE]` agent with the prompt below.
+Wait for completion. Parse: Branch, Commit, QA Labels, Summary.
 
 **Bundled issue delegation prompt:**
 
@@ -186,11 +148,7 @@ Handoff from prior agents:
    | `.results[].state_ok` | `true` | Re-delegate § 2 |
    | `.results[].has_summary` | `true` | Re-delegate § 2 with retry instructions |
 
-3. **On failure**: Do NOT proceed. Re-message existing agent (team) or resume agent (standalone) with retry instructions specifying the missing step(s). Never proceed with "may have a different format" or similar excuses.
-   ```
-   # Team: Send delegation message to [AGENT]: content="[RETRY_INSTRUCTIONS]", summary="Retry [STEP]"
-   # Standalone: Resume agent: [AGENT_ID], prompt="[RETRY_INSTRUCTIONS]"
-   ```
+3. **On failure**: Do NOT proceed. Re-delegate to the same agent with retry instructions specifying the missing step(s). Never proceed with "may have a different format" or similar excuses.
 
 4. **Store QA state**:
    ```bash
