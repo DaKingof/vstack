@@ -81,6 +81,21 @@ fn resolve_source_for_app(
             persist: true,
         }),
         None => {
+            // Prefer the user's last-selected source over CWD auto-detection.
+            // This prevents a local vstack repo from hijacking the source
+            // when the user previously selected a remote (e.g., vanillagreencom/vstack).
+            if let Some(current) = &registry.current {
+                if let Ok(dir) = resolve_source(Some(current)) {
+                    return Ok(ResolvedSource {
+                        source: current.clone(),
+                        label: source_label(current),
+                        dir,
+                        persist: true,
+                    });
+                }
+            }
+
+            // Fallback: walk up from CWD looking for a vstack source
             let mut dir = std::env::current_dir()?;
             loop {
                 if crate::resolve::is_vstack_source(&dir) {
@@ -96,10 +111,7 @@ fn resolve_source_for_app(
                 }
             }
 
-            let source = registry
-                .current
-                .clone()
-                .unwrap_or_else(|| crate::REPO.to_string());
+            let source = crate::REPO.to_string();
             Ok(ResolvedSource {
                 label: source_label(&source),
                 dir: resolve_source(Some(&source))?,
