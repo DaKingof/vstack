@@ -294,13 +294,12 @@ Set in `.env.local` (or `.env` as fallback) at project root — the script sourc
 
 **Claude** (called when running from Codex):
 ```bash
-SECOND_OPINION_CLAUDE_CMD="claude -p --bare --no-session-persistence --model opus --effort max --allowedTools Bash(read-only:true),Read,Glob,Grep"
+SECOND_OPINION_CLAUDE_CMD="claude -p --no-session-persistence --model opus --effort max --allowedTools Bash(read-only:true),Read,Glob,Grep"
 ```
 
 | Flag | Purpose |
 |------|---------|
 | `-p` | Print mode — non-interactive, single response |
-| `--bare` | Skip hooks, LSP, CLAUDE.md — clean independent review |
 | `--no-session-persistence` | Don't save session to disk |
 | `--model opus` | Claude Opus 4.6 |
 | `--effort max` | Maximum reasoning effort |

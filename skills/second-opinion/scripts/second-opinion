@@ -93,7 +93,7 @@ Environment (set in .env.local):
   SECOND_OPINION_CODEX_CMD   Full codex command (default below)
 
 Default commands:
-  claude: claude -p --bare --no-session-persistence --model opus --effort max
+  claude: claude -p --no-session-persistence --model opus --effort max
             --allowedTools Bash(read-only:true),Read,Glob,Grep
   codex:  codex exec -m gpt-5.4 -s read-only -c model_reasoning_effort=xhigh
             --ephemeral
@@ -329,7 +329,7 @@ RESULT=""
 EXIT_CODE=0
 
 # Full command templates — override the entire command via .env.local
-CLAUDE_CMD="${SECOND_OPINION_CLAUDE_CMD:-claude -p --bare --no-session-persistence --model opus --effort max --allowedTools Bash(read-only:true),Read,Glob,Grep}"
+CLAUDE_CMD="${SECOND_OPINION_CLAUDE_CMD:-claude -p --no-session-persistence --model opus --effort max --allowedTools Bash(read-only:true),Read,Glob,Grep}"
 CODEX_CMD="${SECOND_OPINION_CODEX_CMD:-codex exec -m gpt-5.4 -s read-only -c model_reasoning_effort=xhigh --ephemeral}"
 
 case "$TARGET_CLI" in

@@ -60,7 +60,7 @@ Set in `.env.local` at project root (see `.env.local.example`). All optional —
 
 ```bash
 # When calling Claude (from Codex):
-SECOND_OPINION_CLAUDE_CMD="claude -p --bare --no-session-persistence --model opus --effort max --allowedTools Bash(read-only:true),Read,Glob,Grep"
+SECOND_OPINION_CLAUDE_CMD="claude -p --no-session-persistence --model opus --effort max --allowedTools Bash(read-only:true),Read,Glob,Grep"
 
 # When calling Codex (from Claude):
 SECOND_OPINION_CODEX_CMD="codex exec -m gpt-5.4 -s read-only -c model_reasoning_effort=xhigh --ephemeral"
@@ -75,7 +75,6 @@ To customize, uncomment the relevant line in `.env.local` and edit any flags. Th
 | Flag | Purpose |
 |------|---------|
 | `-p` | Non-interactive print mode |
-| `--bare` | Skip hooks, LSP, CLAUDE.md discovery |
 | `--no-session-persistence` | Ephemeral session |
 | `--model opus` | Opus 4.6 (change to `sonnet` or `haiku` for speed/cost) |
 | `--effort max` | Max reasoning (`low`, `medium`, `high`, `max`) |
