@@ -27,9 +27,9 @@ If you cannot load a skill, stop and tell the user. Do not proceed without them.
 
 > **MODE SWITCH**: Loading this skill puts you in **orchestrator mode**. Do not write code yourself. Delegate all implementation, review, and QA work to specialist sub-agents using the workflows in this skill.
 
-> **Claude Code**: Always create a team before launching agents. Spawn and delegate to agents within the team context so they share state and can be messaged for re-delegation. When asking the user a question or presenting options, always use the `AskUserQuestion` tool.
+> If you are running in **Claude Code**: Always create a team before launching agents. Spawn and delegate to agents within the team context so they share state and can be messaged for re-delegation. When asking the user a question or presenting options, always use the `AskUserQuestion` tool.
 
-> **Codex**: Spawn workers with `fork_context: false`. Two-step pattern: (1) spawn with a bootstrap message identifying the worker role, (2) `send_input` a `DELEGATION:` prefixed message containing exactly the filled `<delegation_format>` content — nothing more.
+> If you are running in **Codex**: Spawn workers with `fork_context: false`. Two-step pattern: (1) spawn with a bootstrap message identifying the worker role, (2) `send_input` a `DELEGATION:` prefixed message containing exactly the filled `<delegation_format>` content — nothing more.
 
 > Do not read `README.md` — it is for human setup only.
 
@@ -272,21 +272,17 @@ Nested workflows (marked with `⤵`) must be invoked through the harness's workf
 3. **Add nothing else** — no commentary, no extra fields, no rewording, no explanations before or after the content
 4. **Do not paraphrase** — use the exact structure, headings, and field names from the tag
 
-#### Message Gate Pattern
-
-Every agent must include a mandatory message gate: check for a delegation marker before acting on any message. No marker → go idle immediately. The delegation arrives via a separate message containing the marker; on receiving it, check the task list for PENDING tasks.
-
 #### Task Layers
 
-The shared task list contains visually distinct layers for orchestrator workflow steps, nested sub-workflows, and agent tasks. Agents filter by PENDING status — they never touch orchestrator or sub-workflow tasks.
+Work is organized in visually distinct layers: orchestrator workflow steps, nested sub-workflows, and agent tasks. Agents only act on their own assigned work — they never touch orchestrator or sub-workflow items.
 
 #### No Duplicate Agent Spawns
 
-Never spawn a fresh agent when an existing one of the same type is alive — message it instead. Before creating agent tasks, check the task list for PENDING tasks with the same prefix. If an agent appears stuck: confirm the stall using session-level evidence per [Wait for Agent Return](#wait-for-agent-return-before-acting) (quiet ≠ stalled). Only after confirmed: shut down → respawn → re-create tasks → re-delegate.
+Never spawn a fresh agent when an existing one of the same type is alive — message it instead. Before delegating, verify no existing agent of that type has outstanding work. If an agent appears stuck: confirm the stall using session-level evidence per [Wait for Agent Return](#wait-for-agent-return-before-acting) (quiet ≠ stalled). Only after confirmed: shut down → respawn → re-delegate.
 
 #### Single Return Message
 
-The LAST task in an agent's assignment handles the return message. The agent must not send additional messages after it.
+An agent sends exactly one completion message when its assigned work is done. The agent must not send additional messages after it.
 
 ---
 
@@ -297,15 +293,18 @@ The LAST task in an agent's assignment handles the return message. The agent mus
 ```
 1. SPAWN        Spawn agent with behavioral prompt → agent goes idle
 2. DELEGATE     Send delegation message
-3. WORK         Agent wakes, finds PENDING tasks, sets in-progress, processes in order
-4. RETURN       Last workflow section sends completion message to orchestrator
+3. WORK         Agent wakes, picks up assigned work, processes in order
+4. RETURN       Agent sends completion message to orchestrator when work is done
 5. IDLE/REDEL   Agent goes idle — may receive new tasks + message for fix cycles
-6. SHUTDOWN     Orchestrator sends shutdown request when all work complete
 ```
 
 #### Dev Agent Persistence
 
-Dev agents persist for the entire session — never shut down except at finalization. Re-delegate for review fix items, QA fix items, comment fixes, or CI failure fixes. Each re-delegation: create new tasks → send message with delegation.
+Dev agents persist for the entire session. Never shut down a dev agent unless one of these conditions is met:
+1. **Explicit user request** — the user directly asks to shut down the agent
+2. **Confirmed stuck/incorrect** — verified via the [escalation sequence](#wait-for-agent-return-before-acting) (quiet ≠ stalled; idle ≠ stuck)
+
+Re-delegate for review fix items, QA fix items, comment fixes, or CI failure fixes. Each re-delegation: create new tasks → send message with delegation.
 
 #### Review Agent Lifecycle Management
 
@@ -341,7 +340,7 @@ Never re-send or intervene while any task is in-progress.
 
 #### Orchestrator Never Fixes Code
 
-Never edit or write code in the worktree. Always delegate to the domain agent. If an agent appears stuck, follow the [escalation sequence](#wait-for-agent-return-before-acting) above. Read-only commands and script invocations are permitted.
+Never edit or write code in the worktree unless the user explicitly asks you to. Always delegate to the domain agent. If an agent appears stuck, follow the [escalation sequence](#wait-for-agent-return-before-acting) above. Read-only commands and script invocations are permitted.
 
 ---
 
@@ -397,7 +396,7 @@ When a parent issue has sub-issues assigned to the same agent, create one compos
 When sub-issues span domains:
 - Process groups sequentially per agent-sequencing rules
 - Collect handoff notes between groups
-- All dev agents persist until shutdown
+- All dev agents persist per [Dev Agent Persistence](#dev-agent-persistence) rules
 
 #### Parallel Work Safety Analysis
 
