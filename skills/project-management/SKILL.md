@@ -37,6 +37,11 @@ TPM workflows return JSON recommendations only. Orchestrator or user handles int
 | Label management | [references/labels.md](references/labels.md) |
 | Issue tracker CLI | Companion issue tracker skill (`.agents/skills/linear/scripts/linear.sh`) |
 
+## Execution Rules
+
+- Execute all workflow sections in order. The workflow decides what to skip via "**Skip if**" conditions — never skip based on your own scope assessment.
+- `<delegation_format>` and `<output_format>` tags are literal templates: fill `[PLACEHOLDERS]`, omit empty lines, add nothing else, do not paraphrase.
+
 ## Output Schemas
 
 | Workflow | Schema |
