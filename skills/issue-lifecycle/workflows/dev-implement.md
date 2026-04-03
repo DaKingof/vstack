@@ -296,6 +296,8 @@ Development-only feature exception: do not apply `needs-perf-test` for work isol
 
 ## 9. Post Completion Summary
 
+### 9.1 Completion Comment
+
 **Always required** — documents the FINAL state after all validation passes.
 
 **Target issue**: Post to the issue you just implemented (for bundled work: current sub-issue, not parent).
@@ -327,9 +329,28 @@ Future work beyond current scope. NOT for the next agent — for backlog/orchest
 (Skip if none)
 
 ### Handoff Notes
-Context the next agent needs to complete its current-scope work (e.g., struct changes, API contracts, file locations). Do NOT put aspirational suggestions or future work here — those belong in Discovered Work.
-(Skip if none)"
+Context the next agent in this bundle needs to complete its current-scope work (e.g., struct changes, API contracts, file locations). Do NOT put aspirational suggestions or future work here — those belong in Discovered Work.
+(Skip if none)
+
+"
 ```
+
+### 9.2 Downstream Handoff (selective)
+
+**Skip if** this issue does not block other issues, or if unblocking by completion alone is sufficient (most common case).
+
+Check blocking relations:
+```bash
+.agents/skills/linear/scripts/linear.sh cache issues get [ISSUE_ID] | jq '.blocks'
+```
+
+Post a handoff comment to each downstream issue **only if** this work changed an API, interface, file, or contract the downstream issue depends on:
+```bash
+.agents/skills/linear/scripts/linear.sh comments create [DOWNSTREAM_ISSUE_ID] --body "Handoff from [ISSUE_ID]:
+- [RELEVANT_CONTEXT: what changed, what downstream needs to know]"
+```
+
+Do NOT post handoff to the completed issue — that conflates audiences. Handoff Notes (§ 9.1) are for the next agent in this bundle. Downstream handoff is for agents working on issues this one unblocks.
 
 ---
 
@@ -345,7 +366,8 @@ Context the next agent needs to complete its current-scope work (e.g., struct ch
 | Docs/config updated | Repeated issues in § 4-5 | § 6 |
 | Changes committed | Always | § 7 |
 | QA labels applied | Triggers present | § 8 |
-| Summary posted | Always | § 9 |
+| Summary posted | Always | § 9.1 |
+| Downstream handoff | Blocks + context needed | § 9.2 |
 
 **If single**: Return now with:
 ```

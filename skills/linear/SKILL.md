@@ -90,6 +90,8 @@ linear.sh sync --full           # Full re-sync
 | `table` | Human-readable table |
 | `raw` | Original GraphQL structure |
 
+`compact` omits description and other large text fields. `raw` nests fields under GraphQL structure — do not assume top-level jq paths. Use `safe` (default) when you need issue descriptions or full field access.
+
 ## Configuration
 
 | Variable | Purpose | Default |
