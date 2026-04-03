@@ -6,10 +6,19 @@ Cross-harness distribution system for AI coding skills, agents, and hooks. Insta
 
 ```
 cli/src/
-├── main.rs              CLI entry, clap subcommands (add, remove, list, init, check)
+├── main.rs              CLI entry, clap definition, routes to commands/
+├── commands/
+│   ├── add.rs           Install wizard (TUI or --yes), reconciliation
+│   ├── remove.rs        Uninstall skills/agents, cleanup
+│   ├── list.rs          Show installed skills and agents
+│   ├── check.rs         Validate installation status
+│   ├── update.rs        Self-update to latest release
+│   ├── refresh.rs       Regenerate agents from vstack.toml customizations
+│   └── init.rs          Scaffold new skill/agent template
 ├── agent.rs             Agent parsing, skill/hook matching heuristics
 ├── skill.rs             Skill parsing, frontmatter dependency resolution, dep reference injection
 ├── hook.rs              Hook parsing (YAML-in-comments frontmatter from .sh files)
+├── frontmatter.rs       YAML frontmatter splitting/parsing
 ├── config.rs            Lock file (JSON), project root detection, staleness/mtime helpers
 ├── mapping.rs           Source vstack.toml loader — MappingConfig (agent-skills, role-skills, hook-events)
 ├── project_config.rs    Project vstack.toml — ProjectConfig, ensure/write/update, TOML template
@@ -148,12 +157,7 @@ trading-design = "Focus on dark theme with green/red accent colors for this proj
 
 ## Updating Skills
 
-When adding or modifying a skill rule:
-
-1. **Add/edit the rule file** in `skills/<name>/rules/` following `rules/_template.md` (YAML frontmatter with title, impact, impactDescription, tags + markdown body starting with `## Title`).
-2. **Update `_sections.md`** if adding a new section category (new prefix).
-3. **Update SKILL.md** quick-reference list to include the new rule's one-liner.
-4. **Update AGENTS.md** — add the rule content under the appropriate `## N.` section as a `### Title` subsection.
+All skill content lives in `skills/<name>/SKILL.md` — there are no separate `rules/` directories or per-skill `AGENTS.md` files. To add or modify a rule, edit the relevant section directly in SKILL.md.
 
 ## Build & Test
 
