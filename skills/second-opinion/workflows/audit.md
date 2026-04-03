@@ -36,4 +36,26 @@ Skip: style preferences, naming opinions, documentation gaps.
 
 ## 3. Present Results
 
-Use the same output format as the review workflow — verdict table, blockers, suggestions. Omit empty sections.
+<output_format>
+
+### External Audit — [TARGET]
+
+| Verdict | Agent | Summary |
+|---------|-------|---------|
+| ✅ pass / ⚠️ action_required | external-[TARGET] | [SUMMARY] |
+
+**Blockers**
+
+| # | Location | Description | Pri |
+|---|----------|-------------|-----|
+| [id] | [location] | [description] | 🔴 |
+
+**Suggestions**
+
+| # | Location | Description | Cat | Pri |
+|---|----------|-------------|-----|-----|
+| [id] | [location] | [description] | fix/issue | 🟡 |
+
+</output_format>
+
+Omit empty sections.
