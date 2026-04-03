@@ -1,5 +1,6 @@
 working/
 HT-AGENTS.md
 .env.local
+.cache/
 ht/
 cli/target/

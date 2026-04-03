@@ -216,6 +216,22 @@ cache_upsert_issue() {
     ) 201>"$cache_file.lock"
 }
 
+cache_touch_issue() {
+    local issue_id="$1"
+    local timestamp="$2"
+    local cache_file="$CACHE_DIR/issues.json"
+    [[ -f "$cache_file" ]] || return 0
+    [[ -n "$issue_id" && "$issue_id" != "null" ]] || return 0
+    [[ -n "$timestamp" && "$timestamp" != "null" ]] || return 0
+    (
+        flock 201
+        jq --arg id "$issue_id" --arg ts "$timestamp" \
+            '[.[] | if (.id == $id or .identifier == $id) then .updatedAt = $ts else . end]' \
+            "$cache_file" > "$cache_file.tmp"
+        mv "$cache_file.tmp" "$cache_file"
+    ) 201>"$cache_file.lock"
+}
+
 cache_patch_relation_snapshots() {
     local issue_json="$1"
     local cache_file="$CACHE_DIR/issues.json"

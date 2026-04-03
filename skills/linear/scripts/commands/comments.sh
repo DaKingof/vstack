@@ -135,16 +135,24 @@ create_comment() {
                 createdAt
                 updatedAt
                 user { name }
+                issue { identifier updatedAt }
             }
         }
     }'
 
     local result
     result=$(graphql_query "$mutation" "{\"input\": $input_json}")
-    # Write-through: append comment to cache
+    # Write-through: append comment to cache, touch issue updatedAt
     local created_comment
     created_comment=$(echo "$result" | jq '.commentCreate.comment // empty')
-    [[ -n "$created_comment" && "$created_comment" != "null" ]] && cache_append_comment "$issue_id" "$created_comment" 2>/dev/null || true
+    if [[ -n "$created_comment" && "$created_comment" != "null" ]]; then
+        local cache_comment
+        cache_comment=$(echo "$created_comment" | jq 'del(.issue)')
+        cache_append_comment "$issue_id" "$cache_comment" 2>/dev/null || true
+        local _issue_ts
+        _issue_ts=$(echo "$created_comment" | jq -r '.issue.updatedAt // empty')
+        [[ -n "$_issue_ts" ]] && cache_touch_issue "$issue_id" "$_issue_ts" 2>/dev/null || true
+    fi
     # Download any attachments in the new comment
     if [[ -n "$created_comment" && "$created_comment" != "null" ]]; then
         local _body
@@ -187,7 +195,7 @@ update_comment() {
                 createdAt
                 updatedAt
                 user { name }
-                issue { identifier }
+                issue { identifier updatedAt }
             }
         }
     }'
@@ -202,6 +210,9 @@ update_comment() {
         local cache_comment
         cache_comment=$(echo "$updated_comment" | jq 'del(.issue)')
         cache_update_comment "$issue_id" "$cache_comment" 2>/dev/null || true
+        local _issue_ts
+        _issue_ts=$(echo "$updated_comment" | jq -r '.issue.updatedAt // empty')
+        [[ -n "$_issue_ts" ]] && cache_touch_issue "$issue_id" "$_issue_ts" 2>/dev/null || true
         # Download any attachments in the updated comment
         local _body
         _body=$(echo "$updated_comment" | jq -r '.body // empty')
