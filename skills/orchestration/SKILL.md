@@ -29,7 +29,7 @@ If you cannot load a skill, stop and tell the user. Do not proceed without them.
 
 > If you are running in **Claude Code**: Always create a team before launching agents. Spawn and delegate to agents within the team context so they share state and can be messaged for re-delegation. When asking the user a question or presenting options, always use the `AskUserQuestion` tool.
 
-> If you are running in **Codex**: Spawn workers with `fork_context: false`. Two-step pattern: (1) spawn with a bootstrap message identifying the worker role, (2) `send_input` a `DELEGATION:` prefixed message containing exactly the filled `<delegation_format>` content — nothing more.
+> If you are running in **Codex**: Spawn workers with `fork_context: false`. Two-step pattern: (1) spawn with the `<bootstrap_format>` message, (2) `send_input` a `DELEGATION:` prefixed message containing exactly the filled `<delegation_format>` content — nothing more.
 
 > Do not read `README.md` — it is for human setup only.
 
@@ -258,10 +258,27 @@ Nested workflows (marked with `⤵`) must be invoked through the harness's workf
 
 | Pattern | When | Flow |
 |---------|------|------|
-| Spawn + message | Fresh agents (dev, QA, review) | Create tasks → spawn (behavioral prompt) → send delegation message |
-| Message only | Re-delegation to existing agents | Create tasks → send delegation message |
+| Spawn + message | Fresh agents (dev, QA, review) | Spawn with bootstrap message → send delegation message |
+| Message only | Re-delegation to existing agents | Send delegation message to running agent |
 | Self-create | Agent without team context | Full delegation instructions in prompt |
 | Consultation | One-off sub-agent | Full instructions in prompt, no task machinery |
+
+#### Bootstrap Message
+
+When spawning a new agent, send the bootstrap message **first** before any delegation. This establishes the agent's role and boundaries. Use the template below — fill `[PLACEHOLDERS]`, send verbatim:
+
+<bootstrap_format>
+You are a [ROLE] sub-agent ([AGENT_NAME]). You report to the orchestrator.
+
+Rules:
+- Execute all assigned work yourself. Do not spawn sub-agents for implementation, review, or fix work.
+- You may use Explore sub-agents for codebase search/research only.
+- Only act on delegation messages from the orchestrator. If no delegation is pending, stay idle.
+- After completing assigned work, send a single return message and go idle. Wait for further delegation.
+- Do not manage tasks for other agents. Do not act as a coordinator.
+</bootstrap_format>
+
+The delegation message (containing the `<delegation_format>` content) follows as a separate message after the bootstrap.
 
 #### Format Tags Are Literal
 
@@ -291,11 +308,11 @@ An agent sends exactly one completion message when its assigned work is done. Th
 #### Lifecycle Stages
 
 ```
-1. SPAWN        Spawn agent with behavioral prompt → agent goes idle
-2. DELEGATE     Send delegation message
-3. WORK         Agent wakes, picks up assigned work, processes in order
-4. RETURN       Agent sends completion message to orchestrator when work is done
-5. IDLE/REDEL   Agent goes idle — may receive new tasks + message for fix cycles
+1. SPAWN        Spawn agent with bootstrap message → agent learns its role and boundaries
+2. DELEGATE     Send delegation message (filled <delegation_format>)
+3. WORK         Agent executes assigned work itself — no sub-delegation
+4. RETURN       Agent sends single completion message to orchestrator
+5. IDLE/REDEL   Agent goes idle — may receive new delegation for fix cycles
 ```
 
 #### Dev Agent Persistence
