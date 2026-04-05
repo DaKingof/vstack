@@ -235,6 +235,44 @@ pub fn merge_upstream_agent_skills(
     }
 }
 
+/// Merge upstream additions into the project's `[agent-skills-optional]`.
+/// Same principle as `merge_upstream_agent_skills`: only add entries whose
+/// `skill` name isn't already present — never remove user edits.
+pub fn merge_upstream_agent_skills_optional(
+    project_root: &Path,
+    updates: &HashMap<String, Vec<crate::mapping::OptionalSkill>>,
+) {
+    if updates.is_empty() {
+        return;
+    }
+    let path = project_root.join("vstack.toml");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let mut out = content.clone();
+    for (agent, skills) in updates {
+        if skills.is_empty() {
+            continue;
+        }
+        let mut v = "[\n".to_string();
+        for s in skills {
+            let when = s.when.replace('"', "\\\"");
+            v.push_str(&format!(
+                "    {{ skill = \"{}\", when = \"{}\" }},\n",
+                s.skill, when
+            ));
+        }
+        v.push(']');
+        out = replace_toml_array_value(&out, "[agent-skills-optional]", agent, &v);
+    }
+
+    if out != content {
+        let _ = std::fs::write(&path, out);
+    }
+}
+
 /// Replace a TOML array value for a key within a specific section.
 /// Handles both `key = [...]` (inline) and multi-line arrays.
 fn replace_toml_array_value(

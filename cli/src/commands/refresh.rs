@@ -97,6 +97,11 @@ pub fn run(global: bool) -> Result<()> {
     // agent_name → (full merged list, newly added skill names)
     let mut upstream_skill_updates: std::collections::HashMap<String, (Vec<String>, Vec<String>)> =
         std::collections::HashMap::new();
+    // Tracks agents whose [agent-skills-optional] got new upstream additions
+    let mut upstream_optional_updates: std::collections::HashMap<
+        String,
+        (Vec<crate::mapping::OptionalSkill>, Vec<String>),
+    > = std::collections::HashMap::new();
     let agent_entries: Vec<_> = lock
         .entries
         .iter()
@@ -137,11 +142,33 @@ pub fn run(global: bool) -> Result<()> {
         let skill_pairs =
             crate::resolve::resolve_skill_pairs(&skill_names, &all_source_skills);
 
+        // Start from project [agent-skills-optional] if present, else source mapping.
+        // Then merge any new optional skills from the source mapping that aren't
+        // already in the list — same principle as required skills above.
+        let source_optional =
+            mapping.optional_skills_for_agent(&agent.name, &installed_skills);
         let optional_entries =
             if let Some(project_list) = project_config.agent_skills_optional.get(&agent.name) {
-                project_list.clone()
+                let mut merged = project_list.clone();
+                let existing: std::collections::HashSet<String> =
+                    merged.iter().map(|e| e.skill.clone()).collect();
+                for s in &source_optional {
+                    if !existing.contains(&s.skill) {
+                        merged.push(s.clone());
+                    }
+                }
+                if merged.len() > project_list.len() {
+                    let added: Vec<String> =
+                        merged[project_list.len()..].iter().map(|e| e.skill.clone()).collect();
+                    project_config
+                        .agent_skills_optional
+                        .insert(agent.name.clone(), merged.clone());
+                    upstream_optional_updates
+                        .insert(agent.name.clone(), (merged.clone(), added));
+                }
+                merged
             } else {
-                mapping.optional_skills_for_agent(&agent.name, &installed_skills)
+                source_optional
             };
         let optional_pairs = crate::resolve::resolve_optional_skill_pairs(&optional_entries);
 
@@ -193,6 +220,23 @@ pub fn run(global: bool) -> Result<()> {
         crate::project_config::merge_upstream_agent_skills(&project_root, &merged_map);
         for (agent, (_, added)) in &upstream_skill_updates {
             eprintln!("  + {} — added upstream skills: {}", agent, added.join(", "));
+        }
+    }
+
+    // Persist upstream optional skill additions to project vstack.toml
+    if !global && !upstream_optional_updates.is_empty() {
+        let merged_map: std::collections::HashMap<String, Vec<crate::mapping::OptionalSkill>> =
+            upstream_optional_updates
+                .iter()
+                .map(|(k, (list, _))| (k.clone(), list.clone()))
+                .collect();
+        crate::project_config::merge_upstream_agent_skills_optional(&project_root, &merged_map);
+        for (agent, (_, added)) in &upstream_optional_updates {
+            eprintln!(
+                "  + {} — added upstream optional skills: {}",
+                agent,
+                added.join(", ")
+            );
         }
     }
 
