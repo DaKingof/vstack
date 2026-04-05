@@ -18,12 +18,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Resolve project root for .env sourcing
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-_git_common_dir=$(git -C "$PROJECT_ROOT" rev-parse --git-common-dir 2>/dev/null || echo "")
-if [[ "$_git_common_dir" != ".git" && -n "$_git_common_dir" ]]; then
-  PROJECT_ROOT="$(dirname "$_git_common_dir")"
-fi
+# Resolve project root for .env sourcing (works in worktrees and main repos)
+PROJECT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)"
 
 # Source env if available
 if [[ -f "$PROJECT_ROOT/.env.local" ]]; then
