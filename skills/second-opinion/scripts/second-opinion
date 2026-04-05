@@ -135,12 +135,18 @@ detect_current_harness() {
     echo "codex"
     return
   fi
+  # OpenCode uses GPT models, so treat as codex for cross-model pairing
+  if [[ -n "${OPENCODE:-}" ]]; then
+    echo "codex"
+    return
+  fi
   # Process-tree fallback: check if parent is a known harness
   local parent_cmd
   parent_cmd=$(ps -o comm= -p "$PPID" 2>/dev/null || echo "")
   case "$parent_cmd" in
     claude*) echo "claude"; return ;;
     codex*)  echo "codex"; return ;;
+    opencode*) echo "codex"; return ;;
   esac
   echo "unknown"
 }
@@ -158,9 +164,10 @@ resolve_target() {
     claude) echo "codex" ;;
     codex)  echo "claude" ;;
     *)
-      # Unknown harness — pick whichever external CLI is available
-      if command -v codex >/dev/null 2>&1; then echo "codex"
-      elif command -v claude >/dev/null 2>&1; then echo "claude"
+      # Unknown harness (OpenCode, Cursor, etc.) — prefer claude since
+      # non-Claude harnesses typically use GPT models already
+      if command -v claude >/dev/null 2>&1; then echo "claude"
+      elif command -v codex >/dev/null 2>&1; then echo "codex"
       else echo ""; fi
       ;;
   esac
