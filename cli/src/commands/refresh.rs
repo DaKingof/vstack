@@ -7,7 +7,19 @@ use std::path::PathBuf;
 /// Regenerate all installed agent files and re-copy skills from source.
 pub fn run(global: bool) -> Result<()> {
     let lock_path = config::lock_file_path(global);
-    let lock = config::LockFile::load(&lock_path)?;
+    let mut lock = config::LockFile::load(&lock_path)?;
+
+    // Reconcile lock with disk before refreshing (recovers orphaned entries)
+    let source_hint = lock
+        .entries
+        .values()
+        .next()
+        .map(|e| e.source.clone())
+        .unwrap_or_default();
+    if config::reconcile_lock_with_disk(&mut lock, global, &source_hint) {
+        lock.save(&lock_path)?;
+    }
+
     let project_root = config::project_root();
 
     if lock.entries.is_empty() {

@@ -439,6 +439,128 @@ pub fn is_source_changed(entry: &LockEntry) -> bool {
     current != entry.source_hash
 }
 
+/// Discovered item on disk that was installed by vstack.
+#[derive(Debug)]
+pub struct DiskItem {
+    pub name: String,
+    pub kind: ItemKind,
+}
+
+/// Scan the canonical skill directory and harness agent/hook directories
+/// for items installed by vstack. Skills are identified by the `.vstack-refreshed`
+/// marker. Agents/hooks are identified by presence in harness directories that
+/// vstack manages (we can only reliably detect these via the lock, so this
+/// function focuses on skills).
+pub fn scan_installed_skills_on_disk(global: bool) -> Vec<DiskItem> {
+    let mut items = Vec::new();
+
+    // Canonical skill location: .agents/skills/<name>/
+    let canonical_skills = if global {
+        vec![
+            global_state_dir().join("skills"),
+            codex_home_dir().join("skills"),
+        ]
+    } else {
+        vec![project_root().join(".agents").join("skills")]
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    for skills_dir in canonical_skills {
+        if !skills_dir.is_dir() {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&skills_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            // Only count directories with a .vstack-refreshed marker
+            if !path.join(".vstack-refreshed").exists() {
+                continue;
+            }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if seen.insert(name.to_string()) {
+                    items.push(DiskItem {
+                        name: name.to_string(),
+                        kind: ItemKind::Skill,
+                    });
+                }
+            }
+        }
+    }
+
+    items
+}
+
+/// Reconcile the lock file with what's actually on disk.
+/// - Items on disk (with .vstack-refreshed marker) but missing from lock → re-add
+/// - Items in lock but missing from disk → remove from lock
+/// Returns true if the lock was modified.
+pub fn reconcile_lock_with_disk(lock: &mut LockFile, global: bool, source: &str) -> bool {
+    let mut modified = false;
+
+    // Re-add skills found on disk but missing from lock
+    let disk_skills = scan_installed_skills_on_disk(global);
+    let now = now_iso();
+    for item in &disk_skills {
+        if !lock.entries.contains_key(&item.name) {
+            // Determine which harnesses have this skill by checking dirs
+            let mut harnesses = Vec::new();
+            for harness in crate::harness::Harness::ALL {
+                let skill_path = harness.skills_dir(global).join(&item.name);
+                if skill_path.exists() || skill_path.is_symlink() {
+                    harnesses.push(harness.id().to_string());
+                }
+            }
+            if harnesses.is_empty() {
+                // At minimum it's in the canonical location
+                harnesses.push("claude-code".to_string());
+            }
+            let mut entry = LockEntry {
+                name: item.name.clone(),
+                kind: item.kind,
+                source: source.to_string(),
+                harnesses,
+                method: InstallMethod::Symlink,
+                installed_at: now.clone(),
+                source_hash: String::new(),
+            };
+            entry.source_hash = compute_source_hash(&entry);
+            eprintln!("  Recovered lock entry for installed skill: {}", item.name);
+            lock.add(entry);
+            modified = true;
+        }
+    }
+
+    // Remove lock entries for skills whose files no longer exist on disk
+    let disk_names: std::collections::HashSet<&str> =
+        disk_skills.iter().map(|d| d.name.as_str()).collect();
+    let stale_skills: Vec<String> = lock
+        .entries
+        .iter()
+        .filter(|(_, e)| e.kind == ItemKind::Skill && !disk_names.contains(e.name.as_str()))
+        .map(|(name, _)| name.clone())
+        .collect();
+    for name in stale_skills {
+        // Verify the canonical dir is actually gone (not just missing the marker)
+        let canonical = if global {
+            global_state_dir().join("skills").join(&name)
+        } else {
+            project_root().join(".agents").join("skills").join(&name)
+        };
+        if !canonical.exists() {
+            eprintln!("  Removed stale lock entry (files missing): {name}");
+            lock.remove(&name);
+            modified = true;
+        }
+    }
+
+    modified
+}
+
 fn epoch_days_to_date(days: u64) -> (u64, u64, u64) {
     // Algorithm from http://howardhinnant.github.io/date_algorithms.html
     let z = days + 719468;

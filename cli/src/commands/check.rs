@@ -25,7 +25,41 @@ pub fn run() -> Result<()> {
 
         let scope = if global { "global" } else { "project" };
 
-        if lock.entries.is_empty() {
+        // Scan disk for skills that should be in the lock but aren't
+        let disk_skills = config::scan_installed_skills_on_disk(global);
+        let lock_names: std::collections::HashSet<&str> =
+            lock.entries.keys().map(|s| s.as_str()).collect();
+        let orphaned: Vec<&str> = disk_skills
+            .iter()
+            .filter(|d| !lock_names.contains(d.name.as_str()))
+            .map(|d| d.name.as_str())
+            .collect();
+
+        // Check for lock entries whose files are missing from disk
+        let disk_skill_names: std::collections::HashSet<&str> =
+            disk_skills.iter().map(|d| d.name.as_str()).collect();
+        let phantom: Vec<&str> = lock
+            .entries
+            .iter()
+            .filter(|(_, e)| {
+                e.kind == config::ItemKind::Skill && !disk_skill_names.contains(e.name.as_str())
+            })
+            .filter(|(_, e)| {
+                // Only report if the canonical dir is truly gone
+                let canonical = if global {
+                    config::global_state_dir().join("skills").join(&e.name)
+                } else {
+                    config::project_root()
+                        .join(".agents")
+                        .join("skills")
+                        .join(&e.name)
+                };
+                !canonical.exists()
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+
+        if lock.entries.is_empty() && orphaned.is_empty() {
             continue;
         }
 
@@ -56,6 +90,28 @@ pub fn run() -> Result<()> {
 
         if outdated > 0 {
             eprintln!("\n  {outdated} outdated — run `vstack add` to update");
+        }
+
+        if !orphaned.is_empty() {
+            eprintln!(
+                "\n  {} installed on disk but missing from lock:",
+                orphaned.len()
+            );
+            for name in &orphaned {
+                eprintln!("    ? {name} (skill)");
+            }
+            eprintln!("  Run `vstack add` to recover these entries.");
+        }
+
+        if !phantom.is_empty() {
+            eprintln!(
+                "\n  {} in lock but missing from disk:",
+                phantom.len()
+            );
+            for name in &phantom {
+                eprintln!("    ✗ {name} (skill)");
+            }
+            eprintln!("  Run `vstack add` to clean up, or `vstack remove` to remove.");
         }
     }
 

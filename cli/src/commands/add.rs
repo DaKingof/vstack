@@ -358,6 +358,17 @@ pub fn run(
         }
     }
 
+    // Reconcile lock with disk: recover entries for skills installed on disk
+    // but missing from the lock (e.g. after worktree creation or lock deletion),
+    // and prune entries for items whose files no longer exist.
+    {
+        let lock_path = config::lock_file_path(global);
+        let mut lock = config::LockFile::load(&lock_path).unwrap_or_default();
+        if config::reconcile_lock_with_disk(&mut lock, global, &resolved_source.source) {
+            let _ = lock.save(&lock_path);
+        }
+    }
+
     // Track what's already installed (to distinguish updates from new installs)
     let pre_lock = config::LockFile::load(&config::lock_file_path(global)).unwrap_or_default();
     let previously_installed: std::collections::HashSet<String> =

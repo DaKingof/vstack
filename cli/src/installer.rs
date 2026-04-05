@@ -142,6 +142,12 @@ pub fn install_skill(
                 crate::skill::inject_skill_instructions(&skill_md, text);
             }
 
+            // Write marker so reconciliation can detect vstack-managed skills
+            let _ = std::fs::write(
+                dest.join(".vstack-refreshed"),
+                std::process::id().to_string(),
+            );
+
             format!(
                 "{} → {} (copy, {})",
                 skill.name,
