@@ -97,6 +97,10 @@ All entries require: title (`# DXXX: Title`), date, status, research ref (or `�
 |----------|---------|----------|
 | `DECISIONS_DIR` | Decision documents directory path | No — auto-discovers from CWD |
 
+## Decision Approval
+
+Do not create decision documents without explicit user approval. If your work involves a significant architectural choice, technology selection, or trade-off that warrants a decision record, surface this in your response upon task completion — e.g., "This introduced a decision worth recording: [brief summary]. Want me to create a decision entry?" Let the user confirm before running the create workflow.
+
 ## Content Guidelines
 
 ### What to Log
