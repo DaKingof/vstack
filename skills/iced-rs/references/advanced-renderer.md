@@ -201,3 +201,4 @@ fn draw_custom_widget<R: Renderer>(renderer: &mut R, bounds: Rectangle) {
 - `advanced-text.md`
 - `canvas.md`
 - `shader.md`
+- `guide-custom-widgets.md` — draw order, opacity/fade completeness, SVG alpha caveat

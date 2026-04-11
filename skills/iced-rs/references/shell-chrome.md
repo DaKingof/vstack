@@ -1,6 +1,6 @@
 # Shell Chrome
 
-Patterns for building app-level shell UI: header bars, action buttons, tab bars, and floating menus. These are the structural elements that frame pane content — not the pane content itself.
+Patterns for building app-level shell UI: header bars, action buttons, tab bars, and floating menus.
 
 ## Token-driven builders
 
@@ -27,7 +27,7 @@ fn shell_action<'a, Message: Clone + 'a>(
 
 ### Why builders, not components
 
-Iced's Elm architecture rebuilds the view tree every frame. A helper function that returns `Element` is zero-cost — it's just view construction. A custom `Widget` impl adds tree state, event handling, and layout machinery. Use builders for stateless shell chrome; reserve custom widgets for elements that need their own event handling or animation state.
+A helper returning `Element` is zero-cost view construction. Reserve custom `Widget` impls for elements needing their own state or event handling.
 
 ### Sizing rules
 
@@ -62,7 +62,7 @@ Menus opened near edges must not overflow the window. Clamp the menu origin so `
 ### Dismiss behavior
 
 - **Click outside**: `mouse_area` wrapping the menu captures clicks; any click outside the menu bounds sends a dismiss message
-- **Hover exit with delay**: start a short timer (~200ms) on `CursorLeft`; cancel if cursor re-enters before the timer fires. Immediate dismiss on hover-exit feels broken when the cursor briefly crosses a gap between trigger and menu
+- **Hover exit with delay**: start a short timer (~200ms) on `CursorLeft`; cancel if cursor re-enters before the timer fires
 
 ### Composition
 

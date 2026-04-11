@@ -120,7 +120,7 @@ iced::daemon(boot, State::update, State::view)
     .font(include_bytes!("../fonts/JetBrainsMono-Regular.ttf"))
 ```
 
-For apps with a design system, route all text through a typography role layer rather than hard-coding `size()` / `font()` at each call site — fewer call-site updates when the design system changes.
+For apps with a design system, route all text through a typography role layer rather than hard-coding `size()` / `font()` at each call site.
 
 ## Event handling reference
 

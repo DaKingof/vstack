@@ -2,7 +2,7 @@
 
 > `iced::Animation<T>` + `iced::animation::Easing` · iced 0.14.0
 
-Complete API reference for `Animation<T>` (state interpolation) and `Easing` (timing curves). The project uses animation extensively for UI transitions; this file enumerates every method and variant.
+Complete API reference for `Animation<T>` and `Easing` — every method and variant.
 
 ## API
 
@@ -217,10 +217,9 @@ let anim = Animation::new(false)
 - `go_mut` is interrupt-safe: mid-transition retargeting keeps the current eased value. Rapid toggles don't snap.
 - `value()` returns the **target** state, not the interpolated value. Use `interpolate_with` for the current visual value.
 - `interpolate` (bool-specific) and `interpolate_with` (generic) are different methods. Don't confuse them.
-- `Animation` state must live in `widget::Tree::state` for custom widgets (the widget struct is rebuilt every frame from `view()`).
-- Avoid `EaseInBounce` / `EaseInElastic` / `EaseInOutElastic` for trading UIs -- they feel unserious.
-- For trading: `EaseInOutCubic` for state transitions, `EaseOutCubic` for arrival animations.
-- No `Spring` or `Tween` types exist in iced 0.14 -- only `Animation<T>` and `Easing`.
+- `Animation` state must live in `widget::Tree::state` for custom widgets.
+- No `Spring` or `Tween` types in iced 0.14 -- only `Animation<T>` and `Easing`.
+- Trading UI easing recommendations: see `animation.md` § Easing.
 
 ## See also
 

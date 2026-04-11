@@ -163,4 +163,6 @@ fn overlay<'a>(
 - `advanced-shell.md`
 - `advanced-layout.md`
 - `advanced-renderer.md`
-- `guide-custom-widgets.md`
+- `guide-custom-widgets.md` — full checklist, draw order, hover stability, opacity
+- `guide-animated-layout.md` — measured positions, collapsed/expanded transitions
+- `guide-animation-debugging.md` — symptom→cause checklist

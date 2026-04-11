@@ -98,3 +98,4 @@ shell.request_redraw_at(window::RedrawRequest::At(
 - `advanced-overlay.md`
 - `advanced-tree.md`
 - `events.md`
+- `animation.md` — redraw vs rebuild invariant, invalidation modes

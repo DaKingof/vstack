@@ -12,41 +12,38 @@ metadata:
 
 Framework skill for building any Iced 0.14 UI.
 
-## Required reading order
+## Reading order
 
-1. `references/INDEX.md` — table of every reference file, load-on-demand
-2. `references/guide-surface-selection.md` — decision tree: built-in vs Canvas vs Shader vs Widget vs Overlay
-3. `references/guide-custom-widgets.md` — when building a custom `iced::advanced::Widget`
-4. `references/guide-custom-overlays.md` — when building a custom `iced::advanced::overlay::Overlay`
+1. `references/INDEX.md` — all reference files, load-on-demand
+2. `references/guide-surface-selection.md` — built-in vs Canvas vs Shader vs Widget vs Overlay
+3. `references/guide-custom-widgets.md` — custom `iced::advanced::Widget`
+4. `references/guide-custom-overlays.md` — custom `iced::advanced::overlay::Overlay`
+5. `references/guide-animated-layout.md` — animated expand/collapse, layered views, variable-height animated lists
+6. `references/guide-animation-debugging.md` — animation/render bug diagnosis
 
-Load raw API references (`advanced-*.md`, `canvas.md`, `shader.md`, etc.) as needed.
+Raw API references (`advanced-*.md`, `canvas.md`, `shader.md`, etc.) as needed.
 
 ## Bundled resources
 
-### `references/` — API docs + synthesized guides
+### `references/` — 75 API + guide files
 
-75 files covering the full iced 0.14 API and synthesized patterns. Load on demand from `references/INDEX.md`.
+Load on demand from `references/INDEX.md`.
 
-**Guides (read before writing similar code):**
+**Guides:**
 
 | Guide | Use |
 |---|---|
 | `guide-surface-selection.md` | Pick the right primitive |
-| `guide-custom-widgets.md` | Implementing `iced::advanced::Widget` |
-| `guide-custom-overlays.md` | Implementing `iced::advanced::overlay::Overlay` |
+| `guide-custom-widgets.md` | `iced::advanced::Widget` |
+| `guide-custom-overlays.md` | `iced::advanced::overlay::Overlay` |
+| `guide-animated-layout.md` | Animated transitions, measured positions, keyed identity, clipping |
+| `guide-animation-debugging.md` | Symptom→cause checklist for animation/render bugs |
 
-**Raw API refs (load as needed):**
-- `advanced-*.md` — Widget, Overlay, Shell, Tree, Layout, Renderer, Mouse, Text, Clipboard, Operation
-- `canvas.md`, `canvas-path.md`, `canvas-geometry.md`, `shader.md`
-- `element.md`, `length.md`, `padding.md`, `alignment.md`
-- `task.md`, `subscription.md`, `application.md`, `window.md`, `keyboard.md`, `mouse.md`
-- `theme.md`, `theme-palette.md`, `catalog.md`
-- `pane-grid.md` — full pane_grid module
-- `api-module-tree.md` — complete hierarchical index of the iced 0.14 module tree
+**API refs:** `advanced-*.md`, `canvas*.md`, `shader.md`, `element.md`, `length.md`, `padding.md`, `alignment.md`, `task.md`, `subscription.md`, `application.md`, `window.md`, `keyboard.md`, `mouse.md`, `theme*.md`, `catalog.md`, `pane-grid.md`, `api-module-tree.md`
 
-### `examples/` — all upstream Iced 0.14 examples
+### `examples/` — 56 upstream Iced 0.14 examples
 
-56 official examples. Read the canonical one before writing similar code — 0.14 signatures differ from 0.13 and guessing fails.
+Read the canonical one before writing similar code — 0.14 signatures differ from 0.13.
 
 | Need | Read first |
 |---|---|
@@ -67,7 +64,7 @@ Load raw API references (`advanced-*.md`, `canvas.md`, `shader.md`, etc.) as nee
 
 ### `iced_wgpu/` — iced's own wgpu renderer source
 
-Full source of the `iced_wgpu` crate. Reference for wgpu pipeline patterns that integrate with iced.
+Full `iced_wgpu` crate source. Reference for wgpu pipeline patterns.
 
 | File | Use |
 |---|---|
@@ -79,13 +76,11 @@ Full source of the `iced_wgpu` crate. Reference for wgpu pipeline patterns that 
 | `iced_wgpu/src/buffer.rs` | Resizable growable buffer pattern |
 | `iced_wgpu/src/shader/quad.wgsl` | Reference WGSL for instanced quads |
 
-### External fallbacks
+### External fallbacks (prefer local — pinned to 0.14.0)
 
 - `ctx7 docs /websites/rs_iced_iced "<query>"` — newer API surface
 - `https://docs.rs/iced/0.14.0/iced/` — authoritative API reference
-- `https://github.com/iced-rs/iced` — upstream master (may serve unreleased APIs)
-
-Prefer local `references/` + `examples/` over external — they're pinned to 0.14.0 exactly.
+- `https://github.com/iced-rs/iced` — upstream master (may have unreleased APIs)
 
 ## Dev tools
 
@@ -94,9 +89,7 @@ Prefer local `references/` + `examples/` over external — they're pinned to 0.1
 | `cargo-hot` | Live UI patching | `cargo install cargo-hot` |
 | `comet` | Debugger: frame metrics, widget tree, message inspector | `cargo install --locked --git https://github.com/iced-rs/comet.git` |
 
-`features = ["debug"]` + F12 for built-in debugger. Stress-test with `ICED_PRESENT_MODE=Immediate` + `unconditional-rendering`.
-
-Wrap budgeted paths with `iced::debug::time`:
+`features = ["debug"]` + F12 for built-in debugger. Stress-test with `ICED_PRESENT_MODE=Immediate` + `unconditional-rendering`. Profile with `iced::debug::time`:
 
 ```rust
 fn update(&mut self, message: Message) -> Task<Message> {
@@ -106,7 +99,7 @@ fn update(&mut self, message: Message) -> Task<Message> {
 
 ## Breaking changes from Iced 0.13
 
-Most common cause of compile errors when porting or regenerating from memory:
+Common compile errors when porting or generating from memory:
 
 - `Widget::update` takes `event: &Event` (by ref, not by value)
 - `Widget::layout` takes `&mut Tree`
@@ -115,9 +108,9 @@ Most common cause of compile errors when porting or regenerating from memory:
 - Theme palette uses Oklch
 - Keyboard subscriptions unified into `keyboard::listen`
 
-## Surface Selection (short form)
+## Surface Selection
 
-Full decision tree: `references/guide-surface-selection.md`.
+Full tree: `references/guide-surface-selection.md`.
 
 1. **Standard UI** → built-in widgets + `.style(closure)`
 2. **2D custom drawing** → `Canvas`
@@ -125,9 +118,9 @@ Full decision tree: `references/guide-surface-selection.md`.
 4. **Custom events/state/overlays/layout** → `iced::advanced::Widget`
 5. **Floating layer** → try `tooltip`, `float`, `stack`+`opaque` first; custom `Overlay` only as last resort
 
-## Widget catalog (quick lookup)
+## Widget catalog
 
-Full API in `references/`. This is a fast-access map.
+Full API in `references/`.
 
 **Layout**: `column`, `row`, `container`, `stack`, `scrollable`, `pane_grid`, `responsive`, `float`, `pin`, `table`, `center`, `space`, `horizontal_rule`/`vertical_rule`, `themer`
 
@@ -137,11 +130,10 @@ Full API in `references/`. This is a fast-access map.
 
 **Advanced**: `canvas`, `shader`, `mouse_area`, `sensor`, `keyed::Column`, `lazy`, `opaque`, `pop`, `value`
 
-Notes:
-- `button.on_press` fires on mouse-up; `mouse_area.on_press` fires on mouse-down (use for drag initiation)
-- `sensor.on_show` fires on initial layout + `on_resize` on changes; combine with `scrollable.on_scroll` for initial + ongoing
+- `button.on_press` fires on mouse-up; `mouse_area.on_press` fires on mouse-down (drag initiation)
+- `sensor.on_show` on initial layout + `on_resize` on changes; combine with `scrollable.on_scroll`
 - `scrollable.on_scroll` fires only on user scroll, not initial render
-- `float` → overlay-based (tooltips); `pin` → absolute positioning (drag ghosts)
+- `float` → overlay-based; `pin` → absolute positioning
 
 ## Patterns
 
@@ -155,17 +147,15 @@ fn subscription(&self) -> Subscription<Message> {
 }
 ```
 
-Each source gets a stable identity via `run_with(id, ...)` or `.with(id)`. Without stable identity, Iced tears down + recreates on every view cycle. See `references/subscription.md`.
+Stable identity via `run_with(id, ...)` or `.with(id)`. See `references/subscription.md`.
 
 ### Theming
 
-Built-in palette: `primary`, `success`, `danger`, `warning`. Custom tokens go in a sidecar — Iced's `Theme::Custom` cannot attach custom data.
+Built-in palette: `primary`, `success`, `danger`, `warning`. Use `LazyLock<AppTokens>` sidecar for custom tokens (see Theme rule below).
 
 ```rust
-// Custom theme with custom palette
 Theme::custom_with_fn("My Dark", palette, |p| theme::palette::Extended::generate(p))
 
-// Custom tokens via LazyLock sidecar
 pub struct AppTokens {
     pub surface: [Color; 5],
     pub border: Color,
@@ -175,7 +165,6 @@ pub struct AppTokens {
 }
 pub static TOKENS: LazyLock<AppTokens> = LazyLock::new(|| { /* ... */ });
 
-// Style closures read from TOKENS — no inline literals
 pub fn panel_container(_theme: &iced::Theme) -> container::Style {
     let t = &*TOKENS;
     container::Style {
@@ -186,26 +175,26 @@ pub fn panel_container(_theme: &iced::Theme) -> container::Style {
 }
 ```
 
-Keep raw color/width/radius literals out of style closures — route every visual value through `TOKENS`. This is the point of the sidecar pattern: one place to change when the palette shifts.
+Route every visual value through `TOKENS`.
 
-Font loading via the application builder:
+Font loading:
 
 ```rust
 iced::daemon(boot, State::update, State::view)
     .font(include_bytes!("../fonts/JetBrainsMono-Regular.ttf"))
 ```
 
-`Font::MONOSPACE` resolves to the first loaded monospace font; use `Font::with_name("...")` for system fonts. See `references/theme.md`, `references/theme-palette.md`, `references/catalog.md`.
+`Font::MONOSPACE` → first loaded monospace font. `Font::with_name("...")` for system fonts. See `references/theme.md`, `references/theme-palette.md`, `references/catalog.md`.
 
 ### Elm architecture
 
-Message enum and State struct stay in the root module. Extracted modules receive `&State` or `&mut State` references. Root keeps: State, Message, boot/new/update/subscription/view dispatch, thin multi-subsystem accessors.
+Message enum and State struct in root module. Extracted modules receive `&State` or `&mut State`.
 
-**Extract a module when**: feature-gated + self-contained, OR cohesive responsibility group, OR >30 lines on a well-defined State subset. Pattern: `impl State` block with doc comment, `crate::` imports, `pub(crate)` methods.
+**Extract when**: feature-gated + self-contained, OR cohesive responsibility group, OR >30 lines on a well-defined State subset.
 
 ### Multi-window
 
-`window::open(settings) -> Task<window::Id>`, `window::close(id)`. `view()` receives `window::Id`. See `references/window.md`.
+`window::open(settings) -> Task<window::Id>`, `window::close(id)`. See `references/window.md`.
 
 ### Testing
 
@@ -213,14 +202,14 @@ Message enum and State struct stay in the root module. Extracted modules receive
 
 ### PaneGrid
 
-- Both `button` and `mouse_area` call `capture_event()` on press. Tab elements capture → custom tab drag. Empty title bar → native pane_grid drag. Coexist via pick area geometry.
-- Tab drag (custom, rebuild-resilient): `mouse_area.on_press` per tab + `listen_with` subscription for `CursorMoved`/`ButtonReleased`. State machine: Idle → Pressed(origin) → Dragging (8px threshold). App-level state.
+- `button` and `mouse_area` both `capture_event()` on press. Tab elements capture → custom tab drag. Empty title bar → native pane_grid drag.
+- Tab drag: `mouse_area.on_press` per tab + `listen_with` for `CursorMoved`/`ButtonReleased`. Idle → Pressed(origin) → Dragging (8px threshold).
 
 ## Rules (non-negotiable framework invariants)
 
 ### Widget tree consistency
 
-Iced tracks widgets by tree position. Conditionally wrapping widgets changes tree shape and breaks event tracking.
+Iced tracks widgets by tree position. Conditional wrapping changes tree shape and breaks event tracking.
 
 ```rust
 // WRONG: conditional wrapping changes tree shape
@@ -232,30 +221,42 @@ mouse_area(label).on_press_maybe(if enable { Some(msg) } else { None })
 
 ### view() is pure
 
-No side effects, no memoization dependent on call frequency. All mutable state in `State`, mutated only in `update()`. Never trigger redraws from `view()` — invalidate caches explicitly in `update()`.
+No side effects, no memoization dependent on call frequency. All mutable state in `State`, mutated only in `update()`. Never trigger redraws from `view()`.
 
 ### Scroll state initialization
 
-`scrollable.on_scroll` fires only after scrolling, not at initial layout. Use `sensor.on_resize` for initial dimensions; combine with `on_scroll` for ongoing updates.
+`scrollable.on_scroll` fires only after scrolling, not at initial layout. Use `sensor.on_resize` for initial dimensions.
 
 ### Minimum pane size
 
-`PaneGrid::min_size` is uniform across all panes. Per-pane minimums must be enforced in pane content or split/resize state.
+`PaneGrid::min_size` is uniform. Per-pane minimums must be enforced in pane content or split/resize state.
 
 ### Animation invalidation
 
-- **Paint-only** (color, opacity, rotation with fixed bounds): `shell.request_redraw()` is sufficient
-- **Layout-affecting** (size, position, expand/collapse, clipping bounds): **both** `shell.request_redraw()` AND `shell.invalidate_layout()`
+- **Paint-only** (color, opacity, rotation with fixed bounds): `shell.request_redraw()`
+- **Layout-affecting** (size, position, expand/collapse, clipping bounds): `shell.request_redraw()` + `shell.invalidate_layout()`
 
 **Diagnostic**: widget "only updates on the second click" → stale layout, add `invalidate_layout()`.
 
+### Redraw vs rebuild
+
+`request_redraw()` repaints but does **not** call `view()`. Animation state must live in `widget::Tree` state — widget struct fields are frozen between `view()` calls. See `references/animation.md` § "Redraw vs rebuild."
+
+### Draw order is z-order
+
+In custom widget `draw()`, child iteration order determines z-order. Last drawn = on top. `stack` semantics do not apply inside manual draw loops.
+
+### Hover stability
+
+Hover sensors must not wrap content whose size changes during the animation they trigger — animated bounds cause enter/exit thrashing. Use a stable outer hitbox. See `references/guide-custom-widgets.md` § "Stable hover hit regions."
+
 ### Overlay state isolation
 
-Overlay layers (`stack` children beyond the base) must not affect base-layer widget structure. Add/remove overlays freely; never change base-layer construction based on overlay presence.
+Overlay layers (`stack` children beyond the base) must not affect base-layer widget structure. Never change base-layer construction based on overlay presence.
 
 ### Pick area geometry (pane_grid)
 
-TitleBar content must use `Shrink` width so empty space remains for the pick area. `Fill` width on tab row content eliminates the pick area and disables pane drag.
+TitleBar content must use `Shrink` width so empty space remains for the pick area. `Fill` width eliminates it.
 
 ```rust
 // WRONG
@@ -266,15 +267,15 @@ pane_grid::TitleBar::new(row![tabs].width(Length::Shrink))
 
 ### Single message per interaction
 
-One widget interaction → one message. Composite actions (tab press → drag) use a state machine in `update()`, not multiple messages from `view()`.
+One widget interaction → one message. Composite actions (tab press → drag) use a state machine in `update()`.
 
 ### Title bar event ordering (pane_grid)
 
-In `pane_grid::Content::update` the title bar processes before the body. When the cursor crosses from body to title bar in one frame, title bar messages fire before body messages. Do not unconditionally clear state in body-exit handlers that the title bar just established.
+In `pane_grid::Content::update` the title bar processes before the body. Do not unconditionally clear state in body-exit handlers that the title bar just established.
 
 ### Overlay visibility requires layout invalidation
 
-Widgets that conditionally return an overlay from `overlay()` must call `shell.invalidate_layout()` in `update()` when visibility changes. Otherwise popup layout nodes go stale → panic.
+Widgets that conditionally return an overlay must call `shell.invalidate_layout()` when visibility changes. Otherwise stale layout → panic.
 
 ```rust
 Event::Mouse(mouse::Event::CursorEntered) => {
@@ -287,37 +288,37 @@ Event::Mouse(mouse::Event::CursorEntered) => {
 
 ### Custom overlays are the #1 panic source
 
-Prefer built-ins (`tooltip`, `float`, `stack`+`opaque`) over custom `overlay::Overlay`. Custom overlays cause `container.rs unwrap() on None` when the contract is violated.
+Prefer built-ins (`tooltip`, `float`, `stack`+`opaque`). Custom overlays cause `container.rs unwrap() on None` when the contract is violated.
 
 **Custom overlay contract**: `children()` → fixed count; `diff()` → reconcile all children regardless of visibility; `layout()` → nodes matching children; `draw()` → same tree from layout. Full spec: `references/guide-custom-overlays.md`.
 
 ### Overlay viewport contract
 
-When calling `Widget::update`/`draw`/`mouse_interaction`/`overlay` on a descendant from inside an `Overlay` impl, pass `Rectangle::INFINITE` as the viewport, **never** the stored viewport captured from your parent's `overlay()`. iced's `scrollable::overlay` forwards `bounds.intersection(viewport)`, and `iced_wgpu`'s per-paragraph text scissor turns inherited clips into invisible text. The overlay's own `Overlay::layout()` may still use its `bounds: Size` parameter for its own coordinate space — the rule applies only to viewports propagated to descendant widgets.
+When calling descendant `Widget` methods from inside an `Overlay` impl, pass `Rectangle::INFINITE` as viewport, **never** the stored viewport from parent's `overlay()`. `scrollable::overlay` forwards `bounds.intersection(viewport)`, and `iced_wgpu`'s text scissor turns inherited clips into invisible text. `Overlay::layout()` may still use `bounds: Size` for its own coordinate space.
 
 ### Subscription — stable identity
 
-Each data source needs a unique, stable subscription identity via `run_with(id, ...)` or `.with(id)`. Without it, Iced tears down + recreates on every view cycle.
+Each data source needs stable identity via `run_with(id, ...)` or `.with(id)`. Without it, torn down + recreated every view cycle.
 
 ### Subscription — bounded update work
 
-Pre-aggregate high-frequency data in the subscription worker. Emit one batch per non-empty ~16ms window so `update()` sees bounded work. Use bounded channels with `try_send()` producer-side. Empty windows emit no message; idle windows cause no redraw.
+Pre-aggregate high-frequency data in the subscription worker. Emit one batch per non-empty ~16ms window. Use bounded channels with `try_send()` producer-side.
 
 ### Theme — no custom theme type for tokens
 
-Iced's `Theme::Custom` cannot attach custom data. A custom Theme type requires 15-20 Catalog trait implementations. Use a `LazyLock<AppTokens>` sidecar. Migrate to a custom Theme type only when user-selectable themes are needed at runtime.
+`Theme::Custom` cannot attach custom data; custom Theme type requires 15-20 Catalog impls. Use `LazyLock<AppTokens>` sidecar. Custom Theme type only when runtime theme switching is needed.
 
 ### Overlay starvation
 
-Stacked `mouse_area(...).interaction(...)` layers can block underlying hover/move handlers even without `opaque(...)`. Set `Interaction::Grabbing` on the real drag target instead of adding a global cursor layer. Use `opaque(...)` only for true capture zones.
+Stacked `mouse_area(...).interaction(...)` layers can block underlying hover/move handlers even without `opaque(...)`. Set `Interaction::Grabbing` on the real drag target. Use `opaque(...)` only for true capture zones.
 
 ### PaneGrid drag feedback
 
-If pane dragging uses `pane_grid.on_drag(...)`, keep feedback inside the picked pane subtree or `pane_grid::Style`. `mouse_area`/`opaque` pane-drag overlays are rebuild-sensitive and can prevent native `Dropped` events. Compact drag previews must reuse the same TitleBar/body shell — do not build a separate overlay widget.
+Keep drag feedback inside the picked pane subtree or `pane_grid::Style`. `mouse_area`/`opaque` pane-drag overlays are rebuild-sensitive and can prevent `Dropped` events. Drag previews must reuse the same TitleBar/body shell.
 
 ### Split interaction ownership
 
-When `mouse_area` handles semantics while `button` provides visual feedback, ownership is split. Exactly one layer must publish the action:
+When `mouse_area` handles semantics while `button` provides visual feedback, exactly one layer must publish the action:
 
 ```rust
 // RIGHT: mouse_area owns semantics; button is visual-only
@@ -329,22 +330,23 @@ mouse_area(button(content).on_press(Message::Activate)).on_press(Message::Activa
 
 ### Cache staleness — trace before coding
 
-When adding cached or mirrored UI state, enumerate every mutation path that can stale it before writing code: direct handlers, drag/drop helpers, transfer/split, open/close, reset, foreign-window events.
+When adding cached or mirrored UI state, enumerate every mutation path that can stale it before writing code.
 
 ### Cache staleness — extend existing event paths
 
-When changing window lifecycle handling, extend the existing global event path rather than adding parallel subscriptions for the same event family.
+Extend the existing global event path rather than adding parallel subscriptions for the same event family.
 
 ### Cache staleness — regression tests
 
 Add at least one regression test for each non-obvious cache invalidation or source-window gate.
 
-## Hot workflow — building new features
+## Hot workflow
 
-1. Classify: read `references/guide-surface-selection.md`, pick the surface. Do not skip.
-2. Read the canonical example in `examples/` for that surface.
-3. Read the relevant guide (`guide-custom-widgets.md`, `guide-custom-overlays.md`).
-4. Skim the API references the guide points to.
-5. Write code.
-6. When stuck: re-read the guide's "Common failure modes" / "Gotchas" sections. Top 3 custom-widget bugs: missing `capture_event`, missing `invalidate_layout` on layout-changing animation, wrong event signature (0.13 API).
-7. For perf issues: measure with `iced::debug::time` + `comet` before optimizing. Canvas is often faster than expected; don't rewrite to Shader without data.
+1. Classify: `references/guide-surface-selection.md`. Do not skip.
+2. Read canonical example in `examples/`.
+3. Read relevant guide (`guide-custom-widgets.md`, `guide-custom-overlays.md`).
+4. **Animated layered UI**: read `references/guide-animated-layout.md` first.
+5. Skim API references the guide points to.
+6. Write code.
+7. Stuck: guide "Common failure modes" / "Gotchas". Top 3 bugs: missing `capture_event`, missing `invalidate_layout`, wrong event signature (0.13 API). Animation bugs: `references/guide-animation-debugging.md`.
+8. Perf: measure with `iced::debug::time` + `comet` before optimizing.

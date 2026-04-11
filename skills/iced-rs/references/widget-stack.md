@@ -102,4 +102,6 @@ stack![widget_a, widget_b].clip(true)
 - `widget-float.md` -- floating content with translation/scaling
 - `widget-pin.md` -- absolute positioning within a container
 - `widget-container.md` -- single-child wrapper with alignment
+- `guide-animated-layout.md` -- anti-pattern: duplicated animated trees in stack
+- `guide-custom-overlays.md` -- `stack + opaque` modal pattern
 - `widgets.md` -- widget catalog

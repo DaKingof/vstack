@@ -1,6 +1,6 @@
 # Surface Selection
 
-Iced offers five ways to build UI content. Picking correctly is the most important decision in an Iced project — getting it wrong means fighting the framework.
+Iced offers five ways to build UI content. Picking correctly is the most important decision in an Iced project.
 
 For **trading charts or dense visualizations** (>1000 primitives/frame), the answer is always Shader + Canvas overlay hybrid. If a chart-specific skill is available, load it — it supersedes Q3 below.
 
@@ -100,7 +100,7 @@ Only implement `iced::advanced::overlay::Overlay` when none fit. See `guide-cust
 4. `stack + opaque` before custom Overlay
 5. If none of the above, use `iced::advanced::Widget`
 
-Violating this order doesn't break anything but makes you write 10x the code for the same feature.
+Violating this order means 10x the code for the same feature.
 
 ## See also
 

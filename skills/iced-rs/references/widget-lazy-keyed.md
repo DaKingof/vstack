@@ -143,5 +143,5 @@ for item in &self.items {
 
 - `widget-responsive.md` -- rebuilds based on available size
 - `advanced-tree.md` -- `Tree` diffing that keyed columns optimize
+- `guide-animated-layout.md` -- keyed identity in reordered/layered views
 - `widgets.md` -- widget catalog
-- `element.md` -- `Element` type

@@ -4,7 +4,7 @@ Framework-level animation rules for Iced 0.14. Covers redraw scheduling, layout 
 
 ## The two invalidation modes
 
-Every animating widget falls into one of two buckets. Pick the right one — getting it wrong produces visible bugs.
+Every animating widget falls into one of two buckets.
 
 ### Paint-only animation
 
@@ -29,11 +29,27 @@ if state.animation.is_animating(now) {
 }
 ```
 
-**Diagnostic**: a widget that "only updates on the second click" is leaking layout staleness — add `invalidate_layout()` to the state-flip handler.
+**Diagnostic**: "only updates on the second click" → add `invalidate_layout()` to the state-flip handler.
 
 ### Why it matters
 
-`iced_wgpu` caches layout per widget tree. If you mutate visual state without invalidating layout, iced repaints the widget at the new visual state but positions it using the old layout bounds. Result: overlap, clipping, or dead space. Debugging symptom: visuals that "jump" on the second interaction, rubber-band back, or leave ghost trails.
+`iced_wgpu` caches layout per widget tree. Without invalidation, iced repaints at the new visual state but positions using old layout bounds. Result: overlap, clipping, dead space. Symptom: visuals "jump" on the second interaction, rubber-band back, or leave ghost trails.
+
+## Redraw vs rebuild — critical invariant
+
+`request_redraw()` repaints the current widget tree. It does **not** call `view()` to rebuild widget structs.
+
+| State location | Redraw behavior | Correct for animation? |
+|---|---|---|
+| `widget::Tree` state | Read fresh values on each paint | **Yes** |
+| Widget struct fields (set in `view()`) | Fields are stale until next `view()` | **No** — animation paints frozen values |
+| App state (set in `App::update()`) | Not re-read until next `view()` | **No** — need message-driven rebuild |
+
+**Rule**: animation state that changes every frame must live in `widget::Tree` state. Widget struct fields are frozen between `view()` calls.
+
+If animation depends on values computed in `App::update()`, drive it with messages/tasks that trigger `update()` → `view()`, not bare `request_redraw()` loops.
+
+See `guide-animation-debugging.md` check #1.
 
 ## Scheduling redraws
 
@@ -45,7 +61,7 @@ Two API variants on `Shell`:
 shell.request_redraw();
 ```
 
-Queues a redraw on the next available frame. Use when you have state that must show up immediately (async data just arrived, animation step just completed).
+Queues a redraw on the next available frame.
 
 ### `request_redraw_at(request)` — scheduled tick
 
@@ -58,11 +74,11 @@ shell.request_redraw_at(RedrawRequest::At(
 ));
 ```
 
-Schedules a redraw at a specific future time. The runtime can coalesce multiple `_at` requests and align with vsync. Use for animation loops that should tick at a specific cadence. Cheaper than spamming `request_redraw()` every frame.
+Schedules a redraw at a specific future time. The runtime coalesces multiple `_at` requests and aligns with vsync. Use for animation loops that should tick at a specific cadence.
 
 ### Sustaining an animation loop
 
-Animations are self-driving — the widget must keep asking for frames until the animation completes. On each `RedrawRequested` event, advance the animation and, if still animating, request the next frame:
+Animations are self-driving — the widget must keep requesting frames until complete:
 
 ```rust
 if let Event::Window(window::Event::RedrawRequested(now)) = event {
@@ -132,7 +148,7 @@ let t = state.progress.interpolate_with(|b| if *b { 1.0 } else { 0.0 }, now);
 
 ### Where to store it
 
-Always in `widget::Tree::state` for custom widgets (the widget struct is rebuilt from `view()` every frame — animation state must survive). Use `tag()` + `state()` + `downcast_mut` to access.
+Always in `widget::Tree::state` for custom widgets. Use `tag()` + `state()` + `downcast_mut` to access.
 
 For application-level state (fade-in modals, global transitions), store in `App::state` directly; no tree needed.
 
@@ -144,7 +160,7 @@ For application-level state (fade-in modals, global transitions), store in `App:
 - `EaseIn`, `EaseOut`, `EaseInOut`
 - Variants: `Quadratic`, `Cubic`, `Quartic`, `Quintic`, `Sinusoidal`, `Exponential`, `Circular`, `Back`, `Elastic`, `Bounce`
 
-For trading UI: `EaseInOut` for state transitions (button press feedback, menu open/close), `EaseOutCubic` for "arrival" animations (toast enters, modal scales in). Avoid `Bounce`/`Elastic` — they feel unserious on trading surfaces.
+For trading UI: `EaseInOut` for state transitions, `EaseOutCubic` for arrival animations. Avoid `Bounce`/`Elastic` on trading surfaces.
 
 ## Hand-rolled animation
 
@@ -186,7 +202,7 @@ fn ease_in_out_cubic(t: f32) -> f32 {
 }
 ```
 
-Hand-rolled gives you: per-frame-value inspection, arbitrary easing, interrupt handling on your own terms, and the ability to apply the same animation value across multiple state fields.
+Hand-rolled gives you: per-frame-value inspection, arbitrary easing, custom interrupt handling, and applying one animation value across multiple state fields.
 
 ## Canonical examples in `examples/`
 
@@ -239,13 +255,11 @@ Read the closest example before writing a new animation from scratch.
 | `EaseInOutBounce` | Bounce | Bouncing both |
 | `Custom(fn(f32) -> f32)` | Custom | User-supplied timing function |
 
-**Trading UI recommendations**: `EaseInOutCubic` for state transitions (toggle, menu). `EaseOutCubic` for "arrival" animations (toast, modal). Avoid `Bounce`/`Elastic` on trading surfaces.
-
-The `Easing::value(self, x: f32) -> f32` method evaluates the curve at position `x` (0.0..1.0).
+`Easing::value(self, x: f32) -> f32` evaluates the curve at position `x` (0.0..1.0).
 
 ## Reusable animation widgets
 
-Extract a reusable animation widget when 2+ components need the same reveal/collapse behavior with owned clipping or animated geometry. The widget owns its `Animation<T>` in tree state, handles `RedrawRequested`/`invalidate_layout` internally, and exposes only `fn new(content).expanded(bool)` — callers flip a bool in `update()`, the widget drives the rest. Without this, every animated panel duplicates the same redraw loop, clipping math, and layout invalidation.
+Extract a reusable animation widget when 2+ components need the same reveal/collapse behavior. The widget owns its `Animation<T>` in tree state, handles `RedrawRequested`/`invalidate_layout` internally, and exposes only `fn new(content).expanded(bool)` — callers flip a bool in `update()`.
 
 ## Rules summary
 
@@ -256,6 +270,7 @@ Extract a reusable animation widget when 2+ components need the same reveal/coll
 5. Use `Animation::go_mut` (not `set`) to retarget mid-transition without snapping.
 6. If a widget "only updates on the second click," you forgot `invalidate_layout()`.
 7. Idle widgets must not request redraws — that pins the CPU.
+8. `request_redraw()` repaints the tree but does **not** call `view()`. Animation state must live in Tree state, not widget struct fields — see § "Redraw vs rebuild" above.
 
 ## See also
 
@@ -263,3 +278,6 @@ Extract a reusable animation widget when 2+ components need the same reveal/coll
 - `advanced-shell.md`
 - `subscription.md`
 - `time.md`
+- `guide-animated-layout.md` — measured positions, collapsed/expanded transitions, keyed identity, anti-patterns
+- `guide-animation-debugging.md` — symptom→cause checklist for animation/render bugs
+- `guide-custom-widgets.md` — draw order, hover stability, opacity completeness

@@ -145,4 +145,5 @@ svg("arrow.svg").rotation(Rotation::from_degrees(90.0))
 - `widget-image.md` -- raster image display
 - `canvas.md` -- custom drawing with paths
 - `catalog.md` -- the `Catalog` trait pattern
+- `guide-custom-widgets.md` -- SVG alpha caveat (tint alpha may diverge from container alpha)
 - `widgets.md` -- widget catalog

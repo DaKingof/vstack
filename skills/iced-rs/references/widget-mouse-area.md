@@ -123,4 +123,5 @@ mouse_area(content)
 - `widget-button.md` -- press-on-release semantics, disabled states
 - `mouse.md` -- `ScrollDelta`, `Button`, `Interaction` types
 - `advanced-mouse.md` -- `Cursor` hit-testing for custom widgets
+- `guide-custom-widgets.md` -- stable hover hit regions (avoid wrapping animated bounds)
 - `widgets.md` -- widget catalog

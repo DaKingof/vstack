@@ -1,6 +1,6 @@
 # Building Custom Overlays
 
-Overlays render on top of the normal widget tree — tooltips, popovers, context menus, modals, drop-down lists. This guide is about when to use them and how to build them without hitting the "custom overlays are the #1 source of `container.rs` unwrap panics" pitfall.
+Overlays render on top of the normal widget tree — tooltips, popovers, context menus, modals, drop-down lists.
 
 **Read order**: this guide → `advanced-overlay.md` → `advanced-widget.md` (for the `overlay()` method on `Widget`).
 
@@ -79,7 +79,7 @@ If none of those fit — e.g., you need precise viewport-aware positioning, non-
 
 ## The Overlay trait
 
-An overlay is produced by a widget's `Widget::overlay()` method. The runtime calls that method after laying out and drawing the main tree; if it returns `Some(Element)`, the runtime gives the overlay its own layout and draw pass **after** the normal tree, so it renders above everything.
+An overlay is produced by `Widget::overlay()`. If it returns `Some(Element)`, the runtime gives the overlay its own layout and draw pass after the normal tree.
 
 ```rust
 pub trait Overlay<Message, Theme, Renderer>
@@ -107,16 +107,15 @@ where
 ```
 
 Key differences from `Widget`:
-- `layout()` takes `Size` (not `Limits`) — the overlay is expected to figure out its own size from the viewport bounds.
-- `draw()` has **no `viewport: &Rectangle`** — the overlay owns its rendering layer.
-- `update()` has **no `viewport`** either.
-- No `size()` — overlays aren't slotted into parent layouts.
+- `layout()` takes `Size` (not `Limits`)
+- `draw()` and `update()` have no `viewport` parameter
+- No `size()` — overlays aren't slotted into parent layouts
 
 Full API: `advanced-overlay.md`.
 
 ## The custom overlay contract — MUST follow
 
-When a parent widget implements `Widget::overlay()` and returns an overlay element, the runtime walks the overlay's layout/draw/update tree separately. Violating the contract causes panics in `container.rs` (the most common is `unwrap() on None` because a child layout node is missing).
+Violating the contract causes panics in `container.rs` (`unwrap() on None` because a child layout node is missing).
 
 ### 1. `children()` returns a **fixed count**
 
@@ -160,15 +159,13 @@ fn diff(&self, tree: &mut Tree) {
 
 ### 3. `layout()` produces nodes matching `children()`
 
-Same count, same order. If `children()` returns 2, `layout()` must produce a node with 2 child nodes.
+Same count, same order.
 
 ### 4. `draw()` walks the same tree as `layout()`
 
-Same count, same order.
-
 ### 5. Invalidate layout when overlay visibility changes
 
-When `Widget::overlay()` starts returning `Some` or goes back to `None`, the tree shape effectively changes from the runtime's perspective. Call `shell.invalidate_layout()` in the update handler where you flip the flag:
+When `Widget::overlay()` transitions between `Some` and `None`, call `shell.invalidate_layout()` where you flip the flag:
 
 ```rust
 Event::Mouse(mouse::Event::CursorEntered) => {
@@ -183,17 +180,11 @@ Without this, popup layout nodes go stale, causing panics.
 
 ## The viewport rule — the most important thing
 
-**When calling `Widget::update`/`draw`/`mouse_interaction`/`overlay` on a descendant from inside an overlay implementation, always pass `Rectangle::INFINITE` as the viewport, never the stored viewport captured from your parent's `overlay()` call.**
+**Pass `Rectangle::INFINITE` as viewport to all descendant `Widget` calls from inside an overlay, never the stored viewport from parent's `overlay()`.**
 
-### Why
+Why: `scrollable::overlay` forwards `bounds.intersection(viewport)`, and `iced_wgpu`'s text scissor turns inherited clips into invisible text.
 
-- iced's `scrollable::overlay` forwards `bounds.intersection(viewport)` down the chain.
-- `iced_wgpu`'s per-paragraph text scissor turns inherited clips into invisible text.
-- If you forward the original viewport, text inside popups will appear blank or scissor-clipped.
-
-### Exception
-
-Your overlay's own `Overlay::layout()` may still use its `bounds: Size` parameter for its own coordinate space. The rule only applies to viewports **propagated to descendant widgets**.
+Exception: `Overlay::layout()` may still use `bounds: Size` for its own coordinate space.
 
 ### Example
 
@@ -277,11 +268,11 @@ Without this, overlays won't follow the anchor widget as it scrolls.
 
 ## Sibling overlays and z-index
 
-`Overlay::index(&self) -> f32` returns a z-index for ordering multiple overlays. Higher renders on top. Default is `1.0` — override if you need deterministic ordering (e.g., a modal should be above a tooltip).
+`Overlay::index(&self) -> f32` — z-index for ordering overlays. Higher = on top. Default `1.0`.
 
 ## Composite widgets forwarding overlays
 
-If you're building a container widget that wraps children and some child might produce an overlay, use `overlay::from_children()`:
+Forward child overlays with `overlay::from_children()`:
 
 ```rust
 fn overlay<'a>(
@@ -303,11 +294,11 @@ fn overlay<'a>(
 }
 ```
 
-This aggregates overlays from all children into a single optional overlay. Failing to forward overlays from children is a common reason tooltips/popovers inside composite widgets never appear.
+Failing to forward overlays from children is a common reason tooltips/popovers inside composite widgets never appear.
 
 ## Copy-paste overlay template
 
-If you must build a custom overlay (you've exhausted the built-in options above), copy this skeleton verbatim, then fill in the blanks. Do NOT restructure the tree shape — this exact shape is what avoids the `container.rs` panic.
+If you must build a custom overlay, copy this skeleton verbatim. Do NOT restructure the tree shape — this exact shape avoids the `container.rs` panic.
 
 ```rust
 use iced::advanced::layout::{self, Layout, Limits, Node};
@@ -472,29 +463,21 @@ where
 }
 ```
 
-**What this template guarantees:**
-- `children()` returns **2** always (anchor + content) — tree shape never changes
-- `diff()` reconciles **both** always — no conditional skip
-- `layout()` lays out only anchor; content laid out in `Overlay::layout`
-- `Rectangle::INFINITE` passed to all descendant calls in the overlay
-- Positioning: above-preferred, below-fallback, horizontally clamped
-
-**What's rigid in this template (the overlay contract — never change these):**
+**Rigid (the overlay contract — never change):**
 - `children()` returns exactly 2, always, regardless of `show`
-- `diff()` reconciles both children every frame, regardless of `show`
-- `overlay()` switches on `show` to return `Some` or `None` — but never changes child count
-- All descendant calls in the overlay pass `&Rectangle::INFINITE`
+- `diff()` reconciles both children every frame
+- `overlay()` switches on `show` → `Some`/`None`, never changes child count
+- All descendant calls pass `&Rectangle::INFINITE`
 
-**What's fully customizable (swap freely per use case):**
-- **Positioning** — replace the math in `Overlay::layout()`. Anchor-relative, cursor-relative, centered, screen-edge-pinned, multi-monitor-aware — anything that produces a `Node` with a position
-- **Content** — `self.content` is any `Element` tree. Forms, charts, images, nested scrollables, pane_grids — the overlay system doesn't care what's inside
-- **Trigger** — hover, click, right-click, focus, long-press, keyboard shortcut, external state flag. Wire in `Widget::update()` and call `shell.invalidate_layout()` on transition
-- **Animation** — fade, scale, slide. Drive from `Widget::update()` on `RedrawRequested`; the overlay's draw reads the interpolated value from `Tree` state
-- **Multiple overlays** — one widget can return several via `overlay::Group::with_children(vec![...]).overlay()`
-- **Z-index** — override `Overlay::index()` for deterministic layering (default 1.0)
-- **Event routing** — the overlay's `update()` can capture, forward, or ignore events independently of the anchor
+**Customizable:**
+- **Positioning** — replace `Overlay::layout()` math
+- **Content** — `self.content` is any `Element` tree
+- **Trigger** — hover, click, right-click, focus, keyboard shortcut, state flag
+- **Animation** — fade/scale/slide via `Widget::update()` on `RedrawRequested`
+- **Multiple overlays** — `overlay::Group::with_children(vec![...]).overlay()`
+- **Z-index** — `Overlay::index()` (default 1.0)
 
-The template above is the simplest tooltip form. A dropdown menu changes the positioning; a context menu changes the trigger to right-click; a rich popover puts a form inside content. **The tree shape stays identical across all of these.**
+**The tree shape stays identical regardless of use case.**
 
 ## Testing your overlay
 
@@ -506,7 +489,7 @@ The template above is the simplest tooltip form. A dropdown menu changes the pos
 
 ## Still unsure?
 
-Re-read the "First rule" at the top of this file. 80% of the time, the right answer is `stack![base, opaque(modal)]` or the built-in `tooltip`/`float`/`pick_list` widgets. Custom overlays are a last resort.
+80% of the time, the right answer is `stack![base, opaque(modal)]` or the built-in `tooltip`/`float`/`pick_list` widgets.
 
 ## See also
 

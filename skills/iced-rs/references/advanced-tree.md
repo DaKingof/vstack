@@ -168,3 +168,5 @@ fn diff(&self, tree: &mut Tree) {
 - `advanced-widget.md`
 - `advanced-shell.md`
 - `guide-custom-widgets.md`
+- `animation.md` — animation state must live in Tree, not widget struct
+- `guide-animated-layout.md` — keyed identity, `diff_children_custom`
