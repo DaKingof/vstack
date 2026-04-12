@@ -39,6 +39,16 @@ pub fn run_install_flow(
     // Load installed state from lock files
     let installed = load_installed_state();
     let has_installed_items = !installed.is_empty();
+
+    // Refresh cached remote repos so staleness checks see latest content
+    if has_installed_items {
+        let project_lock =
+            crate::config::LockFile::load(&crate::config::lock_file_path(false)).unwrap_or_default();
+        crate::config::refresh_remote_caches(&project_lock);
+        let global_lock =
+            crate::config::LockFile::load(&crate::config::lock_file_path(true)).unwrap_or_default();
+        crate::config::refresh_remote_caches(&global_lock);
+    }
     let installed_names: std::collections::HashSet<String> = installed.keys().cloned().collect();
 
     let prev_harnesses: std::collections::HashSet<String> = installed

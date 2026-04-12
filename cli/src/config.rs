@@ -348,6 +348,42 @@ fn extract_toml_section_for(path: &Path, name: &str) -> Vec<u8> {
     result
 }
 
+/// Refresh cached repos for all remote sources found in installed lock entries.
+/// Called once at TUI startup so staleness checks see the latest content.
+pub fn refresh_remote_caches(lock: &LockFile) {
+    let mut seen = std::collections::HashSet::new();
+    for entry in lock.entries.values() {
+        let src = &entry.source;
+        // Only remote sources (owner/repo format)
+        if src.contains('/') && !src.starts_with('.') && !src.starts_with('/') {
+            if !seen.insert(src.clone()) {
+                continue;
+            }
+            let cache_key = src.replace('/', "_");
+            let cache_dir = global_base_dir()
+                .join(".vstack")
+                .join("cache")
+                .join(&cache_key);
+            if cache_dir.join(".git").exists() {
+                let fetch = std::process::Command::new("git")
+                    .args(["fetch", "origin", "--quiet"])
+                    .current_dir(&cache_dir)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+                if fetch.is_ok_and(|s| s.success()) {
+                    let _ = std::process::Command::new("git")
+                        .args(["reset", "--hard", "origin/HEAD"])
+                        .current_dir(&cache_dir)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                }
+            }
+        }
+    }
+}
+
 /// Resolve a lock entry's source string to an actual directory path.
 /// Handles "." by walking up from CWD to find a vstack source repo,
 /// and absolute paths directly.
