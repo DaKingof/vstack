@@ -105,7 +105,6 @@ tpm = ""
 [skill-instructions]
 decider = ""
 github = ""
-iced-charts = ""
 iced-rs = ""
 iced-shadcn = ""
 issue-lifecycle = ""
