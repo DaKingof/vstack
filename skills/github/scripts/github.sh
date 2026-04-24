@@ -17,6 +17,47 @@ if [ "${1:-}" = "-C" ]; then
     shift 2
 fi
 
+# Auto-source .env.local and export GH_TOKEN for all subcommands.
+# Handles the case where `gh auth login` is tied to a different account than
+# the repo grants permissions to — without GH_TOKEN, read commands fail with
+# "Could not resolve to a Repository". Only overrides when GH_TOKEN is unset.
+if [ -z "${GH_TOKEN:-}" ]; then
+    _env_root=""
+    if [ -n "$WORK_DIR" ]; then
+        _env_root=$(cd "$WORK_DIR" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || true)
+    else
+        _env_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    fi
+    if [ -n "$_env_root" ]; then
+        for _env_file in "$_env_root/.env.local" "$_env_root/.env"; do
+            if [ -f "$_env_file" ]; then
+                # shellcheck disable=SC1090
+                _env_bot_token=$(
+                    set +u
+                    # shellcheck disable=SC1090
+                    source "$_env_file" >/dev/null 2>&1 || true
+                    printf '%s' "${GH_BOT_TOKEN:-}"
+                )
+                if [ -n "$_env_bot_token" ]; then
+                    # Resolve 1Password reference if needed
+                    if [[ "$_env_bot_token" == op://* ]]; then
+                        if command -v op &>/dev/null; then
+                            _resolved=$(op read "$_env_bot_token" 2>/dev/null || true)
+                            [ -n "$_resolved" ] && _env_bot_token="$_resolved"
+                        fi
+                    fi
+                    # Only export if it looks like a valid token
+                    if [[ "$_env_bot_token" =~ ^gh[pors]_ ]] || [[ "$_env_bot_token" =~ ^github_pat_ ]]; then
+                        export GH_TOKEN="$_env_bot_token"
+                    fi
+                    break
+                fi
+            fi
+        done
+    fi
+    unset _env_root _env_file _env_bot_token _resolved
+fi
+
 show_help() {
     cat << 'EOF'
 GitHub API CLI
