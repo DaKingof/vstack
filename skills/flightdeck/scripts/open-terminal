@@ -14,7 +14,11 @@
 #   (default)      Auto-detect: tmux if $TMUX set, else ghostty/GUI terminal
 #
 # Environment:
-#   GH_ISSUE_PATTERN  - Regex pattern matching issue IDs (default: "[A-Z]+-[0-9]+")
+#   GH_ISSUE_PATTERN          - Regex pattern matching issue IDs (default: "[A-Z]+-[0-9]+")
+#   OPEN_TERMINAL_NO_BYPASS=1 - Do not pass per-harness permission-bypass flags to spawned
+#                               agents. Default off (bypass enabled). Inner agents need bypass
+#                               to silently spawn sub-agent panes via tmux without prompting
+#                               the (often absent) human at the master pane.
 
 set -euo pipefail
 
@@ -61,13 +65,14 @@ while [[ $# -gt 0 ]]; do
       echo "  --cmd \"command\"     Custom command ({issue} is replaced). Overrides --harness."
       echo "  (default terminal)  Auto-detect: tmux if \$TMUX set, else GUI terminal"
       echo ""
-      echo "Harness launch commands:"
-      echo "  claude   → claude -n ISSUE --model 'opus[1m]' --effort max '/orchestration start ISSUE'"
+      echo "Harness launch commands (with permission bypass enabled by default):"
+      echo "  claude   → claude -n ISSUE --dangerously-skip-permissions --model 'opus[1m]' --effort max '/orchestration start ISSUE'"
       echo "  codex    → codex '\$orchestration start ISSUE'"
       echo "  opencode → opencode --prompt '/orchestration start ISSUE'"
       echo ""
       echo "Environment:"
-      echo "  GH_ISSUE_PATTERN  Regex for issue IDs (default: [A-Z]+-[0-9]+)"
+      echo "  GH_ISSUE_PATTERN          Regex for issue IDs (default: [A-Z]+-[0-9]+)"
+      echo "  OPEN_TERMINAL_NO_BYPASS=1 Disable per-harness permission-bypass flags (default: off)"
       exit 0
       ;;
     [0-9]*) GROUP_ID="$1"; shift ;;
@@ -122,14 +127,33 @@ fi
 
 # --- Harness detection --------------------------------------------------------
 
+# Permission-bypass flags per harness. Inner agents need bypass to silently
+# run `tmux new-window` (or equivalent) when delegating to sub-agents. Without
+# bypass the inner agent prompts on every spawn; master flightdeck has no
+# human at its pane to approve, so the inner agent falls back to in-context
+# spawning and sub-agents lose their own pane (and task-list isolation).
+#
+# Set OPEN_TERMINAL_NO_BYPASS=1 to disable. Codex/opencode bypass flags need
+# per-harness verification before being added; left empty for now to avoid
+# passing an unsupported flag to those harnesses.
+bypass_flag_for_harness() {
+  [[ -n "${OPEN_TERMINAL_NO_BYPASS:-}" ]] && return
+  case "$1" in
+    claude)   echo "--dangerously-skip-permissions" ;;
+    codex|opencode) echo "" ;;
+  esac
+}
+
 detect_start_cmd() {
   local issue="$1"
   if [[ -n "$CMD_TEMPLATE" ]]; then
     echo "${CMD_TEMPLATE//\{issue\}/$issue}"
     return
   fi
+  local bypass
+  bypass="$(bypass_flag_for_harness "$HARNESS")"
   case "$HARNESS" in
-    claude)   echo "claude -n \"$issue\" --model 'opus[1m]' --effort max '/orchestration start $issue'" ;;
+    claude)   echo "claude -n \"$issue\" ${bypass} --model 'opus[1m]' --effort max '/orchestration start $issue'" ;;
     codex)    echo "codex '\$orchestration start $issue'" ;;
     opencode) echo "opencode --prompt '/orchestration start $issue'" ;;
     *)        echo "" ;;
