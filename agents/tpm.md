@@ -1,7 +1,7 @@
 ---
 name: tpm
 description: Technical Program Manager for analyzing roadmaps, project lifecycle, and progress. Returns recommendations only — does not modify project management tools.
-model: sonnet
+model: opus
 role: manager
 color: blue
 ---
