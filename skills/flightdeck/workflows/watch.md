@@ -121,6 +121,17 @@ At the end of each poll cycle:
 2. If the debounce counter reaches `FLIGHTDECK_DEBOUNCE_CYCLES` (default 2) consecutive cycles → `⤵ workflows/terminate.md → END`.
 3. Otherwise, yield via the harness scheduler and end the turn — the harness wakes you when the delay elapses, at which point this workflow re-enters at § 2. Never use `sleep` (the harness blocks long sleeps, and they burn the prompt cache). See SKILL.md "Skill Rules — Implementation Constraints" rule 6 for the per-harness primitive.
 
+   **Adaptive cadence**: pick `delaySeconds` based on the tightest active state across all tracked issues, not a fixed value:
+
+   | Tightest state | `delaySeconds` | Rationale |
+   |----------------|----------------|-----------|
+   | Any issue `prompting` or `merge-ready` | `60–90` | Inner agent is waiting on master's response; latency directly delays the issue. Stay under 270s to keep prompt cache hot. |
+   | All issues `submitting` (CI running) or sub-agent deliberating with long ETA | `300–600` | Cheap to wait; CI takes minutes. One cache miss buys a much longer wait than a tight cycle would. |
+   | Mix (some `prompting`, some `submitting`) | Pick the tighter | Latency on the prompting one dominates user-visible cost. |
+   | All issues idle / waiting on external (bot review, CI) | `600–1200` | Master has nothing useful to do at the keyboard. |
+
+   `FLIGHTDECK_POLL_INTERVAL` (default 30) sets a floor; never go below it. Don't chain shorter sleeps to bypass the floor.
+
 If `paused_for_user` is set, the loop yields immediately and waits for the user to re-invoke `watch` after addressing the pause.
 
 ---
