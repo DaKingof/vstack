@@ -107,7 +107,7 @@ At the end of each poll cycle:
 
 1. Count issues by state. If every tracked issue is in `merged | aborted | dead` AND every issue's `state` is not `prompting` → increment a debounce counter.
 2. If the debounce counter reaches `FLIGHTDECK_DEBOUNCE_CYCLES` (default 2) consecutive cycles → `⤵ workflows/terminate.md → END`.
-3. Otherwise, yield until next poll cycle (use the harness's idle/wait mechanism — never `sleep`). Continue from § 2.
+3. Otherwise, yield via the harness scheduler and end the turn — the harness wakes you when the delay elapses, at which point this workflow re-enters at § 2. Never use `sleep` (the harness blocks long sleeps, and they burn the prompt cache). See SKILL.md "Skill Rules — Implementation Constraints" rule 6 for the per-harness primitive.
 
 If `paused_for_user` is set, the loop yields immediately and waits for the user to re-invoke `watch` after addressing the pause.
 

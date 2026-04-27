@@ -177,7 +177,9 @@ State enum: `state ∈ {waiting, prompting, submitting, merge-ready, merged, abo
 3. **Verify-don't-trust**. Never advance an issue's state on an agent's claim alone. Run the verification grep first.
 4. **Cleanup scope is anchored to the asking pane's registered worktree**, not to a global "what flightdeck thinks". Extract the path from the prompt text and compare to the registry entry for that pane.
 5. **Aggressive autonomy on known shapes; escalate on novel shapes**. The classifier returns a tag for known prompt shapes. Unmatched prompts return `generic-multi-choice` and the handler escalates to user — it does NOT pick the first option.
-6. **No blocking sleeps**. The harness blocks long `sleep` calls. Use the harness's idle/wait mechanism between poll cycles.
+6. **No blocking sleeps**. The harness blocks long `sleep` calls and they burn the prompt cache for no work. Yield via the harness's scheduler primitive between poll cycles and end the turn — the harness wakes you when the delay elapses.
+   - **Claude Code**: `ScheduleWakeup({delaySeconds, prompt, reason})` — pass the same workflow input verbatim so the next firing re-enters this loop.
+   - **Other harnesses**: use the equivalent (codex/opencode each have their own scheduling tool). If the harness has none, document the fallback in `patterns/tmux-monitoring.md` for that harness's adapter; do NOT introduce a `sleep` workaround.
 7. **All scripts must appear in this SKILL.md's Scripts table.** No "hidden" scripts. README.md mirrors the table for human readers.
 
 ## Compaction Recovery
