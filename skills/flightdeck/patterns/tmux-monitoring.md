@@ -130,4 +130,12 @@ Inner pane's shell is dead because the worktree was removed mid-session. After t
 | codex | (TBD) |
 | opencode | (TBD) |
 
+### Capture viewport (script: `pane-poll` `--harness` flag)
+
+| Harness | Strategy | Why |
+|---------|----------|-----|
+| Claude Code | `tmux capture-pane -p -S -200` (history) | Default; scrollback is stable. |
+| codex | `tmux capture-pane -p -S -200` (history) | Same. |
+| opencode | `tmux capture-pane -p` (visible viewport only) | TUI sometimes scrolls the rendered buffer above the viewport, so `-S -200` returns stale middle content and misses the live prompt. |
+
 When adding a new harness, add its row in each table above and wire the matching adapter in the relevant script/workflow. Do not blanket-apply Claude Code's mechanic to other harnesses without verification.

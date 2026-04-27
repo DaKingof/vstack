@@ -5,8 +5,9 @@
 # state. Intended to be called per-tracked-window in the watch loop.
 #
 # Usage:
-#   pane-poll <window-target>
+#   pane-poll <window-target> [<pane-index>] [--harness <h>]
 #   pane-poll HT:cc-463
+#   pane-poll HT:cc-463 0 --harness opencode
 #
 # JSON fields:
 #   {
@@ -40,7 +41,28 @@ fi
 
 # Optional: pinned pane index (default 0)
 PANE_INDEX="${2:-0}"
+shift || true; shift || true
+
+HARNESS=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --harness) HARNESS="$2"; shift 2 ;;
+    --harness=*) HARNESS="${1#--harness=}"; shift ;;
+    *) shift ;;
+  esac
+done
+
 PANE_TARGET="${TARGET}.${PANE_INDEX}"
+
+# Per-harness capture strategy. Some TUIs (notably opencode) sometimes
+# scroll the rendered buffer above the viewport, so `-S -200` returns
+# stale middle content and misses the live prompt. For those, capture
+# only the visible viewport. Document additions in patterns/tmux-monitoring.md
+# § Per-harness signals.
+case "$HARNESS" in
+  opencode) CAPTURE_ARGS=(-p) ;;
+  *)        CAPTURE_ARGS=(-p -S -200) ;;
+esac
 
 # Verify window exists; emit dead state if not.
 if ! tmux list-windows -t "${TARGET%:*}" -F '#{window_index}:#{window_name}' 2>/dev/null \
@@ -59,7 +81,7 @@ activity=$(awk -F'|' '{print $3}' <<< "$flags_line")
 silence=$(awk -F'|' '{print $4}' <<< "$flags_line")
 
 # Capture and classify
-buf=$(tmux capture-pane -t "$PANE_TARGET" -p -S -200 2>/dev/null || echo "")
+buf=$(tmux capture-pane -t "$PANE_TARGET" "${CAPTURE_ARGS[@]}" 2>/dev/null || echo "")
 capture_hash=$(printf '%s' "$buf" | sha256sum | awk '{print "sha256:"$1}')
 tag=$(printf '%s' "$buf" | "$SCRIPT_DIR/prompt-classify" 2>/dev/null || echo "idle")
 
