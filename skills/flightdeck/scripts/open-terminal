@@ -69,7 +69,7 @@ while [[ $# -gt 0 ]]; do
       echo "  claude   → claude -n ISSUE --dangerously-skip-permissions --model 'opus[1m]' --effort max '/orchestration start ISSUE'"
       echo "  codex    → codex '\$orchestration start ISSUE'"
       echo "  opencode → opencode --prompt '/orchestration start ISSUE'"
-      echo "  omp      → omp --thinking xhigh '/orchestration start ISSUE'"
+      echo "  omp      → omp '/orchestration start ISSUE'"
       echo ""
       echo "Environment:"
       echo "  GH_ISSUE_PATTERN          Regex for issue IDs (default: [A-Z]+-[0-9]+)"
@@ -158,7 +158,7 @@ detect_start_cmd() {
     claude)   echo "claude -n \"$issue\" ${bypass} --model 'opus[1m]' --effort max '/orchestration start $issue'" ;;
     codex)    echo "codex '\$orchestration start $issue'" ;;
     opencode) echo "opencode --prompt '/orchestration start $issue'" ;;
-    omp)      echo "omp --thinking xhigh '/orchestration start $issue'" ;;
+    omp)      echo "omp '/orchestration start $issue'" ;;
     *)        echo "" ;;
   esac
 }
