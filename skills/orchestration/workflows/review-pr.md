@@ -539,21 +539,18 @@ Issue suggestions: [N] items → § 9 audit
 
 4. **Delegate immediately.** Do **not** surface a Defer/Skip prompt — § 10 is mandatory once § 9 created `make_child` issues under `[ISSUE_ID]`. Delegate regardless of how sub-issues were created or their perceived scope.
 
-   If delegation must be skipped (e.g., user manually overrides via Type-something or escalates), § 10 must FIRST detach every issue in `audit_issues_created` from `[ISSUE_ID]` before returning to § 11 — otherwise the parent merging in `merge-pr.md` will cascade-Done these children.
+   If delegation is skipped (user override, escalation), § 10 must FIRST detach every `audit_issues_created` entry from `[ISSUE_ID]` before returning to § 11 — otherwise `merge-pr.md` will cascade-Done them.
 
-   Read the list (one ID per line) and capture as `[AUDIT_CREATED_IDS]`:
    ```bash
    .agents/skills/orchestration/scripts/workflow-state get [ISSUE_ID] '.audit_issues_created // []' | jq -r '.[]'
    ```
-
-   Then per `[CHILD_ID]` in that list, two calls (shell `$VAR` does not
-   survive across bash blocks in agent harnesses — use the placeholder):
+   Capture each line as `[CHILD_ID]`, then for each:
    ```bash
    .agents/skills/linear/scripts/linear.sh issues update [CHILD_ID] --remove-parent
    .agents/skills/linear/scripts/linear.sh issues add-relation [CHILD_ID] --related [ISSUE_ID]
    ```
 
-   The `merge-pr.md § 4.3` cascade-Done guard is a backstop, not a license to defer here.
+   The `merge-pr.md § 4.3` guard is a backstop, not a license to defer.
 
    **Run Workflow**: `⤵ workflows/dev-start.md § 1-4 → § 10 step 5` with context:
    - `worktree`: [WORKTREE_PATH]
