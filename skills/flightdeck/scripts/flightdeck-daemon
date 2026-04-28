@@ -104,6 +104,7 @@ CANONICAL_TAGS=(
   rebase-multi-choice
   generic-multi-choice
   multi-select-tabbed
+  awaiting-direction
   bash-permission-prompt
   modal-prompt
   bot-review-wait-stuck

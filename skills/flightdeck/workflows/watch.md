@@ -98,6 +98,8 @@ For each tracked issue currently in a non-terminal state (`waiting | prompting |
    | `external-fix-suggestions` | `prompting` | substate = tag |
    | `cycle-fix-suggestions` | `prompting` | substate = tag |
    | `descope-related` | `prompting` | substate = tag |
+   | `multi-select-tabbed` | `prompting` | substate = tag (handler picks via `--option-multi`) |
+   | `awaiting-direction` | `prompting` | substate = tag (handler synthesizes a continuation directive from registry intent) |
    | `generic-multi-choice` | `prompting` | substate = tag (handler auto-decides per § 10 of `handle-prompt.md`, escalates only on novelty) |
 
    **`terminal-state-reached` routing**: do not transition to `prompting`. Instead invoke `⤵ workflows/close-issue.md <ISSUE_ID>`. That workflow verifies the signal (two-signal rule), updates master state, and tears down the window. Returns here when done.

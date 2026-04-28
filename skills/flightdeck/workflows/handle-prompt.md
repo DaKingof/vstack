@@ -193,6 +193,26 @@ Allowlist additions are skill-level concerns, not project-level. If a project fr
 
 ---
 
+## § 10.5: Handler — `awaiting-direction`
+
+Inner agent has emitted a recoverable post-cancel / post-decline state with no prompt to answer (e.g., "Awaiting user direction" after a Cancel during error recovery, or "User declined to answer questions" after the user backed out of a multi-choice prompt). The agent is alive and waiting for free-text guidance.
+
+### Decision
+
+1. Read the issue's `decisions_log[-1]` from the registry to recover the most recent intent — what prompt was being answered, what action the inner agent was attempting.
+2. Synthesize a one-sentence continuation directive that matches that intent. Example mappings:
+   - Last decision was a `cycle-fix-suggestions` Apply that the user cancelled → "Apply the previously-listed fix suggestions inline; if any required clarification, surface it via a follow-up prompt rather than declining."
+   - Last decision was a `merge-now` Skip → "Resume merge sequencing for this PR; check `gh pr view` for merge readiness and proceed."
+   - No prior decision context (registry empty) → escalate via `paused_for_user` with reason `awaiting-direction-no-context`. Master cannot synthesize a directive without knowing what the agent was doing.
+3. Send via `pane-respond <pane> "<directive>"` (free-text payload mode). No `--tag` validation.
+4. Log: `pane-registry log-decision <ISSUE_ID> awaiting-direction "<directive-summary>"`.
+
+### Why this exists
+
+Without this handler, `prompt-classify` would have routed the buffer to `idle` (no option-list footer) and the daemon would never fire wake. The pane sits indefinitely until the user manually addresses it. The classifier's `awaiting-direction` sentinel + this handler converts the dead-end into a recoverable resume.
+
+---
+
 ## § 11: Handler — `generic-multi-choice`
 
 No specific tag matched. The classifier returned a generic option-list — bounded numeric options, possibly with a "(recommended)" marker on one option, possibly with a "Type something" free-text option at the end.

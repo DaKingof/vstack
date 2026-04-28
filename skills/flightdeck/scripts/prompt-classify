@@ -28,6 +28,7 @@
 #   cycle-fix-suggestions      - in-cycle review fix-suggestion application
 #   scope-creep-detected       - computed externally; classifier never returns this from buffer alone
 #   multi-select-tabbed        - tabbed checkbox UI; needs --option-multi (NOT --option)
+#   awaiting-direction         - recoverable post-cancel / no-prompt idle state
 #   generic-multi-choice       - has option list but no specific match
 #   idle                       - no prompt detected
 #
@@ -60,6 +61,15 @@ emit() {
   fi
   exit 0
 }
+
+# awaiting-direction — recoverable post-cancel / post-decline state where
+# the inner agent is alive but has no prompt to answer. Classified BEFORE
+# the footer check because this state has no option-list footer; the
+# default footer-gate would route it to idle and the daemon would never
+# fire wake. Master synthesizes a continuation directive in handle-prompt.
+if grep -qE 'Awaiting user (direction|input)|User declined to answer questions|standing by for further instructions|awaiting your response\b' <<< "$buf"; then
+  emit awaiting-direction "post-cancel idle"
+fi
 
 # Terminator check — must see a known prompt-end before classifying.
 # Common terminators across opencode, claude code, codex:
