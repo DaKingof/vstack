@@ -589,7 +589,16 @@ main() {
                 done
                 summary_parts+=("$archived_delta_count archived removed")
             fi
-            jq '[.[] | select(.trashed != true and .archivedAt == null)]' \
+            # Strip problematic control chars from text fields (Linear
+            # descriptions can contain them) — same normalization the full
+            # sync path applies on line 538. Without this on the delta
+            # path, incremental syncs merged unescaped control chars into
+            # issues.json and downstream `jq` consumers (cache-query,
+            # flightdeck/parallel-check) failed to parse.
+            jq '[.[]
+                  | select(.trashed != true and .archivedAt == null)
+                  | .description = ((.description // "") | gsub("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]"; ""))
+                  | .title = ((.title // "") | gsub("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]"; ""))]' \
                 "$CACHE_DIR/.delta_issues_raw.json" > "$CACHE_DIR/.delta_issues.json"
             delta_count=$(jq 'length' "$CACHE_DIR/.delta_issues.json")
             extract_comments "$CACHE_DIR/.delta_issues.json"
