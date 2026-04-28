@@ -44,9 +44,9 @@ Master mode entry point. Polls every spawned issue pane, classifies their prompt
    .agents/skills/flightdeck/scripts/flightdeck-daemon start \
      --session "$SESSION" \
      --master "$MASTER_PANE" \
-     --inner "$INNER_PANES" &
+     --inner "$INNER_PANES"
    ```
-   The daemon will refuse via flock if already running for this session. Idempotent — safe to call on every `watch` re-entry.
+   `start` self-daemonizes via `setsid + nohup`: the call blocks until the child writes its PID file, then returns. Do NOT add `&` or harness-specific backgrounding — the daemon survives the calling shell's lifecycle on its own. The daemon refuses via flock if already running for this session, so the call is idempotent and safe on every `watch` re-entry. Pass `--foreground` only when you want to keep the process attached (tmux-window spawn mode or ops debugging).
 6. **Atomic master-busy lock** — write `tmp/fd-master-<SESSION_KEY>.busy` via temp+mv:
    ```
    .agents/skills/flightdeck/scripts/flightdeck-state master-busy lock

@@ -107,22 +107,33 @@ is_canonical_tag() {
 
 usage() { cat >&2 <<EOF
 Usage:
-  flightdeck-daemon start  --session <S> --master <pane> --inner <p1>[,<p2>...]
+  flightdeck-daemon start  --session <S> --master <pane> --inner <p1>[,<p2>...] [--foreground]
   flightdeck-daemon stop   --session <S>
   flightdeck-daemon status --session <S>
   flightdeck-daemon events --session <S>     # drain events JSONL (turn-start)
   flightdeck-daemon ack    --session <S>     # drain + clear pending (turn-end)
+
+start defaults to detached mode: forks via setsid + nohup, waits for the
+child to write its PID file, then returns. Caller does NOT need to use
+'&' or harness-specific backgrounding. --foreground keeps the process
+attached (used by tmux-window spawn mode and by ops debugging).
 EOF
 exit 2; }
+
+# Capture original args before any shifts so we can re-exec ourselves with
+# the same invocation when detaching the start action.
+ORIG_ARGS=("$@")
 
 ACTION="${1:-}"; [[ -z "$ACTION" ]] && usage; shift
 
 SESSION_NAME="" MASTER_TARGET="" INNER_TARGETS=""
+FOREGROUND=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --session) SESSION_NAME="$2"; shift 2 ;;
     --master)  MASTER_TARGET="$2"; shift 2 ;;
     --inner)   INNER_TARGETS="$2"; shift 2 ;;
+    --foreground|--no-detach) FOREGROUND=1; shift ;;
     *) echo "unknown arg: $1" >&2; usage ;;
   esac
 done
@@ -807,6 +818,40 @@ case "$ACTION" in
   start)
     [[ -z "$MASTER_TARGET" || -z "$INNER_TARGETS" ]] && { echo "start needs --master and --inner" >&2; usage; }
     [[ -z "$SESSION_ID" ]] && { echo "Error: tmux session '$SESSION_NAME' not found" >&2; exit 2; }
+
+    # --- Detach (default): re-exec ourselves with --foreground via setsid +
+    # nohup so the daemon survives the calling shell's lifecycle without
+    # depending on harness-specific backgrounding (Claude Code's
+    # run_in_background, opencode/codex/omp equivalents, & + disown, etc.).
+    # Block until the child writes its PID file so the caller can know the
+    # daemon is alive before returning.
+    if (( FOREGROUND == 0 )); then
+      script_path=$(readlink -f "$0" 2>/dev/null || echo "$0")
+      child_args=("${ORIG_ARGS[@]}" --foreground)
+      # Detach stdio entirely; child appends to LOG via its own log() helper.
+      setsid nohup "$script_path" "${child_args[@]}" \
+        </dev/null >>"$LOG" 2>&1 &
+      child_pid=$!
+
+      deadline=$((SECONDS + 10))
+      while (( SECONDS < deadline )); do
+        if [[ -f "$PID_FILE" ]]; then
+          written_pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
+          if [[ "$written_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$written_pid" 2>/dev/null; then
+            echo "daemon detached pid=$written_pid session=$SESSION_NAME"
+            exit 0
+          fi
+        fi
+        # Bail early if the child died before writing the PID file.
+        if ! kill -0 "$child_pid" 2>/dev/null; then
+          echo "Error: detached child (pid=$child_pid) exited before writing PID file; check $LOG" >&2
+          exit 1
+        fi
+        sleep 0.2
+      done
+      echo "Error: detach timed out after 10s; child pid=$child_pid; check $LOG" >&2
+      exit 1
+    fi
 
     exec 200>"$PID_LOCK"
     if ! flock -n 200; then
