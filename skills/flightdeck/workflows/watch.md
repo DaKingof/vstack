@@ -120,13 +120,17 @@ For each tracked issue currently in a non-terminal state (`waiting | prompting |
 
 ## § 3: Decision Routing
 
-For each issue currently in `state == "prompting"` and not debounced in § 2:
+**Process prompting issues SEQUENTIALLY, not in parallel.** Round 4 confirmed: when 3+ panes prompt simultaneously and the master interleaves their handler invocations, each opencode `capture-pane` + `send-keys` round-trip's ~5s UI-refresh latency compounds. A 3-prompt burst that should take ~30 seconds balloons to ~3 minutes, the master becomes the bottleneck, and cognitive-load-induced keystroke errors creep in.
+
+For each issue currently in `state == "prompting"` and not debounced in § 2, **one at a time**:
 
 1. `⤵ workflows/handle-prompt.md <ISSUE_ID> <SUBSTATE_TAG> → § 4` — pass the captured buffer plus the classification tag. Handler decides the response (auto-answer, escalate, or "Type your own" with combined guidance).
 2. After handler returns:
-   - If a response was sent: `pane-respond` already cleared the bell and logged the decision via `pane-registry log-decision`.
+   - If a response was sent: `pane-respond` already cleared the bell and logged the decision via `pane-registry log-decision`. **Always pass `--confirm-advanced`** — this blocks until the prompt sentinel is gone (8s timeout, exit 4 on miss). Without it the loop moves on to the next issue while the previous send may still be in flight, racing the receiving TUI's redraw.
    - If escalated to user: master state's `paused_for_user` is now populated; the watch loop yields control to the user. Resumption happens when the user re-invokes `watch`.
-3. Re-poll the same window after a response to detect the next state (the agent typically advances to its next phase within a few seconds).
+3. Re-poll the same window after a confirmed-advanced response to detect the next state (the agent typically advances to its next phase within a few seconds). Only after the prompt has visibly advanced (or `--confirm-advanced` timed out and recovery is logged) move on to the next prompting issue.
+
+**Pre-flight optimization (when ≥ 3 issues are prompting concurrently)**: capture + classify all panes in parallel during § 2 (background subshells writing to per-pane temp files; collect after a barrier). Sequencing constraint applies to § 3 response-send only — capture is read-only and parallelizable.
 
 ---
 
