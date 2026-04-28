@@ -44,7 +44,11 @@
 #   flightdeck-daemon ack    --session <S>     # turn-end drain + clear
 #
 # Env (defaults shown):
-#   FD_STATE_DIR        /tmp        State file directory.
+#   FD_STATE_DIR        $XDG_RUNTIME_DIR/flightdeck or /tmp/flightdeck-$UID
+#                                   State file directory. Created mode 0700.
+#                                   Resolved via lib/daemon-paths.sh — same
+#                                   resolution flightdeck-state uses for the
+#                                   master-busy lock file.
 #   FD_POLL_SEC         2           Inner-pane polling interval.
 #   FD_STABILITY        3           Seconds of buffer-hash stability before classify.
 #   FD_CAPTURE_LINES    200         tmux capture-pane -S -<N>; visible-only for opencode.
@@ -54,7 +58,11 @@
 #   FD_VERBOSE          0           Log every classify decision.
 set -euo pipefail
 
-STATE_DIR="${FD_STATE_DIR:-/tmp}"
+# Resolve daemon state dir + session-keyed file paths via shared helper so
+# flightdeck-state's master-busy writer and the daemon's reader agree.
+# shellcheck source=lib/daemon-paths.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")")/lib/daemon-paths.sh"
+STATE_DIR=$(fd_resolve_state_dir)
 POLL_SEC="${FD_POLL_SEC:-2}"
 STABILITY_SEC="${FD_STABILITY:-3}"
 CAPTURE_LINES="${FD_CAPTURE_LINES:-200}"
@@ -159,17 +167,17 @@ else
   SESSION_KEY=$(session_key_from_id "$SESSION_ID")
 fi
 
-PID_FILE="$STATE_DIR/fd-daemon-${SESSION_KEY}.pid"
-PID_LOCK="$STATE_DIR/fd-daemon-${SESSION_KEY}.lock"
-LOG="$STATE_DIR/fd-daemon-${SESSION_KEY}.log"
-BUSY_FILE="$STATE_DIR/fd-master-${SESSION_KEY}.busy"
-WAKE_PENDING="$STATE_DIR/fd-wake-pending-${SESSION_KEY}"
-EVENTS_FILE="$STATE_DIR/fd-daemon-events-${SESSION_KEY}.jsonl"
+PID_FILE=$(fd_pid_file "$STATE_DIR" "$SESSION_KEY")
+PID_LOCK=$(fd_pid_lock "$STATE_DIR" "$SESSION_KEY")
+LOG=$(fd_log_file "$STATE_DIR" "$SESSION_KEY")
+BUSY_FILE=$(fd_busy_file "$STATE_DIR" "$SESSION_KEY")
+WAKE_PENDING=$(fd_wake_pending "$STATE_DIR" "$SESSION_KEY")
+EVENTS_FILE=$(fd_events_file "$STATE_DIR" "$SESSION_KEY")
 # Session-wide lock guarding wake-pending mutations + events drain. All
 # operations that touch BOTH wake-pending and events file MUST take this
 # lock to prevent post-drain append races. Master's ack action takes it
 # to atomically drain events + clear wake-pending.
-SESSION_LOCK="$STATE_DIR/fd-daemon-${SESSION_KEY}.session-lock"
+SESSION_LOCK=$(fd_session_lock "$STATE_DIR" "$SESSION_KEY")
 
 log()  { printf '%s [%s] %s\n' "$(date -Iseconds)" "$1" "$2" >> "$LOG"; }
 warn() { printf '%s [%s] %s\n' "$(date -Iseconds)" "$1" "$2" | tee -a "$LOG" >&2; }
@@ -818,6 +826,25 @@ case "$ACTION" in
     # Startup GC: sweep state files for tmux sessions that no longer exist.
     gc_orphan_state
 
+    # Self-check: warn if legacy busy-file locations from pre-#41 layouts
+    # still hold files. Master writes via flightdeck-state's master-busy
+    # action; that path is now resolved through lib/daemon-paths.sh and
+    # MUST agree with the daemon's read path. Stragglers from older
+    # versions indicate a stale install or a partial upgrade.
+    legacy_busy_candidates=(
+      "/tmp/fd-master-${SESSION_KEY}.busy"
+    )
+    if proj_root=$(git rev-parse --show-toplevel 2>/dev/null); then
+      legacy_busy_candidates+=(
+        "$proj_root/tmp/fd-master-${SESSION_KEY}.busy"
+      )
+    fi
+    for legacy in "${legacy_busy_candidates[@]}"; do
+      [[ "$legacy" == "$BUSY_FILE" ]] && continue
+      if [[ -f "$legacy" ]]; then
+        warn path-mismatch "legacy busy file at $legacy (current: $BUSY_FILE) — remove it; pre-#41 install"
+      fi
+    done
 
     echo $$ > "$PID_FILE"
     # Fresh start: clear any stale wake/event state under SESSION_LOCK.

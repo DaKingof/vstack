@@ -215,13 +215,21 @@ case "$ACTION" in
     # Wrapper for the daemon's master-busy lockfile. Master holds this for
     # the duration of a turn so the daemon defers wake delivery. Atomic
     # temp+mv on lock so daemon never reads a partial JSON write.
+    #
+    # Resolves the busy file path via lib/daemon-paths.sh — the SAME
+    # resolution the daemon uses. Both writers MUST agree on this path or
+    # the daemon never sees the master-busy signal (silent wake-during-turn
+    # race).
     [[ ${#ARGS[@]} -lt 1 ]] && { echo "Usage: master-busy <lock|unlock|check> [--master-pane <%N>]" >&2; exit 2; }
     sub_action="${ARGS[0]}"
     # Resolve session_id-keyed busy file path (matches daemon's SESSION_KEY).
     sid=$(tmux display-message -p -t "$SESSION" '#{session_id}' 2>/dev/null || echo "")
     [[ -z "$sid" ]] && { echo "Error: cannot resolve session_id for $SESSION" >&2; exit 2; }
-    sid_key="s${sid#\$}"
-    busy_file="$STATE_BASE/fd-master-${sid_key}.busy"
+    # shellcheck source=lib/daemon-paths.sh
+    source "$(dirname "${BASH_SOURCE[0]}")/lib/daemon-paths.sh"
+    fd_dir=$(fd_resolve_state_dir)
+    sid_key=$(fd_session_key_from_id "$sid")
+    busy_file=$(fd_busy_file "$fd_dir" "$sid_key")
     case "$sub_action" in
       lock)
         master_pane=""
