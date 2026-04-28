@@ -55,7 +55,8 @@
 #   FD_HARNESS          ""          Per-harness capture strategy ("opencode" → visible-only).
 #   FD_CLASSIFIER       <sibling>   Path to prompt-classify; falls back to built-in stub.
 #   FD_WAKE_PENDING_TTL 300         Stale wake-pending recovery threshold.
-#   FD_VERBOSE          0           Log every classify decision.
+#   FD_VERBOSE          0           Log non-canonical/no-action classifies.
+#   FD_HEARTBEAT_TICKS  60          Ticks between heartbeat log lines.
 set -euo pipefail
 
 # Resolve daemon state dir + session-keyed file paths via shared helper so
@@ -76,6 +77,7 @@ CLASSIFIER="${FD_CLASSIFIER:-$_default_classifier}"
 [[ ! -x "$CLASSIFIER" ]] && CLASSIFIER=""
 VERBOSE="${FD_VERBOSE:-0}"
 WAKE_PENDING_TTL="${FD_WAKE_PENDING_TTL:-300}"
+HEARTBEAT_TICKS="${FD_HEARTBEAT_TICKS:-60}"
 
 # Canonical classifier tag allowlist for stable-wake. Only these wake the
 # master from a stable buffer. Bell wake is independent and unconditional.
@@ -110,6 +112,7 @@ Usage:
   flightdeck-daemon start  --session <S> --master <pane> --inner <p1>[,<p2>...] [--foreground]
   flightdeck-daemon stop   --session <S>
   flightdeck-daemon status --session <S>
+  flightdeck-daemon health --session <S>     # operator-friendly diagnosis
   flightdeck-daemon events --session <S>     # drain events JSONL (turn-start)
   flightdeck-daemon ack    --session <S>     # drain + clear pending (turn-end)
 
@@ -670,6 +673,7 @@ run_loop() {
     INNER_IDS+=("$id")
   done
 
+  local HEARTBEAT_COUNTER=0
   log start "pid=$$ session_id=$SESSION_ID name=$SESSION_NAME master_id=$master_id inner_ids=${INNER_IDS[*]}"
   # Separate traps:
   #   - EXIT: cleanup only (called on natural exit too).
@@ -752,9 +756,11 @@ run_loop() {
       local age=$(( now - prev_since ))
       if (( age >= STABILITY_SEC )) && [[ "${NOTIFIED_HASH[$inner_id]:-}" != "$hash" ]]; then
         local tag; tag=$(classify_buffer "$buf")
-        (( VERBOSE == 1 )) && log classify "$inner_id age=${age}s tag=$tag"
         # Strict canonical-tag allowlist for stable wakes.
         if is_canonical_tag "$tag"; then
+          # Always log canonical classifications at INFO so missed wakes
+          # are debuggable from the log alone (no need to grep capture-pane).
+          log classify "$inner_id age=${age}s tag=$tag (canonical)"
           tick_reasons+=("stable:$inner_id:$tag(${age}s)")
           tick_pending_ids+=("$inner_id")
           tick_pending_hashes+=("$hash")
@@ -763,11 +769,30 @@ run_loop() {
           append_event "$inner_id" "$hash" "$tag" "stable" "$age" false
         else
           # Non-canonical → don't wake, but mark notified so we don't
-          # re-classify the same hash repeatedly.
+          # re-classify the same hash repeatedly. VERBOSE-only since this
+          # is the no-action path.
+          (( VERBOSE == 1 )) && log classify "$inner_id age=${age}s tag=$tag (non-canonical)"
           NOTIFIED_HASH[$inner_id]="$hash"
         fi
       fi
     done
+
+    # Heartbeat — emit a periodic "still alive" log line so silent steady
+    # state doesn't look indistinguishable from "daemon dead". Cadence is
+    # tick-based, not wall-clock, so it scales with FD_POLL_SEC.
+    (( ++HEARTBEAT_COUNTER ))
+    if (( HEARTBEAT_COUNTER >= HEARTBEAT_TICKS )); then
+      HEARTBEAT_COUNTER=0
+      local alive_count=0
+      for iid in "${INNER_IDS[@]}"; do
+        pane_alive "$iid" && (( ++alive_count ))
+      done
+      local wp_state="absent"
+      [[ -f "$WAKE_PENDING" ]] && wp_state="in-flight"
+      local bf_state="unlocked"
+      [[ -f "$BUSY_FILE" ]] && bf_state="held"
+      log heartbeat "panes=${#INNER_IDS[@]} alive=$alive_count wake_pending=$wp_state busy_lock=$bf_state"
+    fi
 
     if (( ${#tick_reasons[@]} > 0 )); then
       local combined; combined=$(IFS='|'; echo "${tick_reasons[*]}")
@@ -969,6 +994,50 @@ case "$ACTION" in
 
   ack)
     ack_and_drain
+    ;;
+
+  health)
+    # Operator-friendly diagnosis: PID + last log timestamp + queue + lock state.
+    if [[ ! -f "$PID_FILE" ]]; then
+      echo "session=$SESSION_NAME no daemon"
+      exit 1
+    fi
+    pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
+    if ! [[ "$pid" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$pid" 2>/dev/null; then
+      echo "session=$SESSION_NAME pid=$pid DEAD (stale pid file)"
+      exit 2
+    fi
+    last_log_line=""
+    last_log_ts=""
+    if [[ -f "$LOG" ]]; then
+      last_log_line=$(tail -n 1 "$LOG" 2>/dev/null)
+      last_log_ts=$(awk '{print $1}' <<< "$last_log_line")
+    fi
+    wp_state="absent"
+    wp_in_flight=""
+    if [[ -f "$WAKE_PENDING" ]]; then
+      wp_state="in-flight"
+      wp_in_flight=$(jq -r '[.in_flight[]?] | length' "$WAKE_PENDING" 2>/dev/null || echo "?")
+    fi
+    bf_state="unlocked"
+    bf_pid=""
+    if [[ -f "$BUSY_FILE" ]]; then
+      bf_state="held"
+      bf_pid=$(jq -r '.pid // empty' "$BUSY_FILE" 2>/dev/null)
+    fi
+    events_count=0
+    if [[ -f "$EVENTS_FILE" ]]; then
+      events_count=$(wc -l < "$EVENTS_FILE" 2>/dev/null || echo 0)
+    fi
+    cat <<EOF
+session=$SESSION_NAME session_id=$SESSION_ID daemon_pid=$pid alive=true
+state_dir=$STATE_DIR
+last_log_ts=${last_log_ts:-"(none)"}
+last_log=${last_log_line:-"(empty)"}
+wake_pending=$wp_state${wp_in_flight:+ in_flight=$wp_in_flight}
+busy_lock=$bf_state${bf_pid:+ master_pid=$bf_pid}
+events_queued=$events_count
+EOF
     ;;
 
   *)
