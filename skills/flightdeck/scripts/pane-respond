@@ -12,8 +12,11 @@
 #                         submit). Recognized: Up Down Left Right Enter Tab Space Escape.
 #
 # Always targets an explicit pane index. Harness-aware: option-pick mechanics differ
-# across harnesses (Claude Code uses arrow keys; numeric digits are buffered as text,
-# not shortcuts). The --harness flag selects the adapter; default is claude.
+# across harnesses. The --harness flag selects the adapter; default is claude.
+#   claude   — (N-1) Down then Enter. Numeric digits are buffered as text.
+#   opencode — bare digit shortcut. Pre-clear input box (Ctrl-A Ctrl-K)
+#              first so any stray input (e.g., OSC palette response leak)
+#              doesn't combine with the digit. opencode auto-submits.
 #
 # Usage:
 #   pane-respond <pane-target> <payload> [--tag <tag>] [--no-enter] [--no-clear]
@@ -146,10 +149,24 @@ claude_select_option() {
   tmux send-keys -t "$pane" Enter
 }
 
+# opencode TUI accepts a bare digit as an option shortcut when the input
+# box is empty. We pre-clear via readline-style Ctrl-A (move-to-start) +
+# Ctrl-K (kill-to-end) so any stray input (e.g., the OSC palette response
+# leak documented in pane-poll's strip filter) doesn't combine with the
+# digit and turn it into typed text. Then send the digit; opencode
+# auto-submits — no trailing Enter required and adding one could fire on
+# the next prompt.
+opencode_select_option() {
+  local pane="$1" n="$2"
+  tmux send-keys -t "$pane" C-a C-k
+  tmux send-keys -t "$pane" "$n"
+}
+
 select_option_for_harness() {
   local harness="$1" pane="$2" n="$3"
   case "$harness" in
-    claude) claude_select_option "$pane" "$n" ;;
+    claude)   claude_select_option "$pane" "$n" ;;
+    opencode) opencode_select_option "$pane" "$n" ;;
     *)
       echo "Error: --option not yet supported for harness '$harness'" >&2
       echo "       Add an adapter in pane-respond before using." >&2

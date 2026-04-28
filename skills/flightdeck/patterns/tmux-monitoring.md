@@ -130,7 +130,7 @@ Inner pane's shell is dead because the worktree was removed mid-session. After t
 |---------|----------|
 | Claude Code | `(N-1) × Down` then `Enter`. Numbers are NOT shortcuts; they're buffered as text. |
 | codex | (TBD — verify before wiring; do not assume Claude Code's mechanic.) |
-| opencode | (TBD — verify before wiring. Workaround callers have used: `--keys Enter,Tab,Enter` to confirm the default-highlighted option, but this is fragile and only works when the desired option is the default. Real adapter needed.) |
+| opencode | Pre-clear input via `Ctrl-A Ctrl-K`, then send the bare digit `N`. opencode treats digits as option shortcuts when the input box is empty and auto-submits — no trailing Enter required. The pre-clear handles stray input that may have leaked into the input buffer (notably OSC palette responses from terminal queries). |
 | omp | (TBD — verify before wiring.) |
 
 To add an adapter for a new harness:
