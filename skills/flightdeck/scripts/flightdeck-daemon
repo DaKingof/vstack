@@ -280,20 +280,39 @@ resolve_pane_id() {
   echo "$pid"
 }
 
+# Per-tick cache of (pane_id → target, pane_id → window_id). Refreshed
+# at the start of each tick via refresh_pane_cache. Replaces a per-pane
+# `tmux list-panes -a` invocation (was O(N_total_panes) per pane per
+# tick — quadratic across the full tmux server pane list).
+declare -A PANE_TARGET_CACHE PANE_WINDOW_CACHE
+
+refresh_pane_cache() {
+  PANE_TARGET_CACHE=()
+  PANE_WINDOW_CACHE=()
+  local pid tgt wid
+  while IFS=$'\t' read -r pid tgt wid; do
+    [[ -z "$pid" ]] && continue
+    PANE_TARGET_CACHE[$pid]="$tgt"
+    PANE_WINDOW_CACHE[$pid]="$wid"
+  done < <(tmux list-panes -a -F '#{pane_id}	#{session_name}:#{window_index}.#{pane_index}	#{window_id}' 2>/dev/null)
+}
+
 pane_target_from_id() {
   local pid="$1"
-  tmux list-panes -a -F '#{pane_id} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null \
-    | awk -v id="$pid" '$1==id {print $2; exit}'
+  echo "${PANE_TARGET_CACHE[$pid]:-}"
 }
 
 window_id_for_pane() {
   local pid="$1"
-  tmux list-panes -a -F '#{pane_id} #{window_id}' 2>/dev/null | awk -v id="$pid" '$1==id {print $2; exit}'
+  echo "${PANE_WINDOW_CACHE[$pid]:-}"
 }
 
 pane_alive() {
   local pid="$1"
-  tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qx "$pid"
+  # Cache-backed: empty cache entry means the pane is gone (or cache
+  # not yet refreshed; refresh_pane_cache is called at the top of every
+  # tick so this is reliable inside run_loop).
+  [[ -n "${PANE_TARGET_CACHE[$pid]:-}" ]]
 }
 
 session_alive() {
@@ -790,6 +809,10 @@ run_loop() {
       log master-gone "master $master_id gone; exiting"
       break
     fi
+
+    # Refresh pane→target/window cache once per tick. Replaces O(N) per-pane
+    # tmux list-panes invocations with one tick-level fetch.
+    refresh_pane_cache
 
     clear_stale_wake_pending "$master_id" NOTIFIED_HASH LAST_EVENT_KEY LAST_BELL_HASH
 
