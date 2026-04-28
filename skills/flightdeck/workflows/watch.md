@@ -79,6 +79,12 @@ For each tracked issue currently in a non-terminal state (`waiting | prompting |
    .agents/skills/flightdeck/scripts/pane-poll <session>:<window> <pinned-pane-index> --harness <h>
    ```
 2. Parse JSON. If `dead: true` → `pane-registry set-state <ISSUE> dead` and continue.
+
+   **Pane-fingerprint drift recovery**: if `fingerprint_match: false` AND `pane_index_suggest` is non-null, the orchestrator pane moved (sub-agent restart, layout reflow, harness restart). Update the registry to the suggested index and log a warning:
+   ```
+   .agents/skills/flightdeck/scripts/pane-registry set <ISSUE> pane_target "\"<session>:<window>.<suggest>\""
+   ```
+   Re-poll on the new index this cycle. If `fingerprint_match: false` AND `pane_index_suggest` is null, no sibling matched the orchestrator sentinel either — the pane may be genuinely idle/blank or the agent crashed; treat the read as authoritative for this cycle and let the state machine route normally (often `idle` → no-op).
 3. Otherwise update state machine based on `tag`:
 
    | tag | new state | notes |

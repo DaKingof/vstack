@@ -17,7 +17,9 @@
 #     "activity": true|false,
 #     "silence": true|false,
 #     "tag": "rebase-multi-choice" | "rendering" | "idle" | ...,
-#     "capture_hash": "sha256:..."
+#     "capture_hash": "sha256:...",
+#     "fingerprint_match": true|false,    # registered pane still hosts the orchestrator
+#     "pane_index_suggest": null|<idx>     # if mismatch, sibling pane that matched
 #   }
 #
 # Exit codes:
@@ -105,6 +107,30 @@ buf=$(tmux capture-pane -t "$PANE_TARGET" "${CAPTURE_ARGS[@]}" 2>/dev/null | str
 capture_hash=$(printf '%s' "$buf" | sha256sum | awk '{print "sha256:"$1}')
 tag=$(printf '%s' "$buf" | "$SCRIPT_DIR/prompt-classify" 2>/dev/null || echo "idle")
 
+# Fingerprint check — confirm the registered pane still hosts the
+# orchestrator TUI. If sub-agent panes were spawned and the orchestrator
+# moved (unlikely but possible across compaction or harness restart), we
+# emit fingerprint_match=false + pane_index_suggest with the actual index
+# so the caller (watch.md) can update the registry. Only scans siblings
+# when the registered pane fails the sentinel — keeps the common case
+# cheap (one capture, one grep).
+fingerprint_sentinel='❯ |claude code|opencode|codex>|■■■|⠋|⠙|⠸|⠴|⠦|⠧'
+fingerprint_match=true
+pane_index_suggest=null
+if ! grep -qE "$fingerprint_sentinel" <<< "$buf"; then
+  # Registered pane doesn't look like the orchestrator. Could be a
+  # genuinely idle/blank pane OR the orchestrator moved. Scan siblings.
+  fingerprint_match=false
+  while read -r idx; do
+    [[ -z "$idx" || "$idx" == "$PANE_INDEX" ]] && continue
+    sib_buf=$(tmux capture-pane -t "${TARGET}.${idx}" -p -S -50 2>/dev/null | strip_osc_leak || echo "")
+    if grep -qE "$fingerprint_sentinel" <<< "$sib_buf"; then
+      pane_index_suggest="$idx"
+      break
+    fi
+  done < <(tmux list-panes -t "$TARGET" -F '#{pane_index}' 2>/dev/null)
+fi
+
 jq -n \
   --arg window "$TARGET" \
   --arg pane "$PANE_TARGET" \
@@ -113,6 +139,8 @@ jq -n \
   --argjson silence "$([ "${silence:-0}" = "1" ] && echo true || echo false)" \
   --arg tag "$tag" \
   --arg capture_hash "$capture_hash" \
+  --argjson fingerprint_match "$fingerprint_match" \
+  --argjson pane_index_suggest "$pane_index_suggest" \
   '{
     window: $window,
     pane_target: $pane,
@@ -120,5 +148,7 @@ jq -n \
     activity: $activity,
     silence: $silence,
     tag: $tag,
-    capture_hash: $capture_hash
+    capture_hash: $capture_hash,
+    fingerprint_match: $fingerprint_match,
+    pane_index_suggest: $pane_index_suggest
   }'
