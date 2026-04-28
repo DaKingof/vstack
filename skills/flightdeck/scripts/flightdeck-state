@@ -245,10 +245,28 @@ case "$ACTION" in
         fi
         [[ -z "$master_pane" ]] && { echo "Error: cannot resolve master pane id" >&2; exit 2; }
         started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+        # Hold the daemon's SESSION_LOCK across the busy-file write AND the
+        # WAKE_PENDING clear. This is the contract that prevents the daemon
+        # from extending in_flight (or seeing a half-written lock) during a
+        # turn handoff.
+        #
+        # Without the WAKE_PENDING clear, a stale "in flight" entry from a
+        # prior wake attempt that was never ack'd (e.g., user message arrived
+        # before the wake landed and master treated the user message as the
+        # turn) would block every subsequent daemon wake for WAKE_PENDING_TTL
+        # seconds. Clearing under the same lock makes the lock-and-take
+        # transition atomic against the daemon's append paths.
+        session_lock=$(fd_session_lock "$fd_dir" "$sid_key")
+        wake_pending=$(fd_wake_pending "$fd_dir" "$sid_key")
+        exec 8>"$session_lock"
+        flock 8
         tmp="${busy_file}.tmp.$$"
         jq -nc --argjson pid $$ --arg mp "$master_pane" --arg sa "$started_at" \
           '{pid:$pid, master_pane_id:$mp, started_at:$sa}' > "$tmp"
         mv "$tmp" "$busy_file"
+        rm -f "$wake_pending"
+        exec 8>&-
         ;;
       unlock)
         rm -f "$busy_file"
