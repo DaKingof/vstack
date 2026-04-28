@@ -298,8 +298,8 @@ Worktree creation is idempotent: existing worktrees are reused (rebased onto lat
 
 5. **Create worktree**: `WT_PATH=$(.agents/skills/worktree/scripts/worktree create [ISSUE_ID])`
 
-6. **Launch**: Ask user which harness to launch: `claude` | `codex` | `opencode` | `I'll launch it myself`
-   - **Harness selected**: `.agents/skills/flightdeck/scripts/open-terminal [ISSUE_ID] --harness [HARNESS]`, then `⤵ workflows/watch.md [ISSUE_ID] § 1-7 → § 1` — enter master oversight loop until the spawned pane reaches a terminal state, then return to dashboard.
+6. **Launch**: Ask user which harness to launch: `claude` | `codex` | `opencode` | `omp` | `I'll launch it myself`
+   - **Harness selected**: `.agents/skills/flightdeck/scripts/open-terminal [ISSUE_ID] --harness [HARNESS]`, then `⤵ workflows/watch.md [ISSUE_ID] § 1-9 → § 1` — `watch.md § 1` spawns `flightdeck-daemon` (idempotent, flock-protected) which drives wake delivery for the rest of the session. Enter master oversight loop until the spawned pane reaches a terminal state, then return to dashboard.
    - **Manual**: Show the command and worktree path so the user can run it themselves. → § 1.
    - **I'll launch it myself** → § 1.
 
@@ -316,8 +316,8 @@ Worktree creation is idempotent: existing worktrees are reused (rebased onto lat
    </output_format>
 
 3. **Ask user** which harness and: `Launch [N] issues` | `Select subset` | `I'll launch them myself` | `Cancel`
-   - **Launch**: `.agents/skills/flightdeck/scripts/open-terminal [ISSUE_IDS] --harness [HARNESS]`, then `⤵ workflows/watch.md [ISSUE_IDS] § 1-7 → § 1` — enter master oversight loop for the spawned set, then return to dashboard.
-   - **Select subset**: Ask user with individual issues as options (multiSelect) → `.agents/skills/flightdeck/scripts/open-terminal [SELECTED_ISSUES] --harness [HARNESS]`, then `⤵ workflows/watch.md [SELECTED_ISSUES] § 1-7 → § 1`.
+   - **Launch**: `.agents/skills/flightdeck/scripts/open-terminal [ISSUE_IDS] --harness [HARNESS]`, then `⤵ workflows/watch.md [ISSUE_IDS] § 1-9 → § 1` — `watch.md § 1` spawns the daemon for the session and drives wake delivery for the spawned set.
+   - **Select subset**: Ask user with individual issues as options (multiSelect) → `.agents/skills/flightdeck/scripts/open-terminal [SELECTED_ISSUES] --harness [HARNESS]`, then `⤵ workflows/watch.md [SELECTED_ISSUES] § 1-9 → § 1`.
    - **Manual**: Show the command so the user can run it themselves. → § 1.
    - **Cancel** → § 1
 

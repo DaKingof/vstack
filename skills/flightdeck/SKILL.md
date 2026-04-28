@@ -104,7 +104,8 @@ Lessons distilled from real multi-issue session experience are grouped by domain
 |--------|---------|
 | `open-terminal` | Launch worktree(s) for one or more issues with auto-detected harness — **never hand-roll tmux/terminal commands; use this for every session spawn** |
 | `parallel-groups` | Read/manage parallel issue groups |
-| `flightdeck-state` | Master-state CRUD wrapper — atomic init/get/set/append/increment/archive for `tmp/flightdeck-state-<TMUX_SESSION>.json`. `init` sweeps stale `.tmp.<PID>` orphans from prior crashed writes; `archive` rotates a terminated state file to `<file>-<terminated_at>.json.archive` so the next session in the same tmux name starts clean |
+| `flightdeck-state` | Master-state CRUD wrapper — atomic init/get/set/append/increment/archive for `tmp/flightdeck-state-<TMUX_SESSION>.json`. `init` sweeps stale `.tmp.<PID>` orphans from prior crashed writes; `archive` rotates a terminated state file to `<file>-<terminated_at>.json.archive` so the next session in the same tmux name starts clean. `master-busy lock\|unlock\|check` writes/clears the daemon's master-busy lockfile atomically (temp+mv) |
+| `flightdeck-daemon` | External bash wake driver. Polls every tracked inner pane on a 2s tick; bell flag → wake immediately, buffer-hash stable for 3s + canonical classifier tag → wake. Coalesces multiple ready panes into one wake. Writes events JSONL master can drain. Replaces harness scheduler primitives — works for claude/codex/opencode/omp uniformly. Actions: `start \| stop \| status \| events \| ack` |
 | `pane-registry` | Issue↔pane mapping CRUD (init from spawned issue list, list, update state per issue, reconcile against live tmux windows to drop stale entries) |
 | `pane-poll` | Single-window status read: bell flag + `capture-pane -t <session>:<window>.0 -p -S -200` + classify |
 | `pane-respond` | Send a response to a pane. Three modes: positional `<payload>` for free-text, `--option N` for numeric option pick (harness-aware: Claude Code uses arrow navigation, NOT digit-as-shortcut), `--keys k1,k2,...` for multi-step forms (toggle / advance page / submit). Validates rebase-multi-choice payloads include the preserve/apply/verify triplet |
@@ -205,18 +206,19 @@ The user-visible output blocks at the end of `terminate.md` and `close-issue.md`
 3. **Verify-don't-trust**. Never advance an issue's state on an agent's claim alone. Run the verification grep first.
 4. **Cleanup scope is anchored to the asking pane's registered worktree**, not to a global "what flightdeck thinks". Extract the path from the prompt text and compare to the registry entry for that pane.
 5. **Aggressive autonomy on known shapes; escalate on novel shapes**. The classifier returns a tag for known prompt shapes. Unmatched prompts return `generic-multi-choice` and the handler escalates to user — it does NOT pick the first option.
-6. **No blocking sleeps**. The harness blocks long `sleep` calls and they burn the prompt cache for no work. Yield via the harness's scheduler primitive between poll cycles and end the turn — the harness wakes you when the delay elapses.
-   - **Claude Code**: `ScheduleWakeup({delaySeconds, prompt, reason})` — pass the same workflow input verbatim so the next firing re-enters this loop.
-   - **Other harnesses**: use the equivalent (codex/opencode each have their own scheduling tool). If the harness has none, document the fallback in `patterns/tmux-monitoring.md` for that harness's adapter; do NOT introduce a `sleep` workaround.
+6. **Daemon-driven wake; no blocking sleeps**. `flightdeck-daemon` (spawned at session start by `watch.md § 1`) is the canonical wake mechanism — it polls inner panes every 2s and types `/flightdeck watch --from-daemon<Enter>` into the master pane via `tmux paste-buffer` when any pane needs attention. Master ends each turn after running `flightdeck-daemon ack` (atomic drain + clear-pending) and removing the master-busy lockfile. No `sleep` workaround, no harness scheduler primitive — the daemon owns wake delivery for every harness uniformly.
+   - **Claude Code optional**: `ScheduleWakeup({delaySeconds: 1800})` MAY be armed as a defensive fallback ("if daemon dies, wake me"). Not load-bearing.
+   - **Other harnesses**: no scheduler needed. The daemon's send-keys works for claude/codex/opencode/omp uniformly.
 7. **All scripts must appear in this SKILL.md's Scripts table.** No "hidden" scripts. README.md mirrors the table for human readers.
 
-## Known Limitations
+## Operational caveats
 
-### No bell-driven wake
+The daemon (`flightdeck-daemon`) drives wake delivery; the master agent only runs when there's work. Operational caveats worth knowing:
 
-Master sleeps via the harness scheduler (`ScheduleWakeup` on Claude Code) and only checks tmux bell flags when it next wakes. Worst-case prompt-response latency = the chosen `delaySeconds`. Tmux bells DO fire and propagate, but they're data, not a wake trigger.
-
-A bell-driven wake would require: a tmux hook (`set-hook -g alert-bell <command>`) that writes a bell event to a file, plus a lightweight watcher running outside the agent's main loop that signals master. Standard agent harnesses don't currently support out-of-loop signal injection, so this stays a documented limitation. Mitigation: tighten `delaySeconds` per § Adaptive cadence in `watch.md` § 6 step 3 when issues are in `prompting` state.
+- **Worst-case wake latency on master crash**: `FD_WAKE_PENDING_TTL + FD_POLL_SEC` (default 302s). If master crashes between turn-start and ack-clear, the daemon waits one TTL before reverting in-flight state and re-firing.
+- **State directory privacy**: `FD_STATE_DIR` (default `/tmp`) must be user-owned. Recommended `FD_STATE_DIR=$XDG_RUNTIME_DIR/flightdeck` or `/tmp/flightdeck-$UID` with mode 0700.
+- **PID reuse race**: stranded `.draining.<pid>` files and stale `BUSY_FILE` recovery can be delayed if the kernel reuses a PID before next startup GC. Acceptable in practice — startup GC sweeps within seconds of next daemon start.
+- **Concurrent flightdecks per tmux session**: refused via flock. One daemon per tmux session_id at a time. Run separate sessions if you need parallel flightdeck instances.
 
 ## Compaction Recovery
 

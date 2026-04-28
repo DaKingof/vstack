@@ -1,0 +1,904 @@
+#!/usr/bin/env bash
+# flightdeck-daemon — external wake driver for the flightdeck master agent.
+#
+# Replaces harness-specific scheduler primitives (e.g. Claude Code's
+# ScheduleWakeup) with a long-lived bash poller spawned at flightdeck-start
+# time. Polls every tracked inner tmux pane on FD_POLL_SEC cadence; wakes
+# the master agent via tmux paste-buffer when any pane needs attention.
+# Harness-independent — works for claude / codex / opencode / omp.
+#
+# Architecture:
+#   - Bell flag → wake immediately (orchestrator bells signal real input).
+#   - Buffer hash stable for FD_STABILITY ticks → run prompt-classify; wake
+#     only on a canonical classifier tag (rendering / unknown → ignore).
+#   - Multiple ready panes coalesced into one wake per tick.
+#   - All wake/event state mutations under SESSION_LOCK (race-safe with
+#     master's atomic ack action).
+#
+# Master contract (MANDATORY):
+#   1. Turn-start: atomic write BUSY_FILE = '{"pid":<pid>,"master_pane_id":
+#      "%N","started_at":"<ISO>"}' via temp+mv.
+#   2. Drain hint: events=$(flightdeck-daemon events --session <id>)
+#   3. Handle panes per registry/classifier.
+#   4. Turn-end:
+#      a. pending=$(flightdeck-daemon ack --session <id>)
+#         — atomic drain-of-newcomers + clear of WAKE_PENDING.
+#      b. Process newcomer events from 4a.
+#      c. rm BUSY_FILE last.
+#   Bare `rm WAKE_PENDING` is UNSAFE — use `ack`.
+#
+# Operational caveats:
+#   - Worst-case wake latency on master crash = FD_WAKE_PENDING_TTL +
+#     FD_POLL_SEC (default 302s).
+#   - FD_STATE_DIR must be user-owned/private. Recommended:
+#     FD_STATE_DIR=$XDG_RUNTIME_DIR/flightdeck or /tmp/flightdeck-$UID with
+#     0700 mode.
+#   - Stranded `.draining.<pid>` and stale BUSY_FILE recovery can be delayed
+#     if the PID is reused before the next startup GC runs.
+#
+# Usage:
+#   flightdeck-daemon start  --session <S> --master <pane> --inner <p1>[,<p2>...]
+#   flightdeck-daemon stop   --session <S>
+#   flightdeck-daemon status --session <S>
+#   flightdeck-daemon events --session <S>     # turn-start drain (no clear)
+#   flightdeck-daemon ack    --session <S>     # turn-end drain + clear
+#
+# Env (defaults shown):
+#   FD_STATE_DIR        /tmp        State file directory.
+#   FD_POLL_SEC         2           Inner-pane polling interval.
+#   FD_STABILITY        3           Seconds of buffer-hash stability before classify.
+#   FD_CAPTURE_LINES    200         tmux capture-pane -S -<N>; visible-only for opencode.
+#   FD_HARNESS          ""          Per-harness capture strategy ("opencode" → visible-only).
+#   FD_CLASSIFIER       <sibling>   Path to prompt-classify; falls back to built-in stub.
+#   FD_WAKE_PENDING_TTL 300         Stale wake-pending recovery threshold.
+#   FD_VERBOSE          0           Log every classify decision.
+set -euo pipefail
+
+STATE_DIR="${FD_STATE_DIR:-/tmp}"
+POLL_SEC="${FD_POLL_SEC:-2}"
+STABILITY_SEC="${FD_STABILITY:-3}"
+CAPTURE_LINES="${FD_CAPTURE_LINES:-200}"
+HARNESS="${FD_HARNESS:-}"
+# Default classifier path: sibling prompt-classify in skills/flightdeck/scripts.
+# Resolved relative to this script's directory so production layout works
+# without setting FD_CLASSIFIER explicitly.
+_default_classifier="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")" 2>/dev/null)/prompt-classify"
+CLASSIFIER="${FD_CLASSIFIER:-$_default_classifier}"
+# Don't actually use it if it doesn't exist (prototype test mode falls back to stub).
+[[ ! -x "$CLASSIFIER" ]] && CLASSIFIER=""
+VERBOSE="${FD_VERBOSE:-0}"
+WAKE_PENDING_TTL="${FD_WAKE_PENDING_TTL:-300}"
+
+# Canonical classifier tag allowlist for stable-wake. Only these wake the
+# master from a stable buffer. Bell wake is independent and unconditional.
+CANONICAL_TAGS=(
+  terminal-state-reached
+  force-push-prompt
+  merge-now
+  cleanup-prompt
+  rebase-multi-choice
+  generic-multi-choice
+  bash-permission-prompt
+  modal-prompt
+  bot-review-wait-stuck
+  audit-relation-prompt
+  merge-ready-but-unknown
+  force-merge-confirm
+  external-fix-suggestions
+  cycle-fix-suggestions
+  descope-related
+)
+
+is_canonical_tag() {
+  local t="$1"
+  for c in "${CANONICAL_TAGS[@]}"; do
+    [[ "$c" == "$t" ]] && return 0
+  done
+  return 1
+}
+
+usage() { cat >&2 <<EOF
+Usage:
+  flightdeck-daemon start  --session <S> --master <pane> --inner <p1>[,<p2>...]
+  flightdeck-daemon stop   --session <S>
+  flightdeck-daemon status --session <S>
+  flightdeck-daemon events --session <S>     # drain events JSONL (turn-start)
+  flightdeck-daemon ack    --session <S>     # drain + clear pending (turn-end)
+EOF
+exit 2; }
+
+ACTION="${1:-}"; [[ -z "$ACTION" ]] && usage; shift
+
+SESSION_NAME="" MASTER_TARGET="" INNER_TARGETS=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --session) SESSION_NAME="$2"; shift 2 ;;
+    --master)  MASTER_TARGET="$2"; shift 2 ;;
+    --inner)   INNER_TARGETS="$2"; shift 2 ;;
+    *) echo "unknown arg: $1" >&2; usage ;;
+  esac
+done
+
+[[ -z "$SESSION_NAME" ]] && { echo "--session required" >&2; usage; }
+
+# Dependency preflight runs BEFORE session resolution so missing tmux fails
+# with a clean error instead of "session not found".
+_check_deps_inline() {
+  local missing=()
+  local cmd
+  for cmd in tmux jq flock awk sha256sum; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    echo "Error: missing required commands: ${missing[*]}" >&2
+    exit 2
+  fi
+}
+_check_deps_inline
+
+# Resolve session_id (stable across rename) for state-file keying.
+resolve_session_id() {
+  tmux display-message -p -t "$SESSION_NAME" '#{session_id}' 2>/dev/null || echo ""
+}
+
+# Single helper: tmux session_id "$143" → state-file key "s143". Used
+# everywhere we need to derive a key from an id (avoids drift between sed
+# and parameter-expansion paths).
+session_key_from_id() {
+  local id="$1"
+  [[ -z "$id" ]] && { echo ""; return; }
+  echo "s${id#\$}"
+}
+
+SESSION_ID=$(resolve_session_id)
+if [[ -z "$SESSION_ID" ]]; then
+  # For stop/status the daemon may be running for a session that's already
+  # gone — fall back to a name-keyed lookup so cleanup works.
+  SESSION_KEY="$SESSION_NAME"
+else
+  SESSION_KEY=$(session_key_from_id "$SESSION_ID")
+fi
+
+PID_FILE="$STATE_DIR/fd-daemon-${SESSION_KEY}.pid"
+PID_LOCK="$STATE_DIR/fd-daemon-${SESSION_KEY}.lock"
+LOG="$STATE_DIR/fd-daemon-${SESSION_KEY}.log"
+BUSY_FILE="$STATE_DIR/fd-master-${SESSION_KEY}.busy"
+WAKE_PENDING="$STATE_DIR/fd-wake-pending-${SESSION_KEY}"
+EVENTS_FILE="$STATE_DIR/fd-daemon-events-${SESSION_KEY}.jsonl"
+# Session-wide lock guarding wake-pending mutations + events drain. All
+# operations that touch BOTH wake-pending and events file MUST take this
+# lock to prevent post-drain append races. Master's ack action takes it
+# to atomically drain events + clear wake-pending.
+SESSION_LOCK="$STATE_DIR/fd-daemon-${SESSION_KEY}.session-lock"
+
+log()  { printf '%s [%s] %s\n' "$(date -Iseconds)" "$1" "$2" >> "$LOG"; }
+warn() { printf '%s [%s] %s\n' "$(date -Iseconds)" "$1" "$2" | tee -a "$LOG" >&2; }
+
+# Startup GC for orphaned daemon state files (sessions that no longer exist).
+# Uses exact-match comparison via case statement (glob-char safe).
+gc_orphan_state() {
+  declare -A live_keys=()
+  local sid
+  while IFS= read -r sid; do
+    [[ -z "$sid" ]] && continue
+    local k; k=$(session_key_from_id "$sid")
+    [[ -n "$k" ]] && live_keys["$k"]=1
+  done < <(tmux list-sessions -F '#{session_id}' 2>/dev/null)
+
+  shopt -s nullglob
+  local old_pid_file key opid f
+  for old_pid_file in "$STATE_DIR"/fd-daemon-s*.pid; do
+    key=$(basename "$old_pid_file" .pid); key="${key#fd-daemon-}"
+    if [[ -z "${live_keys[$key]:-}" ]]; then
+      opid=$(cat "$old_pid_file" 2>/dev/null || echo "")
+      if [[ -z "$opid" ]] || ! kill -0 "$opid" 2>/dev/null; then
+        log gc "removing orphan state for dead session $key (pid=$opid)"
+        # Lock-aware cleanup of all wake/events/draining state.
+        locked_cleanup_for_key "$key"
+        # Direct removal of files with no in-flight contract.
+        # IMPORTANT: never glob `${key}.*` — that would match the
+        # `.session-lock` file itself, splitting future locking onto a new
+        # inode. Enumerate explicitly.
+        rm -f "$STATE_DIR/fd-daemon-${key}.pid" \
+              "$STATE_DIR/fd-daemon-${key}.lock" \
+              "$STATE_DIR/fd-daemon-${key}.log" \
+              "$STATE_DIR/fd-master-${key}.busy"
+      fi
+    fi
+  done
+  shopt -u nullglob
+}
+
+# --- Pane resolution -----------------------------------------------------------
+resolve_pane_id() {
+  local target="$1" pid
+  pid=$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || true
+  [[ -z "$pid" || "$pid" != %* ]] && { echo ""; return 1; }
+  echo "$pid"
+}
+
+pane_target_from_id() {
+  local pid="$1"
+  tmux list-panes -a -F '#{pane_id} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null \
+    | awk -v id="$pid" '$1==id {print $2; exit}'
+}
+
+window_id_for_pane() {
+  local pid="$1"
+  tmux list-panes -a -F '#{pane_id} #{window_id}' 2>/dev/null | awk -v id="$pid" '$1==id {print $2; exit}'
+}
+
+pane_alive() {
+  local pid="$1"
+  tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qx "$pid"
+}
+
+session_alive() {
+  # Use stable session_id rather than name (rename-safe).
+  tmux list-sessions -F '#{session_id}' 2>/dev/null | grep -qx "$SESSION_ID"
+}
+
+# --- Capture strategy (per harness) -------------------------------------------
+capture_pane() {
+  local target="$1"
+  case "$HARNESS" in
+    opencode)
+      # opencode TUI scrolls rendered buffer above viewport; -S returns stale
+      # middle content. Visible viewport only.
+      tmux capture-pane -t "$target" -p 2>/dev/null
+      ;;
+    *)
+      tmux capture-pane -t "$target" -p -S "-${CAPTURE_LINES}" 2>/dev/null
+      ;;
+  esac
+}
+
+# --- Classifier ----------------------------------------------------------------
+classify_buffer() {
+  local buf="$1"
+  if [[ -n "$CLASSIFIER" && -x "$CLASSIFIER" ]]; then
+    # Real prompt-classify reads stdin directly — no flag needed.
+    printf '%s' "$buf" | "$CLASSIFIER" 2>/dev/null || echo "rendering"
+    return
+  fi
+  # Built-in stub for prototype testing only.
+  if echo "$buf" | grep -qiE 'merged.*please end|terminal.state|please end the session'; then
+    echo "terminal-state-reached"; return
+  fi
+  if echo "$buf" | grep -qiE 'force.?push|--force-with-lease'; then
+    echo "force-push-prompt"; return
+  fi
+  if echo "$buf" | grep -qiE 'merge now|merge.?ready|ready to merge'; then
+    echo "merge-now"; return
+  fi
+  if echo "$buf" | grep -qiE 'cleanup|delete worktree|keep worktree'; then
+    echo "cleanup-prompt"; return
+  fi
+  if echo "$buf" | grep -qiE 'rebase.*conflict|how.*resolve.*conflict'; then
+    echo "rebase-multi-choice"; return
+  fi
+  if echo "$buf" | grep -qE '\[1\][^\n]*\[2\]|\(1\)[^\n]*\(2\)'; then
+    echo "generic-multi-choice"; return
+  fi
+  if echo "$buf" | grep -qiE 'allow.*\?|permission.*to run|approve this command'; then
+    echo "bash-permission-prompt"; return
+  fi
+  echo "rendering"
+}
+
+# --- Busy-lock (PID-only recovery) ---------------------------------------------
+# Reads the busy lock JSON in one jq call. Returns 0 if master is busy and
+# the lock is well-formed and matches our master pane id. Returns 1 on:
+#   - no busy file
+#   - JSON malformed
+#   - missing required fields (pid, master_pane_id)
+#   - non-numeric pid
+#   - master_pane_id mismatch
+#   - PID is dead
+# NEVER removes BUSY_FILE in the hot path (TOCTOU-safe). Master may be
+# mid-write of a fresh lock; removing here could clobber a live lock.
+# Returns 1 ("not busy") for any unrecoverable condition; cleanup happens
+# at startup GC for orphaned/stale leftovers.
+is_master_busy() {
+  local master_id="$1"
+  [[ ! -f "$BUSY_FILE" ]] && return 1
+
+  local fields
+  fields=$(jq -r '[(.pid // ""|tostring), (.master_pane_id // "")] | @tsv' "$BUSY_FILE" 2>/dev/null) || {
+    return 1  # malformed JSON
+  }
+  local lock_pid lock_pane
+  lock_pid=$(echo "$fields" | awk -F'\t' '{print $1}')
+  lock_pane=$(echo "$fields" | awk -F'\t' '{print $2}')
+
+  # Required fields.
+  [[ -z "$lock_pid" || -z "$lock_pane" ]] && return 1
+
+  # Numeric pid check (reject pid=0; valid PIDs start at 1).
+  [[ ! "$lock_pid" =~ ^[1-9][0-9]*$ ]] && return 1
+
+  # Pane match.
+  [[ "$lock_pane" != "$master_id" ]] && return 1
+
+  # PID liveness. NEVER remove BUSY_FILE here — TOCTOU-safe: a fresh master
+  # could `mv` a new lock between our read and `rm`, and we'd delete the live
+  # lock. Master will overwrite on next turn (atomic temp+mv); GC cleans
+  # truly orphaned files at startup.
+  if ! kill -0 "$lock_pid" 2>/dev/null; then
+    return 1
+  fi
+
+  return 0
+}
+
+# --- Wake-pending lifecycle ----------------------------------------------------
+# Stale-recovery: clear if master is provably gone (busy lock invalid AND
+# pending exceeds TTL). On stale-clear, REVERT all state for in-flight
+# entries so daemon re-wakes instead of going silent on master crash.
+# Reverts:
+#   - NOTIFIED_HASH[$pane]      (so stable wake re-fires on same hash)
+#   - LAST_EVENT_KEY[$pane|$hash|$tag]  (so event re-appends on next wake)
+#   - LAST_BELL_HASH[$pane]     (only if entry was bell-triggered)
+clear_stale_wake_pending() {
+  local master_id="$1"
+  local -n notified_ref="$2"
+  local -n event_key_ref="$3"
+  local -n bell_hash_ref="$4"
+
+  # All WAKE_PENDING reads + mutations under SESSION_LOCK (round-8 fix).
+  exec 206>"$SESSION_LOCK"
+  flock 206
+
+  if [[ ! -f "$WAKE_PENDING" ]]; then
+    exec 206>&-
+    return
+  fi
+
+  local delivered age
+  delivered=$(jq -r '.delivered_at_epoch // 0' "$WAKE_PENDING" 2>/dev/null || echo 0)
+  [[ "$delivered" =~ ^[0-9]+$ ]] || delivered=0
+  age=$(( $(date +%s) - delivered ))
+  (( age < 0 )) && age=0
+
+  if is_master_busy "$master_id"; then
+    exec 206>&-
+    return
+  fi
+  if (( age <= WAKE_PENDING_TTL )); then
+    exec 206>&-
+    return
+  fi
+
+  local in_flight
+  in_flight=$(jq -r '.in_flight[]? | "\(.pane_id)\t\(.hash)\t\(.tag)\t\(.is_bell // false)"' "$WAKE_PENDING" 2>/dev/null || echo "")
+  while IFS=$'\t' read -r p h t is_bell; do
+    [[ -z "$p" ]] && continue
+    if [[ "${notified_ref[$p]:-}" == "$h" ]]; then
+      unset 'notified_ref[$p]'
+    fi
+    local ek="${p}|${h}|${t}"
+    if [[ -n "${event_key_ref[$ek]:-}" ]]; then
+      unset 'event_key_ref[$ek]'
+    fi
+    if [[ "$is_bell" == "true" ]] && [[ "${bell_hash_ref[$p]:-}" == "$h" ]]; then
+      unset 'bell_hash_ref[$p]'
+    fi
+    log wake-pending-revert "reverted state for $p hash=$h tag=$t bell=$is_bell"
+  done <<< "$in_flight"
+
+  log wake-pending-stale "age=${age}s > TTL=${WAKE_PENDING_TTL}s, no busy lock; clearing"
+  rm -f "$WAKE_PENDING"
+  exec 206>&-
+}
+
+# --- Wake delivery -------------------------------------------------------------
+# wake_master takes master_id, joined reason string, and an in-flight JSON
+# array of {pane_id, hash} entries. Records the in-flight list in
+# WAKE_PENDING so stale-recovery can revert NOTIFIED_HASH on master crash.
+wake_master() {
+  local master_id="$1" combined="$2" in_flight_json="$3"
+
+  # All WAKE_PENDING mutations under SESSION_LOCK (round-8 fix).
+  exec 204>"$SESSION_LOCK"
+  flock 204
+
+  if [[ -f "$WAKE_PENDING" ]]; then
+    log skip-wake "wake-pending already in flight"
+    exec 204>&-
+    return 1
+  fi
+  if is_master_busy "$master_id"; then
+    log skip-wake "master busy ($combined)"
+    exec 204>&-
+    return 1
+  fi
+  local target
+  target=$(pane_target_from_id "$master_id")
+  if [[ -z "$target" ]]; then
+    log master-gone "master pane $master_id no longer resolvable"
+    exec 204>&-
+    return 1
+  fi
+
+  # Pre-mark pending atomically via temp+mv. Master clears at turn-end via ack.
+  local now_iso now_epoch tmp_pending
+  now_iso=$(date -Iseconds)
+  now_epoch=$(date +%s)
+  tmp_pending="${WAKE_PENDING}.tmp.$$"
+  if ! jq -nc --arg ts "$now_iso" \
+        --argjson epoch "$now_epoch" \
+        --arg mid "$master_id" \
+        --argjson dpid $$ \
+        --argjson inflight "$in_flight_json" \
+        '{delivered_at:$ts, delivered_at_epoch:$epoch, master_pane_id:$mid, daemon_pid:$dpid, in_flight:$inflight}' \
+    > "$tmp_pending"; then
+    log wake-fail "wake-pending write failed"
+    rm -f "$tmp_pending"
+    exec 204>&-
+    return 1
+  fi
+  mv "$tmp_pending" "$WAKE_PENDING"
+  exec 204>&-
+
+  # Wake delivery happens AFTER releasing SESSION_LOCK to avoid blocking
+  # daemon's append paths during tmux IO. If delivery fails, we re-take the
+  # lock to clean up wake-pending atomically.
+  local buffer_name="fd-wake-${SESSION_KEY}"
+  if ! printf '%s' '/flightdeck watch --from-daemon' | tmux load-buffer -b "$buffer_name" -; then
+    log wake-fail "load-buffer failed"
+    locked_rm_wake_pending
+    return 1
+  fi
+  if ! tmux paste-buffer -p -t "$target" -b "$buffer_name" -d 2>/dev/null; then
+    log wake-fail "paste-buffer failed"
+    locked_rm_wake_pending
+    return 1
+  fi
+  if ! tmux send-keys -t "$target" Enter 2>/dev/null; then
+    log wake-fail "send-keys Enter failed"
+    locked_rm_wake_pending
+    return 1
+  fi
+  log wake "master=$master_id reasons=$combined"
+  return 0
+}
+
+# Helper to remove WAKE_PENDING under SESSION_LOCK.
+locked_rm_wake_pending() {
+  exec 205>"$SESSION_LOCK"
+  flock 205
+  rm -f "$WAKE_PENDING"
+  exec 205>&-
+}
+
+# Helper for lifecycle cleanup of all per-session wake/event state.
+# --nonblock: skip if lock can't be acquired immediately (used in signal traps
+# to avoid self-deadlock if the trap fires while we already hold the lock).
+# Subshell-test for exec to avoid permanent stderr redirection.
+locked_state_cleanup() {
+  local nonblock=""
+  [[ "${1:-}" == "--nonblock" ]] && nonblock="-n"
+
+  if ! ( exec 207>"$SESSION_LOCK" ) 2>/dev/null; then
+    return 0
+  fi
+  exec 207>"$SESSION_LOCK"
+  if ! flock $nonblock 207; then
+    exec 207>&-
+    return 0
+  fi
+  rm -f "$WAKE_PENDING" "$EVENTS_FILE"
+  exec 207>&-
+}
+
+# Lifecycle cleanup for an arbitrary session key (used by gc_orphan_state).
+# Takes that session's own SESSION_LOCK non-blocking; safe even if a
+# concurrent daemon is starting for the same key (very unlikely path).
+# Also removes any stranded `.draining.*` snapshots under the same lock.
+# Note: subshell-test for exec to avoid permanent stderr redirection.
+locked_cleanup_for_key() {
+  local key="$1"
+  local lock="$STATE_DIR/fd-daemon-${key}.session-lock"
+  local wp="$STATE_DIR/fd-wake-pending-${key}"
+  local ef="$STATE_DIR/fd-daemon-events-${key}.jsonl"
+
+  if ! ( exec 208>"$lock" ) 2>/dev/null; then
+    # Lock file unmakeable; best-effort direct rm.
+    rm -f "$wp" "$ef" "$ef".draining.*
+    return
+  fi
+  exec 208>"$lock"
+  if flock -n 208; then
+    rm -f "$wp" "$ef"
+    shopt -s nullglob
+    local f
+    for f in "$ef".draining.*; do
+      rm -f "$f"
+    done
+    shopt -u nullglob
+  fi
+  exec 208>&-
+}
+
+# --- Events JSONL with dedup ---------------------------------------------------
+# Dedup key: (pane_id, hash, tag) — `reason` and `stable_age_sec` are payload
+# but not part of the key, so longer-stable updates don't bypass dedup.
+declare -A LAST_EVENT_KEY  # pane_id|hash|tag → 1
+
+append_event() {
+  local pane_id="$1" hash="$2" tag="$3" reason="$4" age="${5:-0}" is_bell="${6:-false}"
+  local key="${pane_id}|${hash}|${tag}"
+  if [[ -n "${LAST_EVENT_KEY[$key]:-}" ]]; then
+    return
+  fi
+  LAST_EVENT_KEY[$key]=1
+
+  # Single session-wide lock for all events + wake-pending mutations.
+  exec 202>"$SESSION_LOCK"
+  flock 202
+  jq -nc --arg ts "$(date -Iseconds)" \
+        --arg pid "$pane_id" \
+        --arg hash "$hash" \
+        --arg tag "$tag" \
+        --arg reason "$reason" \
+        --argjson age "$age" \
+        '{ts:$ts, pane_id:$pid, hash:$hash, tag:$tag, reason:$reason, stable_age_sec:$age}' >> "$EVENTS_FILE"
+  # If a wake is already in flight, extend in_flight under the same lock.
+  if [[ -f "$WAKE_PENDING" ]]; then
+    local tmp="${WAKE_PENDING}.tmp.$$"
+    if jq --arg p "$pane_id" --arg h "$hash" --arg t "$tag" --argjson ib "$is_bell" \
+       '.in_flight += [{pane_id:$p, hash:$h, tag:$t, is_bell:$ib}]' \
+       "$WAKE_PENDING" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$WAKE_PENDING"
+    else
+      rm -f "$tmp"
+    fi
+  fi
+  exec 202>&-
+}
+
+# Recover any stranded `.draining.<pid>` snapshots from prior killed drains.
+# If owning PID is dead (or 0/missing), fold the file into our drain output.
+recover_stranded_drains() {
+  shopt -s nullglob
+  local f pid_part
+  for f in "${EVENTS_FILE}".draining.*; do
+    pid_part="${f##*.draining.}"
+    if [[ ! "$pid_part" =~ ^[0-9]+$ ]]; then
+      cat "$f"
+      rm -f "$f"
+      continue
+    fi
+    if ! kill -0 "$pid_part" 2>/dev/null; then
+      cat "$f"
+      rm -f "$f"
+    fi
+  done
+  shopt -u nullglob
+}
+
+# Atomic events drain. Locked against append_event via SESSION_LOCK. Does
+# NOT clear wake-pending — use `ack` for that. `events` is for turn-start
+# (drain hint without ack); `ack` is for turn-end (drain + clear pending).
+drain_events() {
+  exec 201>"$SESSION_LOCK"
+  flock 201
+  recover_stranded_drains
+  if [[ -f "$EVENTS_FILE" ]]; then
+    local snap="${EVENTS_FILE}.draining.$$"
+    if mv "$EVENTS_FILE" "$snap" 2>/dev/null; then
+      cat "$snap"
+      rm -f "$snap"
+    fi
+  fi
+  exec 201>&-
+}
+
+# Atomic ack: drains events AND clears wake-pending under the SAME lock so
+# master's turn-end is race-free with daemon's append_event/extend_in_flight.
+# This is the contract master MUST use to clear wake-pending — bare `rm`
+# leaves a window where daemon could extend in_flight after master drained
+# but before master cleared, orphaning an event.
+ack_and_drain() {
+  exec 201>"$SESSION_LOCK"
+  flock 201
+  recover_stranded_drains
+  if [[ -f "$EVENTS_FILE" ]]; then
+    local snap="${EVENTS_FILE}.draining.$$"
+    if mv "$EVENTS_FILE" "$snap" 2>/dev/null; then
+      cat "$snap"
+      rm -f "$snap"
+    fi
+  fi
+  rm -f "$WAKE_PENDING"
+  exec 201>&-
+}
+
+# --- Bell clear (stable window-id targeting) -----------------------------------
+clear_bell_for_window() {
+  local win_id="$1"
+  # Capture currently-focused window-id to restore after select cycle.
+  local orig_wid
+  orig_wid=$(tmux display-message -p -t "$SESSION_ID" '#{window_id}' 2>/dev/null) || return
+  [[ -z "$orig_wid" ]] && return
+  # Atomic chained select.
+  tmux select-window -t "$win_id" \; select-window -t "$orig_wid" 2>/dev/null || true
+}
+
+# --- Main loop -----------------------------------------------------------------
+run_loop() {
+  declare -A LAST_HASH HASH_SINCE NOTIFIED_HASH LAST_BELL_HASH LAST_GONE_LOG
+  IFS=',' read -r -a INNER_TARGET_ARR <<< "$INNER_TARGETS"
+
+  local master_id
+  master_id=$(resolve_pane_id "$MASTER_TARGET") || {
+    echo "Error: cannot resolve master pane '$MASTER_TARGET'" >&2; exit 2; }
+
+  declare -a INNER_IDS=()
+  declare -A SEEN_INNER=()
+  for t in "${INNER_TARGET_ARR[@]}"; do
+    local id
+    id=$(resolve_pane_id "$t") || { echo "Error: cannot resolve inner pane '$t'" >&2; exit 2; }
+    if [[ "$id" == "$master_id" ]]; then
+      echo "Error: inner pane '$t' resolves to master pane id $master_id (feedback loop)" >&2
+      exit 2
+    fi
+    if [[ -n "${SEEN_INNER[$id]:-}" ]]; then
+      echo "Error: duplicate inner pane id $id (target '$t' resolves to already-tracked pane)" >&2
+      exit 2
+    fi
+    SEEN_INNER[$id]=1
+    INNER_IDS+=("$id")
+  done
+
+  log start "pid=$$ session_id=$SESSION_ID name=$SESSION_NAME master_id=$master_id inner_ids=${INNER_IDS[*]}"
+  # Separate traps:
+  #   - EXIT: cleanup only (called on natural exit too).
+  #   - INT/TERM: cleanup + explicit exit (so SIGTERM from `stop` actually
+  #     terminates the daemon, not just runs handler then continues).
+  # Both use non-blocking SESSION_LOCK to avoid self-deadlock if signal fires
+  # while we already hold the lock.
+  _on_exit() { rm -f "$PID_FILE"; locked_state_cleanup --nonblock; log stop "pid=$$"; }
+  trap '_on_exit' EXIT
+  trap '_on_exit; exit 0' INT TERM
+
+  while true; do
+    # Self-exit on session gone.
+    if ! session_alive; then
+      log session-gone "session_id=$SESSION_ID gone; exiting"
+      break
+    fi
+    if ! pane_alive "$master_id"; then
+      log master-gone "master $master_id gone; exiting"
+      break
+    fi
+
+    clear_stale_wake_pending "$master_id" NOTIFIED_HASH LAST_EVENT_KEY LAST_BELL_HASH
+
+    local now; now=$(date +%s)
+    declare -a tick_reasons=()
+    declare -a tick_pending_ids=()
+    declare -a tick_pending_hashes=()
+    declare -a tick_pending_tags=()    # parallel: tag for each pending entry
+    declare -a tick_pending_is_bell=()  # subset of tick_pending_ids that came from bell branch
+    declare -a tick_bell_wins=()
+
+    for inner_id in "${INNER_IDS[@]}"; do
+      if ! pane_alive "$inner_id"; then
+        local last_gone="${LAST_GONE_LOG[$inner_id]:-0}"
+        if (( now - last_gone > 30 )); then
+          log pane-gone "$inner_id no longer exists; skipping"
+          LAST_GONE_LOG[$inner_id]="$now"
+        fi
+        continue
+      fi
+
+      local target
+      target=$(pane_target_from_id "$inner_id")
+      [[ -z "$target" ]] && continue
+      local win_id
+      win_id=$(window_id_for_pane "$inner_id")
+      local bell
+      bell=$(tmux display-message -p -t "$target" '#{window_bell_flag}' 2>/dev/null || echo 0)
+      local buf
+      buf=$(capture_pane "$target" || echo "")
+      local hash
+      hash=$(printf '%s' "$buf" | sha256sum | cut -d' ' -f1 | head -c 12)
+
+      local prev_hash="${LAST_HASH[$inner_id]:-}"
+      local prev_since="${HASH_SINCE[$inner_id]:-0}"
+
+      # Bell — wake unconditionally (user trusts orchestrator bells).
+      if (( bell == 1 )) && [[ "${LAST_BELL_HASH[$inner_id]:-}" != "$hash" ]]; then
+        local tag; tag=$(classify_buffer "$buf")
+        tick_reasons+=("bell:$inner_id:$tag")
+        tick_pending_ids+=("$inner_id")
+        tick_pending_hashes+=("$hash")
+        tick_pending_tags+=("$tag")
+        tick_pending_is_bell+=("$inner_id")
+        tick_bell_wins+=("$win_id")
+        append_event "$inner_id" "$hash" "$tag" "bell" 0 true
+        LAST_HASH[$inner_id]="$hash"
+        HASH_SINCE[$inner_id]="$now"
+        continue
+      fi
+
+      if [[ "$hash" != "$prev_hash" ]]; then
+        LAST_HASH[$inner_id]="$hash"
+        HASH_SINCE[$inner_id]="$now"
+        (( VERBOSE == 1 )) && log hash-change "$inner_id $prev_hash -> $hash"
+        continue
+      fi
+
+      local age=$(( now - prev_since ))
+      if (( age >= STABILITY_SEC )) && [[ "${NOTIFIED_HASH[$inner_id]:-}" != "$hash" ]]; then
+        local tag; tag=$(classify_buffer "$buf")
+        (( VERBOSE == 1 )) && log classify "$inner_id age=${age}s tag=$tag"
+        # Strict canonical-tag allowlist for stable wakes.
+        if is_canonical_tag "$tag"; then
+          tick_reasons+=("stable:$inner_id:$tag(${age}s)")
+          tick_pending_ids+=("$inner_id")
+          tick_pending_hashes+=("$hash")
+          tick_pending_tags+=("$tag")
+          # Dedup key uses (pane,hash,tag); age stays as separate JSON field.
+          append_event "$inner_id" "$hash" "$tag" "stable" "$age" false
+        else
+          # Non-canonical → don't wake, but mark notified so we don't
+          # re-classify the same hash repeatedly.
+          NOTIFIED_HASH[$inner_id]="$hash"
+        fi
+      fi
+    done
+
+    if (( ${#tick_reasons[@]} > 0 )); then
+      local combined; combined=$(IFS='|'; echo "${tick_reasons[*]}")
+
+      # Build in-flight JSON array (records pane_id, hash, tag, is_bell so
+      # stale-recovery can revert ALL state on master crash, not just NOTIFIED).
+      local in_flight_json
+      in_flight_json=$(
+        for i in "${!tick_pending_ids[@]}"; do
+          local pid="${tick_pending_ids[$i]}"
+          local hash="${tick_pending_hashes[$i]}"
+          local tag="${tick_pending_tags[$i]}"
+          local is_bell="false"
+          for bp in "${tick_pending_is_bell[@]}"; do
+            [[ "$bp" == "$pid" ]] && { is_bell="true"; break; }
+          done
+          jq -nc --arg p "$pid" --arg h "$hash" --arg t "$tag" --argjson ib "$is_bell" \
+            '{pane_id:$p, hash:$h, tag:$t, is_bell:$ib}'
+        done | jq -sc '.'
+      )
+
+      if wake_master "$master_id" "$combined" "$in_flight_json"; then
+        for i in "${!tick_pending_ids[@]}"; do
+          NOTIFIED_HASH[${tick_pending_ids[$i]}]="${tick_pending_hashes[$i]}"
+        done
+        # LAST_BELL_HASH update: only for entries flagged as bell branch.
+        for bell_pane in "${tick_pending_is_bell[@]}"; do
+          # Find matching hash from tick_pending arrays.
+          for i in "${!tick_pending_ids[@]}"; do
+            if [[ "${tick_pending_ids[$i]}" == "$bell_pane" ]]; then
+              LAST_BELL_HASH[$bell_pane]="${tick_pending_hashes[$i]}"
+              break
+            fi
+          done
+        done
+        for w in "${tick_bell_wins[@]}"; do
+          [[ -n "$w" ]] && clear_bell_for_window "$w"
+        done
+      fi
+    fi
+
+    sleep "$POLL_SEC"
+  done
+}
+
+# --- Action dispatch -----------------------------------------------------------
+case "$ACTION" in
+  start)
+    [[ -z "$MASTER_TARGET" || -z "$INNER_TARGETS" ]] && { echo "start needs --master and --inner" >&2; usage; }
+    [[ -z "$SESSION_ID" ]] && { echo "Error: tmux session '$SESSION_NAME' not found" >&2; exit 2; }
+
+    exec 200>"$PID_LOCK"
+    if ! flock -n 200; then
+      echo "daemon already running for session=$SESSION_NAME (lock held)" >&2
+      exit 1
+    fi
+
+    if [[ -f "$PID_FILE" ]]; then
+      old=$(cat "$PID_FILE" 2>/dev/null || echo "")
+      if [[ -n "$old" ]] && kill -0 "$old" 2>/dev/null; then
+        echo "PID file claims pid=$old which is alive but lock free — race?" >&2
+        exit 1
+      fi
+      log refuse-stale "removing stale pid file pid=$old"
+    fi
+
+    # Startup GC: sweep state files for tmux sessions that no longer exist.
+    gc_orphan_state
+
+
+    echo $$ > "$PID_FILE"
+    # Fresh start: clear any stale wake/event state under SESSION_LOCK.
+    locked_state_cleanup
+    run_loop
+    ;;
+
+  stop)
+    [[ ! -f "$PID_FILE" ]] && { echo "no daemon for session=$SESSION_NAME" >&2; exit 1; }
+    pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
+
+    # Fail-closed: only kill when we can positively prove the lock is held by
+    # another process. Validate PID format → check lock state → kill only if
+    # the lock is currently held (daemon is actually running).
+    if [[ ! "$pid" =~ ^[1-9][0-9]*$ ]]; then
+      echo "stale PID file for session=$SESSION_NAME (content=$pid); removing without kill" >&2
+      rm -f "$PID_FILE"
+      locked_state_cleanup
+      exit 0
+    fi
+
+    # Lock open + flock test. We open the lock RW and try non-blocking flock.
+    # Outcomes:
+    #   - file missing OR open fails → ambiguous → REFUSE kill
+    #   - flock succeeds → no holder → stale PID file → don't kill
+    #   - flock fails (held) → daemon is running → safe to kill
+    if [[ ! -f "$PID_LOCK" ]]; then
+      echo "PID lock missing for session=$SESSION_NAME; refusing to kill (ambiguous state)" >&2
+      exit 1
+    fi
+    # Open lock file in subshell to test holder without polluting parent stderr.
+    # Subshell inherits FDs but redirections don't persist.
+    if ( exec 199<>"$PID_LOCK" ) 2>/dev/null; then
+      # Re-open in parent shell now that we know it works.
+      exec 199<>"$PID_LOCK"
+    else
+      echo "cannot open PID lock for session=$SESSION_NAME; refusing to kill" >&2
+      exit 1
+    fi
+    if flock -n 199; then
+      flock -u 199
+      exec 199<&-
+      echo "stale PID file for session=$SESSION_NAME (lock free); removing without kill" >&2
+      rm -f "$PID_FILE"
+      locked_state_cleanup
+      exit 0
+    fi
+    exec 199<&-
+    if kill -0 "$pid" 2>/dev/null; then
+      kill "$pid"
+      sleep 0.5
+      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" || true
+      log stop-via-cli "pid=$pid"
+    fi
+    rm -f "$PID_FILE"
+    locked_state_cleanup
+    echo "stopped daemon pid=$pid"
+    ;;
+
+  status)
+    if [[ -f "$PID_FILE" ]]; then
+      pid=$(cat "$PID_FILE")
+      if kill -0 "$pid" 2>/dev/null; then
+        echo "session=$SESSION_NAME daemon=$pid running session_id=$SESSION_ID"
+        exit 0
+      fi
+      echo "session=$SESSION_NAME pid-file present but pid=$pid dead"
+      exit 2
+    fi
+    echo "session=$SESSION_NAME no daemon"
+    exit 1
+    ;;
+
+  events)
+    drain_events
+    ;;
+
+  ack)
+    ack_and_drain
+    ;;
+
+  *)
+    echo "unknown action: $ACTION" >&2; usage ;;
+esac

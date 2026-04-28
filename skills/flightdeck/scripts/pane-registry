@@ -3,7 +3,7 @@
 #
 # Usage:
 #   pane-registry init <ISSUE> --window <name> --harness <h> --worktree <path> [--pane-index <N>] [--pr <N>]
-#   pane-registry list
+#   pane-registry list [--format json|inner-panes]
 #   pane-registry get <ISSUE>
 #   pane-registry set-state <ISSUE> <state>             # waiting|prompting|submitting|merge-ready|merged|aborted|dead
 #   pane-registry set-substate <ISSUE> <substate>      # tag string from prompt-classify
@@ -88,7 +88,27 @@ case "$ACTION" in
     ;;
 
   list)
-    "$FD_STATE" get '.issues // {} | to_entries | map({issue: .key} + .value)'
+    FORMAT="json"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --format) FORMAT="$2"; shift 2 ;;
+        *) echo "Unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    case "$FORMAT" in
+      json)
+        "$FD_STATE" get '.issues // {} | to_entries | map({issue: .key} + .value)'
+        ;;
+      inner-panes)
+        # Comma-separated list of pane_target strings, suitable for
+        # `flightdeck-daemon start --inner`. Each issue's orchestrator pane.
+        "$FD_STATE" get '.issues // {} | to_entries | map(.value.pane_target) | join(",")'
+        ;;
+      *)
+        echo "Unknown format: $FORMAT (supported: json, inner-panes)" >&2
+        exit 2
+        ;;
+    esac
     ;;
 
   get)

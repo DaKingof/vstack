@@ -1,10 +1,14 @@
 # Workflow: `watch` — Master Loop
 
-Master mode entry point. Polls every spawned issue pane, classifies their prompts, routes to handlers, plans merges, and drives every tracked issue to a terminal state.
+Master mode entry point. Polls every spawned issue pane, classifies their prompts, routes to handlers, plans merges, and drives every tracked issue to a terminal state. Wakes are driven by `flightdeck-daemon` (an external bash poller spawned at session start) — the harness scheduler is no longer load-bearing.
 
-**Inputs**: `[ISSUE_IDS]` — the issue list spawned by flightdeck's `start.md` (auto-passed at handoff). Auto-detect `$TMUX_SESSION` via `tmux display-message -p '#S'`.
+**Inputs**: `[ISSUE_IDS]` — the issue list spawned by flightdeck's `start.md` (auto-passed at handoff). Auto-detect `$TMUX_SESSION` via `tmux display-message -p '#S'` and stable `$SESSION_ID` via `tmux display-message -p '#{session_id}'`.
 
-**Pre-conditions**: `$TMUX` set; flightdeck's `start.md` § 4 just returned from `open-terminal` for one or more issues; `github` and `linear` skills loaded.
+**Pre-conditions**:
+- `$TMUX` set (the SKILL.md mode-switch already gates this — unreachable otherwise).
+- flightdeck's `start.md` § 4 just returned from `open-terminal` for one or more issues, OR a state file already exists for compaction-recovery re-entry.
+- `[ISSUE_IDS]` non-empty OR an existing `tmp/flightdeck-state-<SESSION>.json` file is present.
+- `github` and `linear` skills loaded.
 
 **Post-condition**: master state `terminated: true`, summary file written, control returned to flightdeck's dashboard loop.
 
@@ -12,7 +16,7 @@ Master mode entry point. Polls every spawned issue pane, classifies their prompt
 
 ## § 1: Initialize Master State
 
-1. Resolve session: `SESSION=$(tmux display-message -p '#S')`.
+1. Resolve session: `SESSION=$(tmux display-message -p '#S')`, `SESSION_ID=$(tmux display-message -p '#{session_id}')`.
 2. Init / resume master state:
    ```
    .agents/skills/flightdeck/scripts/flightdeck-state init
@@ -27,12 +31,33 @@ Master mode entry point. Polls every spawned issue pane, classifies their prompt
    - Determine harness from the agent process running in pane 0 (`tmux list-panes -t <session>:<window> -F '#{pane_index} #{pane_current_command}'`).
    - Determine worktree path (passed by `start.md`; cross-check `git worktree list`).
    - Pin the orchestrator-pane index by fingerprinting (see `patterns/tmux-monitoring.md` § Pane-0 rule). If only one pane, index 0.
+   - Resolve the stable `%pane_id` for the orchestrator pane via `tmux display-message -p -t <session>:<window>.<pane> '#{pane_id}'`.
    - Register:
      ```
      .agents/skills/flightdeck/scripts/pane-registry init <ISSUE_ID> \
        --window <window-name> --harness <h> --worktree <path> --pane-index <N>
      ```
-5. If resuming, recompute the conflict graph against the live PR set in case PRs moved during compaction:
+5. **Spawn or attach the daemon**. If no daemon is running for this session, spawn one. Pass the master pane and the comma-separated list of inner orchestrator panes:
+   ```
+   MASTER_PANE="$SESSION:1.<base-pane-index>"  # the pane this watch.md runs in
+   INNER_PANES="$(.agents/skills/flightdeck/scripts/pane-registry list --format inner-panes)"
+   .agents/skills/flightdeck/scripts/flightdeck-daemon start \
+     --session "$SESSION" \
+     --master "$MASTER_PANE" \
+     --inner "$INNER_PANES" &
+   ```
+   The daemon will refuse via flock if already running for this session. Idempotent — safe to call on every `watch` re-entry.
+6. **Atomic master-busy lock** — write `tmp/fd-master-<SESSION_KEY>.busy` via temp+mv:
+   ```
+   .agents/skills/flightdeck/scripts/flightdeck-state master-busy lock
+   ```
+   This signals the daemon that master is mid-turn and prevents wake delivery during processing.
+7. **Drain pending events** for hint-level visibility into which panes are ready:
+   ```
+   PENDING=$(.agents/skills/flightdeck/scripts/flightdeck-daemon events --session "$SESSION_ID")
+   ```
+   `PENDING` is JSONL with `{ts, pane_id, hash, tag, reason, stable_age_sec}` per ready pane. Use as routing hint; § 2 polls every tracked pane regardless.
+8. If resuming, recompute the conflict graph against the live PR set in case PRs moved during compaction:
    ```
    .agents/skills/flightdeck/scripts/pr-conflict-graph <PR1> <PR2> ...
    ```
@@ -103,7 +128,7 @@ When **at least one** issue's state has reached `merge-ready` (the per-issue age
 
 ## § 5: Bell Cleanup
 
-`pane-respond` clears the bell on every successful send via the chained `select-window` idiom. No additional cleanup needed in the loop. If bells are observed on idle (no prompt) windows during § 2, clear them defensively:
+`pane-respond` clears the bell on every successful send via the chained `select-window` idiom. The daemon also clears bells via the same idiom after delivering a wake. No additional cleanup needed in the loop. If bells are observed on idle (no prompt) windows during § 2, clear them defensively:
 
 ```
 .agents/skills/flightdeck/scripts/pane-clear-bell <session>:<window>
@@ -119,24 +144,57 @@ At the end of each poll cycle:
 
 1. Count issues by state. If every tracked issue is in `merged | aborted | dead` AND every issue's `state` is not `prompting` → increment a debounce counter.
 2. If the debounce counter reaches `FLIGHTDECK_DEBOUNCE_CYCLES` (default 2) consecutive cycles → `⤵ workflows/terminate.md → END`.
-3. Otherwise, yield via the harness scheduler and end the turn — the harness wakes you when the delay elapses, at which point this workflow re-enters at § 2. Never use `sleep` (the harness blocks long sleeps, and they burn the prompt cache). See SKILL.md "Skill Rules — Implementation Constraints" rule 6 for the per-harness primitive.
-
-   **Adaptive cadence**: pick `delaySeconds` based on the tightest active state across all tracked issues, not a fixed value:
-
-   | Tightest state | `delaySeconds` | Rationale |
-   |----------------|----------------|-----------|
-   | Any issue `prompting` or `merge-ready` | `60–90` | Inner agent is waiting on master's response; latency directly delays the issue. Stay under 270s to keep prompt cache hot. |
-   | All issues `submitting` (CI running) or sub-agent deliberating with long ETA | `300–600` | Cheap to wait; CI takes minutes. One cache miss buys a much longer wait than a tight cycle would. |
-   | Mix (some `prompting`, some `submitting`) | Pick the tighter | Latency on the prompting one dominates user-visible cost. |
-   | All issues idle / waiting on external (bot review, CI) | `600–1200` | Master has nothing useful to do at the keyboard. |
-
-   `FLIGHTDECK_POLL_INTERVAL` (default 30) sets a floor; never go below it. Don't chain shorter sleeps to bypass the floor.
-
-If `paused_for_user` is set, the loop yields immediately and waits for the user to re-invoke `watch` after addressing the pause.
+3. Otherwise, fall through to § 7 (Status Dashboard) → § 8 (Yield).
 
 ---
 
-## § 7: Compaction Recovery
+## § 7: Status Dashboard
+
+Emit a per-cycle dashboard summarizing the current state of every tracked issue. The user (and any second-party reviewer of the master pane scrollback) reads this to understand what the master agent is doing without inspecting state files. Per SKILL.md "Format Tags Are Literal": fill placeholders, omit empty rows, add nothing else.
+
+For each tracked issue, gather:
+- **Phase** — read from `tmp/workflow-state-<ISSUE>.json` (orchestration's own state). Falls back to flightdeck's `state` field if no orchestration state file exists.
+- **Last prompt** — most recent `decisions_log[-1].prompt_tag` from registry, plus a short prompt-text excerpt (truncated to ~50 chars). `—` if no decisions yet.
+- **Answer** — most recent `decisions_log[-1].answer` (truncated to ~40 chars). `—` if none.
+- **PR** — `registry.<ISSUE>.pr_number`. `—` if not yet opened.
+
+<output_format>
+### ✈️ Flightdeck cycle [N] · [SESSION] · [ISO8601]
+
+| Issue | Phase | Last prompt | Answer | PR |
+|-------|-------|-------------|--------|----|
+| [ISSUE_ID] | [PHASE] | [PROMPT_EXCERPT or —] | [ANSWER_EXCERPT or —] | [#N or —] |
+
+Merge queue: [ISSUE_IDS comma-separated, or —] · Conflicts: [edges or none] · Paused: [issue_id and reason, or —]
+</output_format>
+
+Sections with no rows (no tracked issues) are omitted. Footer line is always emitted.
+
+---
+
+## § 8: Yield
+
+End-of-turn handoff to the daemon:
+
+1. **Atomic ack** — drain any newcomer events that arrived during this turn AND clear `WAKE_PENDING` in one operation:
+   ```
+   FINAL=$(.agents/skills/flightdeck/scripts/flightdeck-daemon ack --session "$SESSION_ID")
+   ```
+   Race-safe: daemon cannot extend in-flight while master holds the session lock through this action. If `FINAL` is non-empty, process the newcomer events (re-poll the named panes, route to handlers as in § 3). Repeat until ack returns empty.
+
+2. **Release master-busy lock** AFTER ack completes:
+   ```
+   .agents/skills/flightdeck/scripts/flightdeck-state master-busy unlock
+   ```
+   Order matters: clearing wake-pending FIRST then releasing busy means the daemon's next tick sees a clean state. Reversing the order leaves a window where daemon could create a new wake before master cleared pending.
+
+3. **End the turn**. The daemon will type `/flightdeck watch --from-daemon<Enter>` into this pane when the next attention-ready event arrives. Do NOT use `sleep` (blocks the turn) and do NOT use `ScheduleWakeup`-equivalent (no longer needed; daemon owns wake). On Claude Code specifically, you MAY arm a defensive `ScheduleWakeup({delaySeconds: 1800})` as a "if daemon is dead, wake me anyway" safety net — but this is optional, not load-bearing.
+
+If `paused_for_user` is set, do NOT release the busy lock or end the turn. Wait for user to re-invoke `watch` after addressing the pause.
+
+---
+
+## § 9: Compaction Recovery
 
 Master state persists on every mutation. On `watch` re-entry after compaction (or an explicit user resume):
 
@@ -144,14 +202,10 @@ Master state persists on every mutation. On `watch` re-entry after compaction (o
 2. Re-fingerprint each registered window's pane 0 (TUIs may have re-laid-out across compaction).
 3. Recompute every issue's `state` from a fresh `pane-poll`. Persisted state is a hint, not truth.
 4. The `unknown_since` timer is preserved across compaction, so the force-merge clock does not reset.
-5. Resume from § 2.
+5. The daemon may have continued running through compaction; § 1 step 5's `flightdeck-daemon start` is idempotent (flock-protected) and is a no-op when the daemon is already alive.
+6. Resume from § 2.
 
 ---
-
-## Skip-If
-
-- `$TMUX` unset → STOP block of `SKILL.md` already exited; this workflow is unreachable.
-- `[ISSUE_IDS]` empty AND no existing state file → log a warning and exit (nothing to watch).
 
 ## Returns
 

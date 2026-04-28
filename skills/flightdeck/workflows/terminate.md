@@ -110,10 +110,11 @@ Emit to `tmp/flightdeck-summary-<SESSION>-<TS>.md` (TS = ISO8601, no colons):
 flightdeck-state set terminated true
 flightdeck-state set terminated_at "\"<ISO8601>\""
 flightdeck-state set summary_path "\"<tmp/flightdeck-summary-<SESSION>-<TS>.md>\""
+flightdeck-daemon stop --session "$SESSION"
 flightdeck-state archive
 ```
 
-`archive` rotates the live state file to `tmp/flightdeck-state-<SESSION>-<terminated_at>.json.archive` so the next session in the same tmux name (e.g. `HT`) starts clean instead of inheriting this session's `issues` map, `merge_queue`, and `terminated` flag. The archive line preserves the full state for post-mortem inspection.
+`flightdeck-daemon stop` terminates the external wake daemon (validates PID + flock holder before killing; refuses on stale PID file). `archive` then rotates the live state file to `tmp/flightdeck-state-<SESSION>-<terminated_at>.json.archive` so the next session in the same tmux name (e.g. `HT`) starts clean instead of inheriting this session's `issues` map, `merge_queue`, and `terminated` flag. The archive line preserves the full state for post-mortem inspection.
 
 ---
 

@@ -211,9 +211,57 @@ case "$ACTION" in
     echo "$archive_path"
     ;;
 
+  master-busy)
+    # Wrapper for the daemon's master-busy lockfile. Master holds this for
+    # the duration of a turn so the daemon defers wake delivery. Atomic
+    # temp+mv on lock so daemon never reads a partial JSON write.
+    [[ ${#ARGS[@]} -lt 1 ]] && { echo "Usage: master-busy <lock|unlock|check> [--master-pane <%N>]" >&2; exit 2; }
+    sub_action="${ARGS[0]}"
+    # Resolve session_id-keyed busy file path (matches daemon's SESSION_KEY).
+    sid=$(tmux display-message -p -t "$SESSION" '#{session_id}' 2>/dev/null || echo "")
+    [[ -z "$sid" ]] && { echo "Error: cannot resolve session_id for $SESSION" >&2; exit 2; }
+    sid_key="s${sid#\$}"
+    busy_file="$STATE_BASE/fd-master-${sid_key}.busy"
+    case "$sub_action" in
+      lock)
+        master_pane=""
+        for ((i=1; i<${#ARGS[@]}; i++)); do
+          if [[ "${ARGS[$i]}" == "--master-pane" ]]; then
+            master_pane="${ARGS[$((i+1))]}"
+            break
+          fi
+        done
+        if [[ -z "$master_pane" ]]; then
+          # Auto-resolve from the current pane this script runs from.
+          master_pane=$(tmux display-message -p '#{pane_id}' 2>/dev/null || echo "")
+        fi
+        [[ -z "$master_pane" ]] && { echo "Error: cannot resolve master pane id" >&2; exit 2; }
+        started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        tmp="${busy_file}.tmp.$$"
+        jq -nc --argjson pid $$ --arg mp "$master_pane" --arg sa "$started_at" \
+          '{pid:$pid, master_pane_id:$mp, started_at:$sa}' > "$tmp"
+        mv "$tmp" "$busy_file"
+        ;;
+      unlock)
+        rm -f "$busy_file"
+        ;;
+      check)
+        if [[ -f "$busy_file" ]]; then
+          cat "$busy_file"
+          exit 0
+        fi
+        exit 1
+        ;;
+      *)
+        echo "Usage: master-busy <lock|unlock|check>" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+
   *)
     echo "Unknown action: $ACTION" >&2
-    echo "Actions: init | get | set | append | increment | archive | path" >&2
+    echo "Actions: init | get | set | append | increment | archive | master-busy | path" >&2
     exit 2
     ;;
 esac
