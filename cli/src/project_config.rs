@@ -158,29 +158,23 @@ impl ProjectConfig {
 
         if needs_guidance {
             if let Some(ref text) = extracted.guidance {
-                let entry = format!("{} = \"\"\n", agent_name);
-                let value = format!("{} = \"{}\"\n", agent_name, text.replace('"', "\\\""));
-                // Try replacing the empty placeholder, else append to section
-                if out.contains(&entry) {
-                    out = out.replace(&entry, &value);
-                } else {
-                    let new_entry = format!("{} = \"{}\"\n", agent_name, text.replace('"', "\\\""));
-                    out = insert_entries_into_section(&out, "[agent-launch-instructions]", &new_entry);
-                }
+                out = upsert_agent_value_in_section(
+                    &out,
+                    "[agent-launch-instructions]",
+                    agent_name,
+                    text,
+                );
             }
         }
 
         if needs_instructions {
             if let Some(ref text) = extracted.instructions {
-                let entry = format!("{} = \"\"\n", agent_name);
-                let value = format!("{} = \"{}\"\n", agent_name, text.replace('"', "\\\""));
-                if out.contains(&entry) {
-                    out = out.replace(&entry, &value);
-                } else {
-                    let new_entry =
-                        format!("{} = \"{}\"\n", agent_name, text.replace('"', "\\\""));
-                    out = insert_entries_into_section(&out, "[agent-additional-instructions]", &new_entry);
-                }
+                out = upsert_agent_value_in_section(
+                    &out,
+                    "[agent-additional-instructions]",
+                    agent_name,
+                    text,
+                );
             }
         }
 
@@ -188,6 +182,70 @@ impl ProjectConfig {
             let _ = std::fs::write(&path, out);
         }
     }
+}
+
+/// Set `<agent_name> = "<text>"` inside `[section_header]`:
+///
+/// - if the section has any line starting with `<agent_name> =` (any value),
+///   replace the FIRST such line and drop any duplicate trailing siblings;
+/// - otherwise append the entry to the section.
+///
+/// This is duplicate-safe even if the file got corrupted by a prior bug —
+/// running it always leaves exactly one `<agent_name> = ...` line in the
+/// section.
+fn upsert_agent_value_in_section(
+    content: &str,
+    section_header: &str,
+    agent_name: &str,
+    text: &str,
+) -> String {
+    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+    let new_line = format!("{} = \"{}\"", agent_name, escaped);
+    let key_prefix = format!("{} =", agent_name);
+    let key_prefix_tight = format!("{}=", agent_name);
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result: Vec<String> = Vec::with_capacity(lines.len());
+    let mut in_section = false;
+    let mut wrote_replacement = false;
+    let mut found_any = false;
+
+    for line in &lines {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with('[') && !trimmed.starts_with("# [") {
+            // Section transition
+            in_section = trimmed == section_header;
+            result.push(line.to_string());
+            continue;
+        }
+
+        if in_section
+            && (trimmed.starts_with(&key_prefix) || trimmed.starts_with(&key_prefix_tight))
+        {
+            // First occurrence: replace; subsequent: drop
+            found_any = true;
+            if !wrote_replacement {
+                result.push(new_line.clone());
+                wrote_replacement = true;
+            }
+            continue;
+        }
+
+        result.push(line.to_string());
+    }
+
+    let mut out = result.join("\n");
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+
+    if !found_any {
+        // Section didn't have an entry yet — append one.
+        let entry = format!("{}\n", new_line);
+        out = insert_entries_into_section(&out, section_header, &entry);
+    }
+    out
 }
 
 /// Write computed agent→skill mappings into the project vstack.toml.
@@ -767,20 +825,57 @@ fn insert_entries_into_section(content: &str, section_header: &str, entries: &st
 }
 
 fn strip_skills_reference(content: &str) -> String {
-    // Remove the skills reference block — try both old and new header formats.
-    for marker in [
+    // The reference block is always pure comments: a `# ── Installed skills...`
+    // header followed by `#   <name>` lines. Strip the contiguous comment run
+    // (and any trailing blank lines that belonged to it) starting at the
+    // header. Anything after that run — including TOML the user added below —
+    // is preserved verbatim.
+    let markers = [
         "# ── Installed skills (reference)",
         "# Installed skills (for reference",
-    ] {
-        if let Some(pos) = content.find(marker) {
-            let after = &content[pos..];
-            let all_comments = after
-                .lines()
-                .all(|line| line.starts_with('#') || line.trim().is_empty());
-            if all_comments {
-                return content[..pos].to_string();
+    ];
+
+    for marker in markers {
+        let Some(header_byte) = content.find(marker) else {
+            continue;
+        };
+
+        // Anchor strip start at the start of the header line, including any
+        // blank lines that immediately precede it (those typically belong to
+        // the section gap our writer emits).
+        let mut start = header_byte;
+        let prefix = &content[..start];
+        let trimmed_prefix = prefix.trim_end_matches([' ', '\t']);
+        let consumed = prefix.len() - trimmed_prefix.len();
+        start = start.saturating_sub(consumed);
+        // Pull in the leading newlines too (one per `\n`).
+        while start > 0 && content.as_bytes()[start - 1] == b'\n' {
+            start -= 1;
+        }
+
+        // Walk forward consuming the contiguous comment block.
+        let mut cursor = header_byte;
+        loop {
+            let line_end = content[cursor..]
+                .find('\n')
+                .map(|i| cursor + i + 1)
+                .unwrap_or(content.len());
+            let line = &content[cursor..line_end];
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('#') || line.trim().is_empty() {
+                cursor = line_end;
+                if cursor >= content.len() {
+                    break;
+                }
+            } else {
+                break;
             }
         }
+
+        let mut out = String::with_capacity(content.len());
+        out.push_str(&content[..start]);
+        out.push_str(&content[cursor..]);
+        return out;
     }
     content.to_string()
 }
@@ -943,6 +1038,163 @@ rust = "Always use thiserror for errors."
         assert!(!after.contains("── New agents"));
         // Content should be essentially the same (skills ref regenerated but identical)
         assert_eq!(before.trim(), after.trim());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn upsert_agent_value_replaces_empty_placeholder() {
+        let toml = "[agent-launch-instructions]\nrust = \"\"\ngeneralist = \"\"\n";
+        let out = upsert_agent_value_in_section(
+            toml,
+            "[agent-launch-instructions]",
+            "rust",
+            "Pick the highest-priority backend task.",
+        );
+        assert!(out.contains("rust = \"Pick the highest-priority backend task.\""));
+        assert!(out.contains("generalist = \"\""));
+        // Exactly one rust line
+        assert_eq!(
+            out.lines().filter(|l| l.starts_with("rust = ")).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn upsert_agent_value_collapses_duplicates() {
+        // Simulate corruption: section has the same key 3 times
+        let toml = "[agent-launch-instructions]\n\
+rust = \"first\"\n\
+rust = \"second\"\n\
+rust = \"third\"\n\
+generalist = \"\"\n";
+        let out = upsert_agent_value_in_section(
+            toml,
+            "[agent-launch-instructions]",
+            "rust",
+            "canonical",
+        );
+        // Duplicates collapsed to a single line with the new value
+        let rust_lines: Vec<&str> = out.lines().filter(|l| l.starts_with("rust = ")).collect();
+        assert_eq!(
+            rust_lines.len(),
+            1,
+            "expected a single rust line, got {rust_lines:?}"
+        );
+        assert_eq!(rust_lines[0], "rust = \"canonical\"");
+        // Other agent untouched
+        assert!(out.contains("generalist = \"\""));
+    }
+
+    #[test]
+    fn upsert_agent_value_only_touches_target_section() {
+        let toml = "[agent-launch-instructions]\nrust = \"\"\n\n[agent-additional-instructions]\nrust = \"DO NOT TOUCH\"\n";
+        let out = upsert_agent_value_in_section(
+            toml,
+            "[agent-launch-instructions]",
+            "rust",
+            "launch text",
+        );
+        assert!(out.contains("[agent-launch-instructions]\nrust = \"launch text\""));
+        assert!(
+            out.contains("[agent-additional-instructions]\nrust = \"DO NOT TOUCH\""),
+            "additional-instructions section corrupted: {out}"
+        );
+    }
+
+    #[test]
+    fn upsert_agent_value_appends_when_missing() {
+        let toml = "[agent-launch-instructions]\ngeneralist = \"\"\n";
+        let out = upsert_agent_value_in_section(
+            toml,
+            "[agent-launch-instructions]",
+            "rust",
+            "new launch",
+        );
+        assert!(out.contains("rust = \"new launch\""));
+    }
+
+    #[test]
+    fn strip_skills_reference_handles_trailing_active_toml() {
+        // Simulates a vstack.toml where the user appended a real `[[custom-hooks]]`
+        // block AFTER the reference block. The previous logic refused to strip
+        // (because the tail was not pure comments), causing each refresh to
+        // append a fresh duplicate reference block. The fix strips the
+        // contiguous comment run only, leaving any later TOML intact.
+        let content = "[agent-skills]\nrust = []\n\n\
+# ── Installed skills (reference) ─────────────────────\n\
+#   rust-arch\n\
+#   rust-async\n\
+\n\
+[[custom-hooks]]\n\
+event = \"PreToolUse\"\n\
+command = \"./scripts/x.sh\"\n";
+
+        let stripped = strip_skills_reference(content);
+        assert!(
+            !stripped.contains("Installed skills (reference)"),
+            "reference block should be gone, got: {stripped}"
+        );
+        assert!(
+            stripped.contains("[[custom-hooks]]"),
+            "user-added TOML should be preserved, got: {stripped}"
+        );
+        assert!(
+            stripped.contains("event = \"PreToolUse\""),
+            "user-added TOML body should be preserved, got: {stripped}"
+        );
+    }
+
+    #[test]
+    fn update_project_config_idempotent_with_trailing_active_toml() {
+        // Even with active TOML below the reference block, repeated refreshes
+        // must not grow the file (no duplicate reference blocks).
+        let dir = std::env::temp_dir().join(format!(
+            "vstack_test_idempotent_refresh_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("vstack.toml");
+
+        create_project_config(&path, &["rust".into()], &["rust-arch".into()]);
+        // Manually append an active block AFTER the auto-generated reference
+        let mut current = std::fs::read_to_string(&path).unwrap();
+        current.push_str(
+            "\n\n[[custom-hooks]]\nevent = \"PreToolUse\"\ncommand = \"./scripts/x.sh\"\n",
+        );
+        std::fs::write(&path, &current).unwrap();
+
+        // First update may reorder (moves regenerated reference to end).
+        // The test we care about: subsequent updates are byte-stable.
+        update_project_config(&path, &["rust".into()], &["rust-arch".into()]);
+        let after_first = std::fs::read_to_string(&path).unwrap();
+
+        for _ in 0..3 {
+            update_project_config(&path, &["rust".into()], &["rust-arch".into()]);
+        }
+        let after_n = std::fs::read_to_string(&path).unwrap();
+
+        assert_eq!(
+            after_first, after_n,
+            "file should be byte-stable across repeated refreshes"
+        );
+        // Reference block appears exactly once
+        assert_eq!(
+            after_n.matches("# ── Installed skills (reference)").count(),
+            1,
+            "expected single reference block, got\n{after_n}"
+        );
+        // Custom hooks block preserved
+        assert!(
+            after_n.contains("[[custom-hooks]]"),
+            "custom-hooks block lost: {after_n}"
+        );
+        // Skill listed in reference exactly once
+        assert_eq!(
+            after_n.matches("#   rust-arch").count(),
+            1,
+            "rust-arch should appear in reference exactly once: {after_n}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
