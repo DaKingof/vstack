@@ -1001,12 +1001,40 @@ spawn_oc_subscriber() {
   log oc-subscriber-spawn "pane=$pane_id pid=$sub_pid url=$oc_url session=$session_id"
 }
 
+# Recursively collect descendant PIDs (children, grandchildren, ...)
+# of the given PID. Used by kill_all_oc_subscribers to reap pipeline
+# children (e.g., `tail -F | jq` chains) that bash backgrounded
+# subscribers spawn — those would otherwise orphan and keep daemon-
+# inherited FDs (notably PID_LOCK on FD 200) alive past the daemon's
+# lifetime, blocking restarts.
+collect_descendants() {
+  local pid="$1"
+  local children
+  children=$(pgrep -P "$pid" 2>/dev/null)
+  if [[ -n "$children" ]]; then
+    local c
+    for c in $children; do
+      echo "$c"
+      collect_descendants "$c"
+    done
+  fi
+}
+
 kill_all_oc_subscribers() {
   shopt -s nullglob
-  local f pid
+  local f pid descendants
   for f in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid "$STATE_DIR"/fd-pi-subscriber-*.pid; do
     pid=$(cat "$f" 2>/dev/null || echo "")
     if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
+      # Reap the entire descendant tree (pipeline children) BEFORE
+      # killing the subscriber itself — order matters so we don't
+      # lose track of children when the subscriber dies and its
+      # children get reparented to init.
+      descendants=$(collect_descendants "$pid")
+      if [[ -n "$descendants" ]]; then
+        # shellcheck disable=SC2086
+        kill $descendants 2>/dev/null || true
+      fi
       kill "$pid" 2>/dev/null || true
     fi
     rm -f "$f"
@@ -1609,6 +1637,13 @@ case "$ACTION" in
     for _sub_file in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid "$STATE_DIR"/fd-pi-subscriber-*.pid; do
       _sub_pid=$(cat "$_sub_file" 2>/dev/null || echo "")
       if [[ "$_sub_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$_sub_pid" 2>/dev/null; then
+        # Reap pipeline descendants BEFORE the subscriber itself
+        # (orphan-prevention; see collect_descendants comment).
+        _desc=$(collect_descendants "$_sub_pid")
+        if [[ -n "$_desc" ]]; then
+          # shellcheck disable=SC2086
+          kill $_desc 2>/dev/null || true
+        fi
         kill "$_sub_pid" 2>/dev/null || true
       fi
       rm -f "$_sub_file"
