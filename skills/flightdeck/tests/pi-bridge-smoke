@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Phase 3 smoke test — pi Session Bridge adapter end-to-end.
+#
+# Verifies: pi-bridge CLI resolution, isolated pi spawn under
+# PI_BRIDGE_DIR override, bridge discovery via list, state shows
+# protocol == pi-session-bridge.v1 + sessionId, commands lists bridge
+# verbs + skill commands, emit + history round-trip.
+#
+# Assertions never use tmux send-keys / capture-pane for content.
+# Tmux is used only to spawn the pi process for visualization.
+#
+# Requires: $TMUX set, /usr/bin/pi, ~/.pi/agent/bin/pi-bridge (or
+# pi-bridge in PATH), jq.
+
+set -euo pipefail
+
+TEST_NAME="pi-bridge-smoke"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPTS="$SKILL_DIR/scripts"
+
+# shellcheck source=../scripts/lib/pi-bridge-paths.sh
+source "$SCRIPTS/lib/pi-bridge-paths.sh"
+
+red()    { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+green()  { printf '\033[32m%s\033[0m\n' "$*"; }
+note()   { printf '  %s\n' "$*"; }
+fail()   { red "FAIL[$TEST_NAME]: $*"; cleanup; exit 1; }
+
+# --- Preflight ---------------------------------------------------------------
+[[ -z "${TMUX:-}" ]] && fail "must run inside a tmux session"
+for cmd in jq sha256sum; do
+  command -v "$cmd" >/dev/null 2>&1 || fail "missing required cmd: $cmd"
+done
+PI_BIN=$(pi_resolve_pi_bin) || fail "pi binary not found"
+note "pi=$PI_BIN ($("$PI_BIN" --version 2>&1 | head -n1))"
+PI_BRIDGE_BIN=$(pi_resolve_bridge_bin) || fail "pi-bridge CLI not found (PATH or ~/.pi/agent/bin/pi-bridge)"
+note "pi-bridge=$PI_BRIDGE_BIN"
+
+# --- Isolation ---------------------------------------------------------------
+TEST_TMPDIR=$(mktemp -d -t fd-pi-smoke-XXXXXX)
+WORKTREE="$TEST_TMPDIR/worktree"; mkdir -p "$WORKTREE"
+ABS_WORKTREE=$(cd "$WORKTREE" && pwd)
+
+# Override PI_BRIDGE_DIR so we don't see/disturb real pi sessions.
+export PI_BRIDGE_DIR="$TEST_TMPDIR/bridge-dir"
+mkdir -p "$PI_BRIDGE_DIR"
+chmod 0700 "$PI_BRIDGE_DIR"
+
+WINDOW_NAME="pi-smoke-$$"
+TEST_WINDOW=""
+PI_PID=""
+
+cleanup() {
+  if [[ -n "$TEST_WINDOW" ]]; then
+    tmux kill-window -t "$TEST_WINDOW" 2>/dev/null || true
+  fi
+  if [[ -n "$PI_PID" ]] && kill -0 "$PI_PID" 2>/dev/null; then
+    kill "$PI_PID" 2>/dev/null || true
+    sleep 0.5
+    kill -9 "$PI_PID" 2>/dev/null || true
+  fi
+  rm -rf "$TEST_TMPDIR"
+}
+trap cleanup EXIT INT TERM
+
+# --- Step 1: spawn pi in isolated test tmux window ---------------------------
+note "step 1: spawn pi --no-tools --thinking off in test tmux window"
+SESSION_NAME=$(tmux display-message -p '#S')
+LAST_IDX=$(tmux list-windows -t "$SESSION_NAME" -F '#{window_index}' | tail -1)
+# Pass PI_BRIDGE_DIR via env so the spawned pi process inherits it.
+WRAP_CMD="PI_BRIDGE_DIR=$PI_BRIDGE_DIR exec $PI_BIN --no-tools --thinking off"
+tmux new-window -d -a -t "${SESSION_NAME}:${LAST_IDX}" -n "$WINDOW_NAME" -c "$ABS_WORKTREE" "$WRAP_CMD"
+TEST_WINDOW="${SESSION_NAME}:${WINDOW_NAME}"
+note "  tmux window=$TEST_WINDOW"
+
+# --- Step 2: poll pi-bridge list for new pid -------------------------------
+note "step 2: poll pi-bridge list for new bridge pid (cwd matches worktree)"
+deadline=$((SECONDS + 30))
+while (( SECONDS < deadline )); do
+  PI_PID=$("$PI_BRIDGE_BIN" list --bridge-dir "$PI_BRIDGE_DIR" --json 2>/dev/null \
+    | jq -r --arg dir "$ABS_WORKTREE" 'map(select((.cwd // "") == $dir)) | last | (.pid // empty)' \
+    || echo "")
+  if [[ -n "$PI_PID" && "$PI_PID" != "null" ]]; then break; fi
+  sleep 1
+done
+[[ -z "$PI_PID" || "$PI_PID" == "null" ]] && fail "bridge discovery timed out"
+note "  pi_pid=$PI_PID"
+
+# --- Step 3: pi-bridge state ------------------------------------------------
+note "step 3: pi-bridge state — protocol + sessionId"
+state=$("$PI_BRIDGE_BIN" state --pid "$PI_PID" 2>/dev/null)
+proto=$(jq -r '.data.protocol // ""' <<< "$state" 2>/dev/null)
+session_id=$(jq -r '.data.sessionId // ""' <<< "$state" 2>/dev/null)
+[[ "$proto" == "pi-session-bridge.v1" ]] || fail "protocol mismatch: $proto"
+[[ -n "$session_id" && "$session_id" != "null" ]] || fail "sessionId not set"
+note "  protocol=$proto session=$session_id"
+
+# --- Step 4: pi-bridge commands --------------------------------------------
+note "step 4: pi-bridge commands lists bridge verbs"
+commands=$("$PI_BRIDGE_BIN" commands --pid "$PI_PID" 2>/dev/null)
+if ! grep -q 'emit\|history\|prompt\|steer' <<< "$commands"; then
+  red "  commands output:"; printf '%s\n' "$commands" | head -n 30 >&2
+  fail "expected bridge verbs (emit/history/prompt/steer) not in commands"
+fi
+note "  bridge verbs present"
+
+# --- Step 5: pi-bridge emit + history --------------------------------------
+note "step 5: pi-bridge emit 'smoke' + verify in history"
+emit_resp=$("$PI_BRIDGE_BIN" emit --pid "$PI_PID" "PI-SMOKE-OK-$$" 2>&1)
+jq -e '.success == true' <<< "$emit_resp" >/dev/null 2>&1 \
+  || fail "emit returned non-success: $emit_resp"
+note "  emit ok"
+
+sleep 1
+hist=$("$PI_BRIDGE_BIN" history --pid "$PI_PID" 50 2>/dev/null)
+if ! jq -e --arg msg "PI-SMOKE-OK-$$" '
+  (.data.events // []) | any(. as $e | (
+    ($e | tostring) | contains($msg)
+  ))
+' <<< "$hist" >/dev/null 2>&1; then
+  red "  history did not contain emit. Sample:"
+  jq -c '.data.events // [] | .[-3:]' <<< "$hist" >&2 || true
+  fail "emit event not found in history"
+fi
+note "  emit observed in history"
+
+# --- Step 6: kill pi, verify registry cleans -------------------------------
+note "step 6: kill pi, verify bridge entry cleans"
+kill "$PI_PID" 2>/dev/null || true
+sleep 0.5
+kill -9 "$PI_PID" 2>/dev/null || true
+PI_PID=""
+deadline=$((SECONDS + 5))
+while (( SECONDS < deadline )); do
+  count=$("$PI_BRIDGE_BIN" list --bridge-dir "$PI_BRIDGE_DIR" --json 2>/dev/null \
+    | jq 'length' 2>/dev/null || echo "?")
+  [[ "$count" == "0" ]] && break
+  sleep 0.5
+done
+note "  bridge list count=$count"
+
+green "PASS[$TEST_NAME]"

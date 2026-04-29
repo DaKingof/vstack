@@ -35,6 +35,8 @@ FD_STATE="$SCRIPT_DIR/flightdeck-state"
 source "$SCRIPT_DIR/lib/oc-paths.sh"
 # shellcheck source=lib/cc-channel-paths.sh
 source "$SCRIPT_DIR/lib/cc-channel-paths.sh"
+# shellcheck source=lib/pi-bridge-paths.sh
+source "$SCRIPT_DIR/lib/pi-bridge-paths.sh"
 
 ACTION="${1:-}"
 [[ -z "$ACTION" ]] && { echo "Usage: pane-registry <action> [args]" >&2; exit 2; }
@@ -56,6 +58,7 @@ case "$ACTION" in
     WINDOW=""; HARNESS=""; WORKTREE=""; PANE_INDEX="$DEFAULT_PANE_INDEX"; PR=""
     OC_URL=""; OC_SESSION_ID=""; OC_PORT=""
     CC_URL=""; CC_SESSION_UUID=""; CC_PORT=""; CC_TRANSCRIPT=""
+    PI_BRIDGE_PID=""; PI_BRIDGE_SOCKET=""; PI_SESSION_ID=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --window) WINDOW="$2"; shift 2 ;;
@@ -70,6 +73,9 @@ case "$ACTION" in
         --cc-session-uuid) CC_SESSION_UUID="$2"; shift 2 ;;
         --cc-port) CC_PORT="$2"; shift 2 ;;
         --cc-transcript) CC_TRANSCRIPT="$2"; shift 2 ;;
+        --pi-bridge-pid) PI_BRIDGE_PID="$2"; shift 2 ;;
+        --pi-bridge-socket) PI_BRIDGE_SOCKET="$2"; shift 2 ;;
+        --pi-session-id) PI_SESSION_ID="$2"; shift 2 ;;
         *) echo "Unknown flag: $1" >&2; exit 2 ;;
       esac
     done
@@ -96,6 +102,15 @@ case "$ACTION" in
         CC_TRANSCRIPT=$(jq -r '.transcript // ""' "$_cc_spawn_file" 2>/dev/null || echo "")
       fi
     fi
+    # Auto-hydrate pi bridge metadata.
+    if [[ "$HARNESS" == "pi" && -z "$PI_BRIDGE_PID" ]]; then
+      _pi_spawn_file="$(pi_spawn_file "$ISSUE")"
+      if [[ -f "$_pi_spawn_file" ]]; then
+        PI_BRIDGE_PID=$(jq -r '.pid // ""' "$_pi_spawn_file" 2>/dev/null || echo "")
+        PI_BRIDGE_SOCKET=$(jq -r '.socket // ""' "$_pi_spawn_file" 2>/dev/null || echo "")
+        PI_SESSION_ID=$(jq -r '.session_id // ""' "$_pi_spawn_file" 2>/dev/null || echo "")
+      fi
+    fi
 
     "$FD_STATE" init >/dev/null
     SESSION=$(tmux display-message -p '#S' 2>/dev/null || echo unknown)
@@ -114,6 +129,9 @@ case "$ACTION" in
       --arg cc_session_uuid "$CC_SESSION_UUID" \
       --arg cc_port "$CC_PORT" \
       --arg cc_transcript "$CC_TRANSCRIPT" \
+      --arg pi_bridge_pid "$PI_BRIDGE_PID" \
+      --arg pi_bridge_socket "$PI_BRIDGE_SOCKET" \
+      --arg pi_session_id "$PI_SESSION_ID" \
       --arg now "$(now)" \
       '{
         window: $window,
@@ -128,6 +146,9 @@ case "$ACTION" in
         cc_session_uuid: ($cc_session_uuid | if . == "" then null else . end),
         cc_port: ($cc_port | if . == "" then null else (. | tonumber) end),
         cc_transcript: ($cc_transcript | if . == "" then null else . end),
+        pi_bridge_pid: ($pi_bridge_pid | if . == "" then null else (. | tonumber) end),
+        pi_bridge_socket: ($pi_bridge_socket | if . == "" then null else . end),
+        pi_session_id: ($pi_session_id | if . == "" then null else . end),
         state: "waiting",
         substate: null,
         unknown_since: null,
@@ -248,6 +269,11 @@ case "$ACTION" in
     fi
     rm -f "$(cc_spawn_file "$ISSUE")" 2>/dev/null || true
     rm -rf "$(cc_mcp_dir "$ISSUE")" 2>/dev/null || true
+    # Pi bridge cleanup: drop spawn file. Pi process itself isn't
+    # ours to kill (the user spawned the pi tmux pane); when the
+    # user closes the pane, pi exits and the bridge cleans up its
+    # registry entry naturally.
+    rm -f "$(pi_spawn_file "$ISSUE")" 2>/dev/null || true
     "$FD_STATE" set ".issues" "(.issues | del(.[\"$ISSUE\"]))"
     ;;
 
@@ -276,6 +302,22 @@ case "$ACTION" in
     transcript=$(awk -F'\t' '{print $2}' <<< "$line")
     if [[ -n "$url" && -n "$transcript" && "$url" != "null" && "$transcript" != "null" ]]; then
       printf -- "--url %s --transcript %s\n" "$url" "$transcript"
+    fi
+    ;;
+
+  pi-bridge-args)
+    # Print "--pid <P> --socket <S>" when both are set AND the bridge
+    # is fresh (pid alive, socket exists, protocol matches). Empty
+    # stdout when stale or missing — caller falls back to tmux.
+    ISSUE="${1:-}"
+    [[ -z "$ISSUE" ]] && { echo "Usage: pi-bridge-args <ISSUE>" >&2; exit 2; }
+    line=$("$FD_STATE" get ".issues[\"$ISSUE\"] // {} | [(.pi_bridge_pid // \"\"), (.pi_bridge_socket // \"\")] | @tsv" 2>/dev/null | tr -d '"')
+    pid=$(awk -F'\t' '{print $1}' <<< "$line")
+    socket=$(awk -F'\t' '{print $2}' <<< "$line")
+    if [[ -n "$pid" && -n "$socket" && "$pid" != "null" && "$socket" != "null" ]]; then
+      if pi_bridge_is_fresh "$pid" "$socket" 2>/dev/null; then
+        printf -- "--pid %s --socket %s\n" "$pid" "$socket"
+      fi
     fi
     ;;
 

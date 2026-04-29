@@ -79,6 +79,8 @@ source "$_daemon_script_dir/lib/daemon-paths.sh"
 source "$_daemon_script_dir/lib/oc-paths.sh"
 # shellcheck source=lib/cc-channel-paths.sh
 source "$_daemon_script_dir/lib/cc-channel-paths.sh"
+# shellcheck source=lib/pi-bridge-paths.sh
+source "$_daemon_script_dir/lib/pi-bridge-paths.sh"
 STATE_DIR=$(fd_resolve_state_dir)
 POLL_SEC="${FD_POLL_SEC:-2}"
 STABILITY_SEC="${FD_STABILITY:-3}"
@@ -277,7 +279,7 @@ gc_orphan_state() {
   # Sweep subscriber pid files whose pid is dead. Live subscribers
   # belong to live daemons elsewhere on this host — leave them alone.
   local sub_file sub_pid
-  for sub_file in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid; do
+  for sub_file in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid "$STATE_DIR"/fd-pi-subscriber-*.pid; do
     sub_pid=$(cat "$sub_file" 2>/dev/null || echo "")
     if [[ ! "$sub_pid" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$sub_pid" 2>/dev/null; then
       rm -f "$sub_file"
@@ -885,6 +887,97 @@ resolve_cc_meta() {
   echo "$args"
 }
 
+# --- Pi Session Bridge subscriber (Phase 3) ---------------------------------
+# Per-pi-pane subprocess that pipes `pi-bridge stream --pid <PID>` →
+# jq filter for assistant turn-end events, classifies, appends to
+# fd-wake-events log.
+pi_subscriber_loop() {
+  set +e
+  set +o pipefail
+  local pane_id="$1" pi_pid="$2" parent_pid="$3"
+  local last_hash=""
+  local sub_log; sub_log="${LOG}.pi-sub-$(pi_pane_id_safe "$pane_id")"
+  printf '%s [pi-sub-start] pane=%s pi_pid=%s parent=%s\n' \
+    "$(date -Iseconds)" "$pane_id" "$pi_pid" "$parent_pid" \
+    >> "$sub_log" 2>/dev/null || true
+
+  local pi_bin; pi_bin=$(pi_resolve_bridge_bin) || {
+    printf '%s [pi-sub-error] pi-bridge bin not found\n' "$(date -Iseconds)" \
+      >> "$sub_log" 2>/dev/null || true
+    exit 1
+  }
+
+  # Stream events filtered for assistant + stopReason. Each line is
+  # one JSON event. While stream is open: read each line, hash text,
+  # classify, append wake event.
+  "$pi_bin" stream --pid "$pi_pid" 2>/dev/null \
+    | jq --unbuffered -c 'select(.type == "event" and .data.message.role == "assistant" and (.data.message.stopReason // "") != "")' \
+    | while IFS= read -r line; do
+      if ! kill -0 "$parent_pid" 2>/dev/null; then exit 0; fi
+      [[ -z "$line" ]] && continue
+      local last_text
+      last_text=$(jq -r '
+        ( .data.message.content // [] )
+        | (if type == "array" then map(select(.type == "text") | .text // "") | join("") else . end)
+      ' <<< "$line" 2>/dev/null)
+      [[ -z "$last_text" ]] && continue
+      local hash
+      hash=$(printf '%s' "$last_text" | sha256sum | awk '{print substr($1,1,12)}')
+      [[ "$hash" == "$last_hash" ]] && continue
+      local tag
+      if [[ -n "${CLASSIFIER:-}" && -x "${CLASSIFIER:-}" ]]; then
+        tag=$(printf '%s' "$last_text" | "$CLASSIFIER" --no-footer-gate 2>/dev/null)
+        [[ -z "$tag" ]] && tag="rendering"
+      else
+        tag="rendering"
+      fi
+      local text_excerpt
+      text_excerpt=$(printf '%s' "$last_text" | head -c 1024 || true)
+      printf '%s [pi-sub-emit] pane=%s hash=%s tag=%s text_len=%s\n' \
+        "$(date -Iseconds)" "$pane_id" "$hash" "$tag" "${#last_text}" \
+        >> "$sub_log" 2>/dev/null || true
+      ( exec 218>"$SESSION_LOCK"
+        flock 218
+        jq -nc --arg ts "$(date -Iseconds)" \
+               --arg pid "$pane_id" \
+               --arg harness "pi" \
+               --arg text "$text_excerpt" \
+               --arg tag "$tag" \
+               --arg h "$hash" \
+               '{ts:$ts, pane_id:$pid, harness:$harness, last_assistant_text:$text, classifier_tag:$tag, hash:$h}' \
+               >> "$WAKE_EVENTS_LOG"
+      )
+      last_hash="$hash"
+    done
+}
+
+spawn_pi_subscriber() {
+  local pane_id="$1" pi_pid="$2"
+  local pid_file; pid_file=$(pi_subscriber_pid_file "$pane_id")
+  if [[ -f "$pid_file" ]]; then
+    local existing; existing=$(cat "$pid_file" 2>/dev/null || echo "")
+    if [[ "$existing" =~ ^[1-9][0-9]*$ ]] && kill -0 "$existing" 2>/dev/null; then
+      log pi-subscriber "pane=$pane_id existing pid=$existing; reattaching"
+      return 0
+    fi
+  fi
+  pi_subscriber_loop "$pane_id" "$pi_pid" $$ &
+  local sub_pid=$!
+  echo "$sub_pid" > "$pid_file"
+  log pi-subscriber-spawn "pane=$pane_id pid=$sub_pid pi_pid=$pi_pid"
+}
+
+resolve_pi_meta() {
+  local pane_target="$1"
+  local issue
+  issue=$("$PANE_REGISTRY" find-by-pane "$pane_target" 2>/dev/null || echo "")
+  [[ -z "$issue" ]] && return 1
+  local args
+  args=$("$PANE_REGISTRY" pi-bridge-args "$issue" 2>/dev/null || echo "")
+  [[ -z "$args" ]] && return 1
+  echo "$args"
+}
+
 spawn_oc_subscriber() {
   local pane_id="$1" oc_url="$2" session_id="$3"
   local pid_file; pid_file=$(oc_subscriber_pid_file "$pane_id")
@@ -904,7 +997,7 @@ spawn_oc_subscriber() {
 kill_all_oc_subscribers() {
   shopt -s nullglob
   local f pid
-  for f in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid; do
+  for f in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid "$STATE_DIR"/fd-pi-subscriber-*.pid; do
     pid=$(cat "$f" 2>/dev/null || echo "")
     if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
       kill "$pid" 2>/dev/null || true
@@ -1015,6 +1108,16 @@ run_loop() {
           _ctranscript=$(awk '{for(i=1;i<=NF;i++)if($i=="--transcript"){print $(i+1);exit}}' <<< "$_cmeta")
           if [[ -n "$_ctranscript" ]]; then
             spawn_cc_subscriber "$inner_id" "$_ctranscript"
+            OC_SUBSCRIBED[$inner_id]=1
+          fi
+        fi
+        ;;
+      pi)
+        local _pmeta _ppid
+        if _pmeta=$(resolve_pi_meta "${OC_PANE_TARGET[$inner_id]}"); then
+          _ppid=$(awk '{for(i=1;i<=NF;i++)if($i=="--pid"){print $(i+1);exit}}' <<< "$_pmeta")
+          if [[ -n "$_ppid" ]]; then
+            spawn_pi_subscriber "$inner_id" "$_ppid"
             OC_SUBSCRIBED[$inner_id]=1
           fi
         fi
@@ -1494,7 +1597,7 @@ case "$ACTION" in
     # stop action directly so cleanup is deterministic. Covers both
     # opencode (fd-subscriber-*) and claude (fd-cc-subscriber-*) types.
     shopt -s nullglob
-    for _sub_file in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid; do
+    for _sub_file in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid "$STATE_DIR"/fd-pi-subscriber-*.pid; do
       _sub_pid=$(cat "$_sub_file" 2>/dev/null || echo "")
       if [[ "$_sub_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$_sub_pid" 2>/dev/null; then
         kill "$_sub_pid" 2>/dev/null || true
