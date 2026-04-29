@@ -214,8 +214,15 @@ start_oc_server() {
   # Subshell: cd into the worktree before exec so the server inherits
   # the worktree as its cwd. setsid puts the server in its own pgroup
   # so cleanup can reap the whole tree via `kill -- -<pid>`.
+  #
+  # CRITICAL FD detachment: the OUTER `</dev/null >/dev/null 2>&1` on
+  # the subshell prevents the subshell (and any descendant that
+  # inherits its FDs before redirection takes effect) from holding open
+  # the function's stdout, which is the captured `$(...)` pipe. Without
+  # the outer redirect, the server's grandchildren keep the pipe alive
+  # and `server_pid=$(start_oc_server ...)` hangs forever.
   ( cd "$wt_path" && setsid nohup "$bin" serve --port "$port" --hostname 127.0.0.1 \
-      </dev/null >>"$server_log" 2>&1 ) &
+      </dev/null >>"$server_log" 2>&1 ) </dev/null >/dev/null 2>&1 &
   local launcher_pid=$!
   local deadline=$((SECONDS + 15))
   local up=0
@@ -279,9 +286,11 @@ create_oc_session() {
 fire_orchestration_async() {
   local bin="$1" url="$2" sid="$3" issue="$4" wt_path="$5"
   local log; log=$(oc_server_log "${url##*:}")
+  # Outer redirect detaches the subshell's FDs from anything the caller
+  # might be capturing — same hazard as start_oc_server.
   ( cd "$wt_path" && setsid nohup "$bin" run --attach "$url" \
       --session "$sid" --format json "/orchestration start $issue" \
-      </dev/null >>"$log".orch 2>&1 ) &
+      </dev/null >>"$log".orch 2>&1 ) </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
 }
 
