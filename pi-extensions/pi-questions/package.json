@@ -1,0 +1,19 @@
+{
+  "name": "pi-questions",
+  "version": "0.1.0",
+  "description": "Pi extension for structured multi-tab popup questions and bridge-driven replies.",
+  "license": "MIT",
+  "keywords": ["pi-package", "pi", "coding-agent", "questions", "prompt"],
+  "pi": {
+    "extensions": ["./extensions/questions.ts"]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
+  },
+  "files": [
+    "extensions/",
+    "README.md",
+    "package.json"
+  ]
+}

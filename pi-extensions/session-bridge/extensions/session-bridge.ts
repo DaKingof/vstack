@@ -20,6 +20,7 @@ import * as path from "node:path";
 
 const PROTOCOL = "pi-session-bridge.v1";
 const STATUS_KEY = "session-bridge";
+const QUESTION_SERVICE_SYMBOL = Symbol.for("vstack.pi-questions.service");
 const DEFAULT_HISTORY_LIMIT = 500;
 const MAX_LINE_BYTES = 1024 * 1024;
 
@@ -51,6 +52,13 @@ interface InstanceInfo {
 	lastReason?: string;
 }
 
+interface QuestionService {
+	listPending(): unknown[];
+	reply(requestId: string, answers: unknown, source?: string): boolean;
+	reject(requestId: string, source?: string): boolean;
+	subscribe(listener: (event: unknown) => void): () => void;
+}
+
 export default function sessionBridge(pi: ExtensionAPI) {
 	const clients = new Set<BridgeClient>();
 	const history: JsonObject[] = [];
@@ -66,6 +74,7 @@ export default function sessionBridge(pi: ExtensionAPI) {
 	let currentInfo: InstanceInfo | undefined;
 	let heartbeat: NodeJS.Timeout | undefined;
 	let exitHandler: (() => void) | undefined;
+	let questionUnsubscribe: (() => void) | undefined;
 	let stopping = false;
 
 	function getState(reason?: string): InstanceInfo {
@@ -95,6 +104,41 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		currentInfo = getState(reason);
 		await fs.promises.mkdir(instancesDir, { recursive: true, mode: 0o700 });
 		await fs.promises.writeFile(registryPath, `${JSON.stringify(currentInfo, null, 2)}\n`, { mode: 0o600 });
+	}
+
+	function getQuestionService(): QuestionService | undefined {
+		const service = (globalThis as unknown as Record<PropertyKey, unknown>)[QUESTION_SERVICE_SYMBOL];
+		if (!service || typeof service !== "object") return undefined;
+		const candidate = service as Partial<QuestionService>;
+		if (
+			typeof candidate.listPending === "function" &&
+			typeof candidate.reply === "function" &&
+			typeof candidate.reject === "function" &&
+			typeof candidate.subscribe === "function"
+		) {
+			return candidate as QuestionService;
+		}
+		return undefined;
+	}
+
+	function ensureQuestionSubscription() {
+		if (questionUnsubscribe) return;
+		const service = getQuestionService();
+		if (!service) return;
+		questionUnsubscribe = service.subscribe((event) => publish("question", event));
+	}
+
+	function requireQuestionService(): QuestionService {
+		ensureQuestionSubscription();
+		const service = getQuestionService();
+		if (!service) throw new Error("pi-questions service is not available in this Pi runtime");
+		return service;
+	}
+
+	function readRequestId(command: JsonObject): string {
+		const value = command.requestId ?? command.request_id;
+		if (typeof value !== "string" || value.trim().length === 0) throw new Error("Expected requestId/request_id");
+		return value.trim();
 	}
 
 	function writeRegistrySoon(reason?: string) {
@@ -142,6 +186,7 @@ export default function sessionBridge(pi: ExtensionAPI) {
 			ctx.ui.notify(`Session bridge listening at ${socketPath}`, "info");
 		}
 
+		ensureQuestionSubscription();
 		publish("bridge_start", { state: currentInfo });
 	}
 
@@ -153,6 +198,8 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		if (currentCtx?.hasUI) currentCtx.ui.setStatus(STATUS_KEY, undefined);
 		if (heartbeat) clearInterval(heartbeat);
 		heartbeat = undefined;
+		questionUnsubscribe?.();
+		questionUnsubscribe = undefined;
 
 		for (const client of clients) {
 			send(client, { type: "bridge_stop", reason });
@@ -224,6 +271,7 @@ export default function sessionBridge(pi: ExtensionAPI) {
 
 		const id = command.id;
 		const type = typeof command.type === "string" ? command.type : undefined;
+		ensureQuestionSubscription();
 		try {
 			switch (type) {
 				case "ping":
@@ -242,6 +290,31 @@ export default function sessionBridge(pi: ExtensionAPI) {
 				case "commands":
 					sendResponse(client, id, "get_commands", true, { commands: pi.getCommands() });
 					break;
+				case "questions":
+				case "question_list": {
+					const service = getQuestionService();
+					sendResponse(client, id, "questions", true, {
+						available: Boolean(service),
+						questions: service?.listPending() ?? [],
+					});
+					break;
+				}
+				case "answer":
+				case "question_reply": {
+					const requestId = readRequestId(command);
+					const service = requireQuestionService();
+					service.reply(requestId, command.answers, "bridge");
+					sendResponse(client, id, "answer", true, { answered: true, requestId });
+					break;
+				}
+				case "reject":
+				case "question_reject": {
+					const requestId = readRequestId(command);
+					const service = requireQuestionService();
+					service.reject(requestId, "bridge");
+					sendResponse(client, id, "reject", true, { rejected: true, requestId });
+					break;
+				}
 				case "emit": {
 					const message = typeof command.message === "string" ? command.message : "test";
 					publish("bridge_emit", { message });

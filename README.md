@@ -349,8 +349,9 @@ Windows note:
 | Extension | Critical functionality |
 |---|---|
 | `pi-background-tasks` | Non-blocking shell task management for Pi via `bg_task` and `/bg`; tracks logs and can notify on task exit or matching output. |
+| `pi-questions` | Structured multi-tab popup questions for Pi; integrates with `pi-bridge` list/answer/reject and stream events. |
 | `prompt-stash` | Project-local prompt stash history for Pi; `Ctrl+S` stashes editor text or opens a searchable pop/delete popup when empty. |
-| `pi-session-bridge` | Unix-socket JSONL side channel for active Pi sessions: send prompts, steer/follow-up, abort, inspect state/history, and stream events. |
+| `pi-session-bridge` | Unix-socket JSONL side channel for active Pi sessions: send prompts, steer/follow-up, abort, inspect state/history, questions, and stream events. |
 | `pi-statusline` | Compact interactive Pi TUI status line showing project/git/model/context information. |
 
 vstack installs selected Pi extension packages into `<scope>/packages/<name>` and registers `./packages/<name>` in Pi's `settings.json`. Detailed usage lives in each package's `pi-extensions/<name>/README.md`.
