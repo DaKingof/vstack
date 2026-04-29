@@ -24,6 +24,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# shellcheck source=lib/oc-paths.sh
+source "$SCRIPT_DIR/lib/oc-paths.sh"
+
 # Resolve project root (works in worktrees and main repos)
 PROJECT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)"
 SKILLS_DIR="$PROJECT_ROOT/.agents/skills"
@@ -163,6 +166,111 @@ detect_start_cmd() {
   esac
 }
 
+# --- Opencode HTTP-attach adapter (Phase 1) ----------------------------------
+
+# Resolve a real opencode binary, skipping shell aliases that mangle args.
+resolve_opencode_bin() {
+  if [[ -x /usr/bin/opencode ]]; then
+    echo "/usr/bin/opencode"
+    return 0
+  fi
+  local p
+  p=$(type -P opencode 2>/dev/null || true)
+  if [[ -n "$p" && -x "$p" ]]; then
+    echo "$p"
+    return 0
+  fi
+  return 1
+}
+
+# Poll GET /session for a session whose `directory` matches the worktree
+# absolute path. Returns the session id on stdout when found within the
+# timeout window. Empty stdout + non-zero exit on timeout.
+discover_oc_session() {
+  local port="$1" wt_path="$2"
+  local abs_wt
+  abs_wt=$(cd "$wt_path" && pwd)
+  local deadline=$((SECONDS + 30))
+  while (( SECONDS < deadline )); do
+    local resp
+    resp=$(curl -s --max-time 5 "http://127.0.0.1:$port/session" 2>/dev/null || echo "")
+    if [[ -n "$resp" ]]; then
+      local session_id
+      session_id=$(jq -r --arg dir "$abs_wt" '
+        ( . // [] )
+        | ( if type == "object" then (.sessions // .data // .items // []) else . end )
+        | map(select((.directory // .cwd // "") == $dir))
+        | sort_by(.created_at // .createdAt // .updated_at // .updatedAt // 0)
+        | last
+        | (.id // "")
+      ' <<< "$resp" 2>/dev/null || echo "")
+      if [[ -n "$session_id" && "$session_id" != "null" ]]; then
+        echo "$session_id"
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# Build the opencode --port spawn command. Path-resolved to a real binary;
+# args quoted for tmux send-keys. Bootstrap prompt is the orchestration
+# start so the session is queryable a few seconds after spawn.
+build_opencode_attach_cmd() {
+  local bin="$1" wt_path="$2" port="$3" issue="$4"
+  printf "%s %q --port %s --hostname 127.0.0.1 --dangerously-skip-permissions --prompt '/orchestration start %s'" \
+    "$bin" "$wt_path" "$port" "$issue"
+}
+
+# Tmux-mode opencode spawn with HTTP-attach discovery. Allocates a port,
+# spawns the TUI with --port, polls /session for the matching directory,
+# and writes oc_spawn_file($issue) so pane-registry init can hydrate the
+# bridge metadata. On any failure (no opencode bin, port exhausted,
+# discovery timeout) returns non-zero so the caller can fall back to
+# legacy spawn — never silent.
+spawn_oc_attach_tmux() {
+  local issue="$1" wt_path="$2"
+  local bin port cmd session_id
+
+  if ! bin=$(resolve_opencode_bin); then
+    echo "  oc-attach-unavailable: opencode binary not found (PATH or /usr/bin)" >&2
+    return 1
+  fi
+
+  if ! port=$(oc_alloc_port "$issue"); then
+    echo "  oc-attach-unavailable: no free port in $OC_PORT_RANGE_START-$OC_PORT_RANGE_END" >&2
+    return 1
+  fi
+
+  cmd=$(build_opencode_attach_cmd "$bin" "$wt_path" "$port" "$issue")
+  if ! open_tmux "$wt_path" "$issue" "$cmd"; then
+    oc_release_port "$port"
+    return 1
+  fi
+
+  if ! session_id=$(discover_oc_session "$port" "$wt_path"); then
+    echo "  oc-attach-unavailable: session discovery timed out on port $port (TUI may still be running; falling back)" >&2
+    oc_release_port "$port"
+    return 1
+  fi
+
+  local spawn_file abs_wt
+  spawn_file=$(oc_spawn_file "$issue")
+  abs_wt=$(cd "$wt_path" && pwd)
+  jq -nc \
+    --arg url "http://127.0.0.1:$port" \
+    --arg sid "$session_id" \
+    --arg dir "$abs_wt" \
+    --argjson port "$port" \
+    --arg ts "$(date -Iseconds)" \
+    '{url:$url, session_id:$sid, directory:$dir, port:$port, allocated_at:$ts}' \
+    > "$spawn_file"
+
+  echo "  oc-attach: port=$port session=$session_id"
+  return 0
+}
+
 # --- Terminal launchers -------------------------------------------------------
 
 # Pre-trust directory in Claude Code config so the trust dialog is skipped
@@ -274,12 +382,25 @@ for ISSUE in "${ISSUES[@]}"; do
   fi
   rm -f "$_wt_err"
 
-  START_CMD=$(detect_start_cmd "$ISSUE")
-
   # Only pretrust for Claude harness
   if command -v claude &>/dev/null; then
     pretrust_claude_dir "$WT_PATH"
   fi
+
+  # Opencode HTTP-attach (tmux mode only): allocate a port, spawn with
+  # --port + bootstrap prompt, discover the session id, persist for
+  # pane-registry. Falls back to legacy spawn on any adapter failure so
+  # the pane still launches — pane-respond / pane-poll detect the absent
+  # spawn file and use the tmux send-keys / capture-pane fallback path.
+  if [[ "$TERMINAL_MODE" == "tmux" && "$HARNESS" == "opencode" && -z "$CMD_TEMPLATE" ]]; then
+    if spawn_oc_attach_tmux "$ISSUE" "$WT_PATH"; then
+      LAUNCHED=$((LAUNCHED + 1))
+      continue
+    fi
+    # fall through to legacy spawn below
+  fi
+
+  START_CMD=$(detect_start_cmd "$ISSUE")
 
   if [[ "$TERMINAL_MODE" == "tmux" ]]; then
     open_tmux "$WT_PATH" "$ISSUE" "$START_CMD"
