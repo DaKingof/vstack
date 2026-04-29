@@ -677,7 +677,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// End-to-end smoke test that installs both vstack-managed Pi extensions
+    /// End-to-end smoke test that installs all vstack-managed Pi extensions
     /// from the repo into a sandboxed `PI_CODING_AGENT_DIR`, then launches
     /// `pi` in non-interactive mode and confirms it prints no extension errors.
     ///
@@ -690,18 +690,16 @@ mod tests {
     #[test]
     #[ignore = "exercises real `pi` binary; opt-in via --ignored"]
     fn pi_smoke_install_and_launch() {
-        // Locate the repo's pi-extensions directory relative to CARGO_MANIFEST_DIR
+        // Locate and install every repo-managed Pi extension package relative
+        // to CARGO_MANIFEST_DIR, so this smoke stays current as the catalog grows.
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let pi_ext_root = manifest_dir
             .parent()
             .expect("repo root above cli/")
             .join("pi-extensions");
-        let bridge = pi_ext_root.join("session-bridge");
-        let stat = pi_ext_root.join("pi-statusline");
-        if !bridge.is_dir() || !stat.is_dir() {
-            eprintln!(
-                "skipping pi_smoke: pi-extensions/{{session-bridge,pi-statusline}} missing"
-            );
+        let extensions = discover_pi_extensions(&pi_ext_root).unwrap();
+        if extensions.is_empty() {
+            eprintln!("skipping pi_smoke: no pi-extensions packages found");
             return;
         }
 
@@ -726,10 +724,9 @@ mod tests {
         let pi_dir = sandbox.join("agent");
 
         with_pi_dir(&pi_dir, || {
-            let bridge_ext = PiExtension::from_dir(&bridge).unwrap();
-            let stat_ext = PiExtension::from_dir(&stat).unwrap();
-            install_pi_extension(&bridge_ext, true).unwrap();
-            install_pi_extension(&stat_ext, true).unwrap();
+            for ext in &extensions {
+                install_pi_extension(ext, true).unwrap();
+            }
 
             let bridge_dir = sandbox.join("bridge");
             let output = std::process::Command::new("pi")

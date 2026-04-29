@@ -253,7 +253,7 @@ Pi has no built-in subagent mechanism, so installed `.pi/agents/*.md` files are 
 
 vstack writes Pi agent frontmatter (`name`, `description`, `tools`, `model`, optional `pane: true`) and the same vstack-managed body sections (Required Skills, Hook Rules, Additional Instructions) used by other harnesses. Hooks have no native Pi runtime and are surfaced only as inline safety prose inside the agent body.
 
-When `vstack add` writes a Pi extension, it copies the package directory into `~/.pi/agent/packages/<name>` (or `.pi/packages/<name>` for project scope) and adds its absolute path to the `packages` array of Pi's `settings.json` — preserving any existing entries. Pi auto-loads the package on next launch.
+When `vstack add` writes a Pi extension, it copies the package directory into `~/.pi/agent/packages/<name>` (or `.pi/packages/<name>` for project scope) and adds the relative `./packages/<name>` entry to Pi's `settings.json` — preserving any existing entries. Pi auto-loads the package on next launch.
 
 Local-path Pi packages do **not** automatically expose `bin` scripts on `PATH` (this is a Pi limitation, not a vstack one). To use the `pi-bridge` CLI shipped with `pi-session-bridge`, either symlink it into your `PATH`, run the script directly, or use the raw socket protocol. See [`pi-extensions/session-bridge/README.md`](pi-extensions/session-bridge/README.md).
 
@@ -346,6 +346,16 @@ Windows note:
 
 ### Pi Extensions
 
+#### `pi-background-tasks`
+
+- **Purpose:** Adds explicit non-blocking shell task management to Pi so long-running commands do not block the current turn.
+- **Tools:** `bg_task` for spawn/list/log/stop/clear; `bg_status` compatibility tool for PID-based status/log/stop.
+- **Commands:** `/bg`, `/bg run <cmd>`, `/bg list`, `/bg log <id>`, `/bg stop <id>`, `/bg clear`.
+- **UI:** `Ctrl+Shift+B` opens a dashboard overlay in interactive Pi; a compact task widget appears below the editor while tasks are tracked.
+- **Logs:** `${PI_BG_TASK_DIR:-$TMPDIR/vstack-pi-bg}`.
+- **Safety:** tasks default to a 10-minute timeout and are stopped as a process group on Unix; session shutdown terminates running tasks.
+- **More:** [pi-extensions/pi-background-tasks/README.md](pi-extensions/pi-background-tasks/README.md).
+
 #### `pi-session-bridge`
 
 - **Purpose:** Keeps the normal interactive Pi TUI visible while exposing a Unix-socket JSONL side channel for external control and event streaming.
@@ -381,7 +391,8 @@ pi-extensions/
    ├─ package.json        npm-shaped, with `pi.extensions` and optional `bin`
    ├─ extensions/*.ts     loaded by Pi via the `pi.extensions` manifest
    ├─ bin/*               optional CLI scripts
-   └─ README.md
+   ├─ README.md
+   └─ THIRD_PARTY_NOTICES.md  optional attribution for vendored/base code
 ```
 
 Authoring a new Pi extension package: write a `package.json` with `keywords: ["pi-package"]`, `pi.extensions`, and any `bin` scripts. vstack will pick it up automatically the next time you run `vstack add` against a source repo containing it.
