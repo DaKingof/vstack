@@ -77,6 +77,8 @@ _daemon_script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || 
 source "$_daemon_script_dir/lib/daemon-paths.sh"
 # shellcheck source=lib/oc-paths.sh
 source "$_daemon_script_dir/lib/oc-paths.sh"
+# shellcheck source=lib/cc-channel-paths.sh
+source "$_daemon_script_dir/lib/cc-channel-paths.sh"
 STATE_DIR=$(fd_resolve_state_dir)
 POLL_SEC="${FD_POLL_SEC:-2}"
 STABILITY_SEC="${FD_STABILITY:-3}"
@@ -275,7 +277,7 @@ gc_orphan_state() {
   # Sweep subscriber pid files whose pid is dead. Live subscribers
   # belong to live daemons elsewhere on this host — leave them alone.
   local sub_file sub_pid
-  for sub_file in "$STATE_DIR"/fd-subscriber-*.pid; do
+  for sub_file in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid; do
     sub_pid=$(cat "$sub_file" 2>/dev/null || echo "")
     if [[ ! "$sub_pid" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$sub_pid" 2>/dev/null; then
       rm -f "$sub_file"
@@ -787,6 +789,102 @@ oc_subscriber_loop() {
   done
 }
 
+# --- Claude Channels JSONL subscriber (Phase 2) -----------------------------
+# Per-claude-pane subprocess that tails the session's JSONL transcript
+# (~/.claude/projects/<encoded-cwd>/<uuid>.jsonl), filters for
+# `.message.role == "assistant"` lines with a non-null stop_reason
+# (turn-complete signal), classifies the assistant text, and appends
+# normalized turn-end events to fd-wake-events-<KEY>.log under
+# SESSION_LOCK. Symmetric with oc_subscriber_loop.
+cc_subscriber_loop() {
+  set +e
+  set +o pipefail
+  local pane_id="$1" transcript="$2" parent_pid="$3"
+  local last_hash=""
+  local sub_log; sub_log="${LOG}.cc-sub-$(cc_pane_id_safe "$pane_id")"
+  printf '%s [cc-sub-start] pane=%s transcript=%s parent=%s\n' \
+    "$(date -Iseconds)" "$pane_id" "$transcript" "$parent_pid" \
+    >> "$sub_log" 2>/dev/null || true
+
+  # Wait for the transcript to exist (claude creates it on first
+  # assistant turn). Sleep + check loop.
+  while [[ ! -f "$transcript" ]]; do
+    if ! kill -0 "$parent_pid" 2>/dev/null; then exit 0; fi
+    sleep 1
+  done
+
+  # `tail -F` (capital F) follows even if the file is replaced. jq
+  # processes line-by-line; --unbuffered ensures each completion event
+  # is emitted as it arrives.
+  tail -n 0 -F "$transcript" 2>/dev/null \
+    | jq --unbuffered -c 'select((.message.role // .role // "") == "assistant" and (.message.stop_reason // .stop_reason // "") != "")' \
+    | while IFS= read -r line; do
+      if ! kill -0 "$parent_pid" 2>/dev/null; then exit 0; fi
+      [[ -z "$line" ]] && continue
+      local last_text
+      last_text=$(jq -r '
+        ( .message.content // .content // [] )
+        | (if type == "array" then map(select(.type == "text") | .text // "") | join("") else . end)
+      ' <<< "$line" 2>/dev/null)
+      [[ -z "$last_text" ]] && continue
+      local hash
+      hash=$(printf '%s' "$last_text" | sha256sum | awk '{print substr($1,1,12)}')
+      [[ "$hash" == "$last_hash" ]] && continue
+      local tag
+      if [[ -n "${CLASSIFIER:-}" && -x "${CLASSIFIER:-}" ]]; then
+        tag=$(printf '%s' "$last_text" | "$CLASSIFIER" --no-footer-gate 2>/dev/null)
+        [[ -z "$tag" ]] && tag="rendering"
+      else
+        tag="rendering"
+      fi
+      local text_excerpt
+      text_excerpt=$(printf '%s' "$last_text" | head -c 1024 || true)
+      printf '%s [cc-sub-emit] pane=%s hash=%s tag=%s text_len=%s\n' \
+        "$(date -Iseconds)" "$pane_id" "$hash" "$tag" "${#last_text}" \
+        >> "$sub_log" 2>/dev/null || true
+      ( exec 217>"$SESSION_LOCK"
+        flock 217
+        jq -nc --arg ts "$(date -Iseconds)" \
+               --arg pid "$pane_id" \
+               --arg harness "claude" \
+               --arg text "$text_excerpt" \
+               --arg tag "$tag" \
+               --arg h "$hash" \
+               '{ts:$ts, pane_id:$pid, harness:$harness, last_assistant_text:$text, classifier_tag:$tag, hash:$h}' \
+               >> "$WAKE_EVENTS_LOG"
+      )
+      last_hash="$hash"
+    done
+}
+
+spawn_cc_subscriber() {
+  local pane_id="$1" transcript="$2"
+  local pid_file; pid_file=$(cc_subscriber_pid_file "$pane_id")
+  if [[ -f "$pid_file" ]]; then
+    local existing; existing=$(cat "$pid_file" 2>/dev/null || echo "")
+    if [[ "$existing" =~ ^[1-9][0-9]*$ ]] && kill -0 "$existing" 2>/dev/null; then
+      log cc-subscriber "pane=$pane_id existing pid=$existing; reattaching"
+      return 0
+    fi
+  fi
+  cc_subscriber_loop "$pane_id" "$transcript" $$ &
+  local sub_pid=$!
+  echo "$sub_pid" > "$pid_file"
+  log cc-subscriber-spawn "pane=$pane_id pid=$sub_pid transcript=$transcript"
+}
+
+# Resolve cc-channel metadata for a pane_target via registry lookup.
+resolve_cc_meta() {
+  local pane_target="$1"
+  local issue
+  issue=$("$PANE_REGISTRY" find-by-pane "$pane_target" 2>/dev/null || echo "")
+  [[ -z "$issue" ]] && return 1
+  local args
+  args=$("$PANE_REGISTRY" cc-channel-args "$issue" 2>/dev/null || echo "")
+  [[ -z "$args" ]] && return 1
+  echo "$args"
+}
+
 spawn_oc_subscriber() {
   local pane_id="$1" oc_url="$2" session_id="$3"
   local pid_file; pid_file=$(oc_subscriber_pid_file "$pane_id")
@@ -806,7 +904,7 @@ spawn_oc_subscriber() {
 kill_all_oc_subscribers() {
   shopt -s nullglob
   local f pid
-  for f in "$STATE_DIR"/fd-subscriber-*.pid; do
+  for f in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid; do
     pid=$(cat "$f" 2>/dev/null || echo "")
     if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
       kill "$pid" 2>/dev/null || true
@@ -893,22 +991,35 @@ run_loop() {
     (( ++idx ))
   done
 
-  # Spawn opencode subscribers for panes with HTTP-attach metadata in the
-  # registry. Panes without metadata fall through to the per-tick
+  # Spawn opencode + claude subscribers for panes with adapter metadata
+  # in the registry. Panes without metadata fall through to the per-tick
   # capture-pane loop (legacy fallback path). Subscribers survive
-  # max-lifetime exec; on re-entry, spawn_oc_subscriber sees the existing
-  # pid file and reattaches without spawning a duplicate.
+  # max-lifetime exec; on re-entry, spawn_*_subscriber sees the
+  # existing pid file and reattaches without spawning a duplicate.
   for inner_id in "${INNER_IDS[@]}"; do
-    [[ "${PANE_HARNESS[$inner_id]:-}" == "opencode" ]] || continue
-    local _meta _url _sid
-    if _meta=$(resolve_oc_meta "${OC_PANE_TARGET[$inner_id]}"); then
-      _url=$(awk '{for(i=1;i<=NF;i++)if($i=="--url"){print $(i+1);exit}}' <<< "$_meta")
-      _sid=$(awk '{for(i=1;i<=NF;i++)if($i=="--session"){print $(i+1);exit}}' <<< "$_meta")
-      if [[ -n "$_url" && -n "$_sid" ]]; then
-        spawn_oc_subscriber "$inner_id" "$_url" "$_sid"
-        OC_SUBSCRIBED[$inner_id]=1
-      fi
-    fi
+    case "${PANE_HARNESS[$inner_id]:-}" in
+      opencode)
+        local _meta _url _sid
+        if _meta=$(resolve_oc_meta "${OC_PANE_TARGET[$inner_id]}"); then
+          _url=$(awk '{for(i=1;i<=NF;i++)if($i=="--url"){print $(i+1);exit}}' <<< "$_meta")
+          _sid=$(awk '{for(i=1;i<=NF;i++)if($i=="--session"){print $(i+1);exit}}' <<< "$_meta")
+          if [[ -n "$_url" && -n "$_sid" ]]; then
+            spawn_oc_subscriber "$inner_id" "$_url" "$_sid"
+            OC_SUBSCRIBED[$inner_id]=1
+          fi
+        fi
+        ;;
+      claude)
+        local _cmeta _ctranscript
+        if _cmeta=$(resolve_cc_meta "${OC_PANE_TARGET[$inner_id]}"); then
+          _ctranscript=$(awk '{for(i=1;i<=NF;i++)if($i=="--transcript"){print $(i+1);exit}}' <<< "$_cmeta")
+          if [[ -n "$_ctranscript" ]]; then
+            spawn_cc_subscriber "$inner_id" "$_ctranscript"
+            OC_SUBSCRIBED[$inner_id]=1
+          fi
+        fi
+        ;;
+    esac
   done
 
   local HEARTBEAT_COUNTER=0
@@ -1380,9 +1491,10 @@ case "$ACTION" in
     # Reap subscriber pid files explicitly. Daemon's EXIT trap may not
     # complete cleanly under the SIGTERM-then-SIGKILL race (KILL after
     # 0.5s grace), leaving subscriber pid files behind. Do it from the
-    # stop action directly so cleanup is deterministic.
+    # stop action directly so cleanup is deterministic. Covers both
+    # opencode (fd-subscriber-*) and claude (fd-cc-subscriber-*) types.
     shopt -s nullglob
-    for _sub_file in "$STATE_DIR"/fd-subscriber-*.pid; do
+    for _sub_file in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid; do
       _sub_pid=$(cat "$_sub_file" 2>/dev/null || echo "")
       if [[ "$_sub_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$_sub_pid" 2>/dev/null; then
         kill "$_sub_pid" 2>/dev/null || true

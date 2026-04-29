@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Idempotent installer for the vendored MCP webhook server.
+# Runs `bun install` once; no-op when node_modules/ already exists.
+# Called by open-terminal before spawning the first channel-mode pane.
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "Error: bun not found in PATH. Install bun (https://bun.sh) or set FLIGHTDECK_CLAUDE_CHANNELS=0 to skip channels mode." >&2
+  exit 1
+fi
+
+if [[ -d "$SCRIPT_DIR/node_modules" ]]; then
+  exit 0
+fi
+
+cd "$SCRIPT_DIR"
+bun install

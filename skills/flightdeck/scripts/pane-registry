@@ -33,6 +33,8 @@ FD_STATE="$SCRIPT_DIR/flightdeck-state"
 
 # shellcheck source=lib/oc-paths.sh
 source "$SCRIPT_DIR/lib/oc-paths.sh"
+# shellcheck source=lib/cc-channel-paths.sh
+source "$SCRIPT_DIR/lib/cc-channel-paths.sh"
 
 ACTION="${1:-}"
 [[ -z "$ACTION" ]] && { echo "Usage: pane-registry <action> [args]" >&2; exit 2; }
@@ -53,6 +55,7 @@ case "$ACTION" in
     DEFAULT_PANE_INDEX="${DEFAULT_PANE_INDEX:-0}"
     WINDOW=""; HARNESS=""; WORKTREE=""; PANE_INDEX="$DEFAULT_PANE_INDEX"; PR=""
     OC_URL=""; OC_SESSION_ID=""; OC_PORT=""
+    CC_URL=""; CC_SESSION_UUID=""; CC_PORT=""; CC_TRANSCRIPT=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --window) WINDOW="$2"; shift 2 ;;
@@ -63,6 +66,10 @@ case "$ACTION" in
         --oc-url) OC_URL="$2"; shift 2 ;;
         --oc-session-id) OC_SESSION_ID="$2"; shift 2 ;;
         --oc-port) OC_PORT="$2"; shift 2 ;;
+        --cc-url) CC_URL="$2"; shift 2 ;;
+        --cc-session-uuid) CC_SESSION_UUID="$2"; shift 2 ;;
+        --cc-port) CC_PORT="$2"; shift 2 ;;
+        --cc-transcript) CC_TRANSCRIPT="$2"; shift 2 ;;
         *) echo "Unknown flag: $1" >&2; exit 2 ;;
       esac
     done
@@ -79,6 +86,16 @@ case "$ACTION" in
         OC_PORT=$(jq -r '.port // ""' "$_spawn_file" 2>/dev/null || echo "")
       fi
     fi
+    # Auto-hydrate claude channel metadata.
+    if [[ "$HARNESS" == "claude" && -z "$CC_URL" ]]; then
+      _cc_spawn_file="$(cc_spawn_file "$ISSUE")"
+      if [[ -f "$_cc_spawn_file" ]]; then
+        CC_URL=$(jq -r '.url // ""' "$_cc_spawn_file" 2>/dev/null || echo "")
+        CC_SESSION_UUID=$(jq -r '.session_uuid // ""' "$_cc_spawn_file" 2>/dev/null || echo "")
+        CC_PORT=$(jq -r '.port // ""' "$_cc_spawn_file" 2>/dev/null || echo "")
+        CC_TRANSCRIPT=$(jq -r '.transcript // ""' "$_cc_spawn_file" 2>/dev/null || echo "")
+      fi
+    fi
 
     "$FD_STATE" init >/dev/null
     SESSION=$(tmux display-message -p '#S' 2>/dev/null || echo unknown)
@@ -93,6 +110,10 @@ case "$ACTION" in
       --arg oc_url "$OC_URL" \
       --arg oc_session_id "$OC_SESSION_ID" \
       --arg oc_port "$OC_PORT" \
+      --arg cc_url "$CC_URL" \
+      --arg cc_session_uuid "$CC_SESSION_UUID" \
+      --arg cc_port "$CC_PORT" \
+      --arg cc_transcript "$CC_TRANSCRIPT" \
       --arg now "$(now)" \
       '{
         window: $window,
@@ -103,6 +124,10 @@ case "$ACTION" in
         oc_url: ($oc_url | if . == "" then null else . end),
         oc_session_id: ($oc_session_id | if . == "" then null else . end),
         oc_port: ($oc_port | if . == "" then null else (. | tonumber) end),
+        cc_url: ($cc_url | if . == "" then null else . end),
+        cc_session_uuid: ($cc_session_uuid | if . == "" then null else . end),
+        cc_port: ($cc_port | if . == "" then null else (. | tonumber) end),
+        cc_transcript: ($cc_transcript | if . == "" then null else . end),
         state: "waiting",
         substate: null,
         unknown_since: null,
@@ -213,6 +238,16 @@ case "$ACTION" in
       oc_release_port "$_oc_port" 2>/dev/null || true
     fi
     rm -f "$_oc_spawn_file" 2>/dev/null || true
+    # Claude channel cleanup (Phase 2): release port, drop spawn + mcp
+    # config files. The MCP webhook subprocess is a child of claude
+    # itself, so killing the tmux pane (or the user exiting claude)
+    # reaps it — no separate kill needed here.
+    _cc_port=$("$FD_STATE" get ".issues[\"$ISSUE\"].cc_port // empty" 2>/dev/null | tr -d '"')
+    if [[ -n "$_cc_port" && "$_cc_port" != "null" ]]; then
+      cc_release_port "$_cc_port" 2>/dev/null || true
+    fi
+    rm -f "$(cc_spawn_file "$ISSUE")" 2>/dev/null || true
+    rm -rf "$(cc_mcp_dir "$ISSUE")" 2>/dev/null || true
     "$FD_STATE" set ".issues" "(.issues | del(.[\"$ISSUE\"]))"
     ;;
 
@@ -227,6 +262,20 @@ case "$ACTION" in
     sid=$(awk -F'\t' '{print $2}' <<< "$line")
     if [[ -n "$url" && -n "$sid" && "$url" != "null" && "$sid" != "null" ]]; then
       printf -- "--url %s --session %s\n" "$url" "$sid"
+    fi
+    ;;
+
+  cc-channel-args)
+    # Print "--url <U> --transcript <T>" when both are set for the
+    # given claude issue. Empty stdout when missing — caller falls
+    # back to tmux send-keys / capture-pane.
+    ISSUE="${1:-}"
+    [[ -z "$ISSUE" ]] && { echo "Usage: cc-channel-args <ISSUE>" >&2; exit 2; }
+    line=$("$FD_STATE" get ".issues[\"$ISSUE\"] // {} | [(.cc_url // \"\"), (.cc_transcript // \"\")] | @tsv" 2>/dev/null | tr -d '"')
+    url=$(awk -F'\t' '{print $1}' <<< "$line")
+    transcript=$(awk -F'\t' '{print $2}' <<< "$line")
+    if [[ -n "$url" && -n "$transcript" && "$url" != "null" && "$transcript" != "null" ]]; then
+      printf -- "--url %s --transcript %s\n" "$url" "$transcript"
     fi
     ;;
 

@@ -26,6 +26,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=lib/oc-paths.sh
 source "$SCRIPT_DIR/lib/oc-paths.sh"
+# shellcheck source=lib/cc-channel-paths.sh
+source "$SCRIPT_DIR/lib/cc-channel-paths.sh"
 
 # Resolve project root (works in worktrees and main repos)
 PROJECT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)"
@@ -48,6 +50,7 @@ GH_ISSUE_PATTERN="${GH_ISSUE_PATTERN:-[A-Z]+-[0-9]+}"
 TERMINAL_MODE=""
 HARNESS=""
 ISSUES=()
+USE_CHANNELS="${FLIGHTDECK_CLAUDE_CHANNELS:-0}"
 GROUP_ID=""
 CMD_TEMPLATE=""
 
@@ -58,6 +61,8 @@ while [[ $# -gt 0 ]]; do
     --harness) HARNESS="$2"; shift 2 ;;
     --harness=*) HARNESS="${1#--harness=}"; shift ;;
     --cmd) CMD_TEMPLATE="$2"; shift 2 ;;
+    --use-channels) USE_CHANNELS=1; shift ;;
+    --no-channels)  USE_CHANNELS=0; shift ;;
     --help|-h)
       echo "Usage: open-terminal ISSUE-1 [ISSUE-2 ...] [options]"
       echo ""
@@ -359,6 +364,169 @@ spawn_oc_attach_tmux() {
   return 0
 }
 
+# --- Claude code Channels adapter (Phase 2) -----------------------------------
+#
+# Opt-in via FLIGHTDECK_CLAUDE_CHANNELS=1 or --use-channels. Default
+# claude spawn stays on the existing tmux send-keys / capture-pane path.
+#
+# Spawn flow:
+#   1. Verify deps (claude >=2.1.80, claude.ai auth, bun).
+#   2. Idempotent bootstrap of the vendored MCP webhook (bun install).
+#   3. Allocate channel port from 8780-8879 (host-global, flock).
+#   4. Pin a deterministic session UUID derived from the issue id.
+#   5. Write per-pane .mcp.json under FD_STATE_DIR/cc-channel/<ISSUE>/.
+#   6. Spawn claude in tmux with --session-id, --mcp-config, and
+#      --dangerously-load-development-channels server:webhook.
+#   7. Persist {url, port, session_uuid, transcript, directory, mcp_path}
+#      to cc_spawn_file($issue) for pane-registry / pane-respond /
+#      pane-poll / daemon to discover.
+#
+# Outbound (in pane-poll / daemon): tail
+#   ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl
+# Inbound (in pane-respond): POST to http://127.0.0.1:<port>/.
+
+resolve_claude_bin() {
+  if [[ -x /usr/bin/claude ]]; then
+    echo "/usr/bin/claude"
+    return 0
+  fi
+  local p
+  p=$(type -P claude 2>/dev/null || true)
+  if [[ -n "$p" && -x "$p" ]]; then
+    echo "$p"
+    return 0
+  fi
+  return 1
+}
+
+# Verify claude version is >= 2.1.80 (channels minimum).
+cc_verify_claude_version() {
+  local bin="$1"
+  local ver_line; ver_line=$("$bin" --version 2>/dev/null | head -n 1)
+  # Format example: "2.1.119 (Claude Code)"
+  local v; v=$(echo "$ver_line" | awk '{print $1}')
+  [[ -z "$v" ]] && return 1
+  local major minor patch
+  IFS='.' read -r major minor patch <<< "$v"
+  if [[ "$major" -gt 2 ]]; then return 0; fi
+  if [[ "$major" -eq 2 && "$minor" -gt 1 ]]; then return 0; fi
+  if [[ "$major" -eq 2 && "$minor" -eq 1 && "$patch" -ge 80 ]]; then return 0; fi
+  return 1
+}
+
+# Verify claude.ai auth is in use (Channels won't work with API key /
+# Bedrock / Vertex). claude auth status output varies; we just look for
+# any indication of claude.ai login.
+cc_verify_claude_auth() {
+  local bin="$1"
+  local out; out=$("$bin" auth status 2>&1 | head -n 20)
+  grep -qiE 'claude\.ai|authMethod.*claude\.ai|Login Method.*Claude (Account|Pro|Max)' <<< "$out"
+}
+
+cc_write_mcp_config() {
+  local issue="$1" port="$2"
+  local mcp_dir; mcp_dir=$(cc_mcp_dir "$issue")
+  mkdir -p "$mcp_dir"
+  local webhook="$SCRIPT_DIR/../lib/claude-channel-server/webhook.ts"
+  webhook=$(cd "$(dirname "$webhook")" && pwd)/$(basename "$webhook")
+  jq -n \
+    --arg cmd "bun" \
+    --arg path "$webhook" \
+    --arg port "$port" \
+    --arg session "$issue" \
+    '{
+      mcpServers: {
+        webhook: {
+          command: $cmd,
+          args: [$path],
+          env: { CC_CHANNEL_PORT: $port, CC_CHANNEL_SESSION: $session }
+        }
+      }
+    }' > "$(cc_mcp_config "$issue")"
+  cc_mcp_config "$issue"
+}
+
+# Build claude spawn cmd for tmux. The trust prompt for
+# --dangerously-load-development-channels is dismissed via a delayed
+# tmux send-keys after the pane opens (see post-spawn step).
+build_claude_channel_cmd() {
+  local bin="$1" mcp_path="$2" uuid="$3" issue="$4" bypass="$5"
+  printf "%s -n %q %s --model 'opus[1m]' --effort max --session-id %s --mcp-config %q --dangerously-load-development-channels server:webhook '/orchestration start %s'" \
+    "$bin" "$issue" "$bypass" "$uuid" "$mcp_path" "$issue"
+}
+
+# Tmux-mode claude channels spawn. Returns 0 on success with bridge
+# metadata persisted in cc_spawn_file($issue). Any failure path cleans
+# up its own resources (port release, mcp dir keep) and returns
+# non-zero — caller falls through to legacy spawn.
+spawn_cc_channel_tmux() {
+  local issue="$1" wt_path="$2"
+  local bin port uuid mcp_path
+
+  if ! bin=$(resolve_claude_bin); then
+    echo "  cc-channel-unavailable: claude binary not found (PATH or /usr/bin)" >&2
+    return 1
+  fi
+  if ! cc_verify_claude_version "$bin"; then
+    echo "  cc-channel-unavailable: claude version is < 2.1.80 (channels minimum)" >&2
+    return 1
+  fi
+  if ! cc_verify_claude_auth "$bin"; then
+    echo "  cc-channel-unavailable: claude.ai auth required (channels don't work with API key / Bedrock / Vertex)" >&2
+    return 1
+  fi
+  if ! "$SCRIPT_DIR/../lib/claude-channel-server/bootstrap" >&2; then
+    echo "  cc-channel-unavailable: claude-channel-server bootstrap failed" >&2
+    return 1
+  fi
+
+  if ! port=$(cc_alloc_port "$issue"); then
+    echo "  cc-channel-unavailable: no free port in $CC_PORT_RANGE_START-$CC_PORT_RANGE_END" >&2
+    return 1
+  fi
+
+  uuid=$(cc_uuid_for_issue "$issue")
+  mcp_path=$(cc_write_mcp_config "$issue" "$port")
+
+  local bypass; bypass="$(bypass_flag_for_harness claude)"
+  local cmd; cmd=$(build_claude_channel_cmd "$bin" "$mcp_path" "$uuid" "$issue" "$bypass")
+  if ! open_tmux "$wt_path" "$issue" "$cmd"; then
+    cc_release_port "$port"
+    return 1
+  fi
+
+  # Pre-warm the trust prompt for --dangerously-load-development-channels.
+  # First-launch only; subsequent launches skip the dialog if user
+  # already trusted. Sending y/Enter after a small delay is harmless if
+  # the prompt isn't there.
+  (
+    sleep 4
+    local session; session=$(tmux display-message -p '#S' 2>/dev/null || echo HT)
+    tmux send-keys -t "${session}:${issue}" "y" 2>/dev/null || true
+    sleep 0.3
+    tmux send-keys -t "${session}:${issue}" Enter 2>/dev/null || true
+  ) &
+  disown 2>/dev/null || true
+
+  local spawn_file abs_wt transcript
+  spawn_file=$(cc_spawn_file "$issue")
+  abs_wt=$(cd "$wt_path" && pwd)
+  transcript=$(cc_transcript_path "$wt_path" "$uuid")
+  jq -nc \
+    --arg url "http://127.0.0.1:$port" \
+    --arg uuid "$uuid" \
+    --arg dir "$abs_wt" \
+    --arg transcript "$transcript" \
+    --arg mcp "$mcp_path" \
+    --argjson port "$port" \
+    --arg ts "$(date -Iseconds)" \
+    '{url:$url, session_uuid:$uuid, directory:$dir, transcript:$transcript, mcp_config:$mcp, port:$port, allocated_at:$ts}' \
+    > "$spawn_file"
+
+  echo "  cc-channel: port=$port uuid=$uuid transcript=$transcript"
+  return 0
+}
+
 # --- Terminal launchers -------------------------------------------------------
 
 # Pre-trust directory in Claude Code config so the trust dialog is skipped
@@ -482,6 +650,21 @@ for ISSUE in "${ISSUES[@]}"; do
   # spawn file and use the tmux send-keys / capture-pane fallback path.
   if [[ "$TERMINAL_MODE" == "tmux" && "$HARNESS" == "opencode" && -z "$CMD_TEMPLATE" ]]; then
     if spawn_oc_attach_tmux "$ISSUE" "$WT_PATH"; then
+      LAUNCHED=$((LAUNCHED + 1))
+      continue
+    fi
+    # fall through to legacy spawn below
+  fi
+
+  # Claude Channels (Phase 2; opt-in via FLIGHTDECK_CLAUDE_CHANNELS=1
+  # or --use-channels). Allocates a channel port, writes per-pane
+  # .mcp.json, spawns claude with --session-id + --mcp-config +
+  # --dangerously-load-development-channels. Falls back to legacy
+  # spawn on any failure (claude < 2.1.80, wrong auth, no bun, port
+  # exhausted, etc.) — pane stays launched, just on tmux-fallback.
+  if [[ "$TERMINAL_MODE" == "tmux" && "$HARNESS" == "claude" && -z "$CMD_TEMPLATE" \
+        && "$USE_CHANNELS" == "1" ]]; then
+    if spawn_cc_channel_tmux "$ISSUE" "$WT_PATH"; then
       LAUNCHED=$((LAUNCHED + 1))
       continue
     fi

@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# Phase 2 smoke test — claude code Channels adapter end-to-end.
+#
+# Verifies: channel-port allocator, vendored MCP webhook bootstrap,
+# per-pane .mcp.json scaffold, claude spawn with --session-id +
+# --mcp-config + --dangerously-load-development-channels, trust-prompt
+# pre-warm, JSONL transcript creation, channel POST → message arrives
+# in claude's context as `<channel source="webhook">` tag, assistant
+# turn appears in the transcript with stop_reason, port released.
+#
+# Assertions never use `tmux send-keys` for content (only the trust-
+# prompt pre-warm). The adapter contract is verified via HTTP POST +
+# JSONL transcript reads.
+#
+# Requires: $TMUX set, /usr/bin/claude (>=2.1.80), claude.ai auth, bun,
+# curl, jq, flock.
+
+set -euo pipefail
+
+TEST_NAME="claude-channel-smoke"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPTS="$SKILL_DIR/scripts"
+
+# shellcheck source=../scripts/lib/cc-channel-paths.sh
+source "$SCRIPTS/lib/cc-channel-paths.sh"
+
+red()    { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+green()  { printf '\033[32m%s\033[0m\n' "$*"; }
+note()   { printf '  %s\n' "$*"; }
+warn()   { printf '\033[33m  %s\033[0m\n' "$*" >&2; }
+fail()   { red "FAIL[$TEST_NAME]: $*"; cleanup; exit 1; }
+
+# --- Preflight ---------------------------------------------------------------
+[[ -z "${TMUX:-}" ]] && fail "must run inside a tmux session"
+for cmd in curl jq flock sha256sum bun; do
+  command -v "$cmd" >/dev/null 2>&1 || fail "missing required cmd: $cmd"
+done
+CLAUDE_BIN=""
+if [[ -x /usr/bin/claude ]]; then
+  CLAUDE_BIN=/usr/bin/claude
+else
+  CLAUDE_BIN=$(type -P claude 2>/dev/null || true)
+fi
+[[ -z "$CLAUDE_BIN" || ! -x "$CLAUDE_BIN" ]] && fail "claude binary not found"
+
+# Verify version >= 2.1.80
+ver=$("$CLAUDE_BIN" --version 2>/dev/null | awk '{print $1}')
+ver_major=${ver%%.*}
+ver_rest=${ver#*.}
+ver_minor=${ver_rest%%.*}
+ver_patch=${ver_rest#*.}
+if (( ver_major < 2 )) || \
+   (( ver_major == 2 && ver_minor < 1 )) || \
+   (( ver_major == 2 && ver_minor == 1 && ver_patch < 80 )); then
+  fail "claude version $ver is < 2.1.80 (channels minimum)"
+fi
+note "claude version=$ver"
+
+# Verify claude.ai auth
+auth_out=$("$CLAUDE_BIN" auth status 2>&1 | head -n 20)
+if ! grep -qiE 'claude\.ai|authMethod.*claude\.ai|Login Method.*Claude (Account|Pro|Max)' <<< "$auth_out"; then
+  fail "claude.ai auth required (channels don't work with API key / Bedrock / Vertex)"
+fi
+note "claude.ai auth confirmed"
+
+# Bootstrap the vendored MCP webhook server.
+"$SKILL_DIR/lib/claude-channel-server/bootstrap" >&2 \
+  || fail "claude-channel-server bootstrap failed"
+
+# --- Isolation ---------------------------------------------------------------
+TEST_TMPDIR=$(mktemp -d -t fd-cc-smoke-XXXXXX)
+WORKTREE="$TEST_TMPDIR/worktree"
+mkdir -p "$WORKTREE"
+ABS_WORKTREE=$(cd "$WORKTREE" && pwd)
+
+export FD_STATE_DIR="$TEST_TMPDIR/state"
+mkdir -p "$FD_STATE_DIR"
+chmod 0700 "$FD_STATE_DIR"
+
+ISSUE="CC-SMOKE-$$"   # PID makes session UUID per-run unique
+WINDOW_NAME="cc-smoke-$$"
+TEST_WINDOW=""
+ALLOCATED_PORT=""
+TRANSCRIPT=""
+
+cleanup() {
+  if [[ -n "$TEST_WINDOW" ]]; then
+    tmux kill-window -t "$TEST_WINDOW" 2>/dev/null || true
+  fi
+  if [[ -n "$ALLOCATED_PORT" ]]; then
+    cc_release_port "$ALLOCATED_PORT" 2>/dev/null || true
+  fi
+  rm -rf "$TEST_TMPDIR"
+  # Don't delete the JSONL transcript at $TRANSCRIPT — claude owns
+  # ~/.claude/projects, and the per-issue UUID makes our file unique
+  # to this test run anyway. It'll be reaped naturally or by user.
+}
+trap cleanup EXIT INT TERM
+
+# --- Step 1: allocate channel port + write .mcp.json -------------------------
+note "step 1: allocate channel port + write .mcp.json"
+ALLOCATED_PORT=$(cc_alloc_port "$ISSUE") || fail "cc_alloc_port returned non-zero"
+[[ "$ALLOCATED_PORT" =~ ^[0-9]+$ ]] || fail "allocated port not numeric: $ALLOCATED_PORT"
+note "  port=$ALLOCATED_PORT"
+
+UUID=$(cc_uuid_for_issue "$ISSUE")
+note "  session_uuid=$UUID"
+
+MCP_DIR=$(cc_mcp_dir "$ISSUE")
+mkdir -p "$MCP_DIR"
+WEBHOOK_PATH="$SKILL_DIR/lib/claude-channel-server/webhook.ts"
+WEBHOOK_PATH=$(cd "$(dirname "$WEBHOOK_PATH")" && pwd)/$(basename "$WEBHOOK_PATH")
+MCP_CFG=$(cc_mcp_config "$ISSUE")
+jq -n \
+  --arg cmd "bun" \
+  --arg path "$WEBHOOK_PATH" \
+  --arg port "$ALLOCATED_PORT" \
+  --arg session "$ISSUE" \
+  '{
+    mcpServers: {
+      webhook: {
+        command: $cmd,
+        args: [$path],
+        env: { CC_CHANNEL_PORT: $port, CC_CHANNEL_SESSION: $session }
+      }
+    }
+  }' > "$MCP_CFG"
+[[ -f "$MCP_CFG" ]] || fail ".mcp.json not written at $MCP_CFG"
+note "  mcp.json=$MCP_CFG"
+
+TRANSCRIPT=$(cc_transcript_path "$WORKTREE" "$UUID")
+note "  expected transcript=$TRANSCRIPT"
+
+# --- Step 2: spawn claude in test tmux window --------------------------------
+note "step 2: spawn claude --session-id + --mcp-config + --dangerously-load-development-channels"
+SESSION_NAME=$(tmux display-message -p '#S')
+LAST_IDX=$(tmux list-windows -t "$SESSION_NAME" -F '#{window_index}' | tail -1)
+CMD=$(printf "%s --session-id %s --mcp-config %q --dangerously-skip-permissions --dangerously-load-development-channels server:webhook 'reply with READY-CHECK and nothing else'" \
+        "$CLAUDE_BIN" "$UUID" "$MCP_CFG")
+tmux new-window -d -a -t "${SESSION_NAME}:${LAST_IDX}" -n "$WINDOW_NAME" -c "$ABS_WORKTREE" "$CMD"
+TEST_WINDOW="${SESSION_NAME}:${WINDOW_NAME}"
+note "  tmux window=$TEST_WINDOW"
+
+# Pre-warm the trust prompt for the dangerous-channels flag. Sends y +
+# Enter after a short delay; harmless if the prompt isn't present.
+( sleep 4
+  tmux send-keys -t "$TEST_WINDOW" "y" 2>/dev/null || true
+  sleep 0.3
+  tmux send-keys -t "$TEST_WINDOW" Enter 2>/dev/null || true
+) &
+disown 2>/dev/null || true
+
+# --- Step 3: wait for transcript to exist ------------------------------------
+note "step 3: wait for transcript to be created"
+deadline=$((SECONDS + 60))
+while (( SECONDS < deadline )); do
+  if [[ -f "$TRANSCRIPT" ]]; then break; fi
+  sleep 1
+done
+[[ -f "$TRANSCRIPT" ]] || fail "transcript not created within 60s at $TRANSCRIPT"
+note "  transcript present"
+
+# --- Step 4: wait for first assistant turn (READY-CHECK reply) --------------
+note "step 4: wait for first assistant turn (bootstrap reply)"
+deadline=$((SECONDS + 120))
+saw_first_assistant=0
+while (( SECONDS < deadline )); do
+  count=$(jq -r 'select(((.message.role // .role // "") == "assistant"))' "$TRANSCRIPT" 2>/dev/null | wc -l)
+  if (( count >= 1 )); then
+    saw_first_assistant=1
+    break
+  fi
+  sleep 2
+done
+(( saw_first_assistant == 1 )) || fail "first assistant turn never appeared in transcript within 120s"
+note "  assistant turn present"
+
+# --- Step 5: POST a channel message + verify it lands ------------------------
+note "step 5: POST to channel server + verify <channel> tag arrives"
+SMOKE_MSG="reply literally with CHAN-SMOKE-OK"
+resp=$(curl -s -X POST -d "$SMOKE_MSG" "http://127.0.0.1:$ALLOCATED_PORT/" 2>&1)
+grep -q '^ok session=' <<< "$resp" \
+  || fail "channel POST returned unexpected body: $resp"
+note "  POST ok: $resp"
+
+# Wait for a NEW assistant turn (post-channel) to appear. We check by
+# looking for CHAN-SMOKE-OK in any assistant content block.
+deadline=$((SECONDS + 180))
+saw_smoke_ok=0
+while (( SECONDS < deadline )); do
+  if jq -e '
+    select(((.message.role // .role // "") == "assistant"))
+    | (.message.content // .content // [])
+    | (if type == "array" then map(select(.type == "text") | .text // "") | join("") else . end)
+    | contains("CHAN-SMOKE-OK")
+  ' "$TRANSCRIPT" >/dev/null 2>&1; then
+    saw_smoke_ok=1
+    break
+  fi
+  sleep 2
+done
+(( saw_smoke_ok == 1 )) || fail "CHAN-SMOKE-OK never appeared in any assistant turn within 180s"
+note "  CHAN-SMOKE-OK observed in transcript"
+
+# --- Step 6: verify channel event was recorded -------------------------------
+note "step 6: verify <channel source=\"webhook\"> tag in transcript"
+if ! jq -e '
+  select((.message.content // .content // []) | tostring | test("<channel"))
+' "$TRANSCRIPT" >/dev/null 2>&1; then
+  warn "no <channel> tag found in any message — adapter still worked (CHAN-SMOKE-OK observed) but tag detection is heuristic"
+else
+  note "  <channel> tag observed"
+fi
+
+# --- Step 7: teardown -------------------------------------------------------
+note "step 7: kill tmux window + release port"
+tmux kill-window -t "$TEST_WINDOW" 2>/dev/null || true
+TEST_WINDOW=""
+cc_release_port "$ALLOCATED_PORT"
+PORTS_AFTER=$(jq -r --arg p "$ALLOCATED_PORT" 'has($p)' "$(cc_ports_file)" 2>/dev/null || echo "false")
+[[ "$PORTS_AFTER" == "false" ]] || fail "port $ALLOCATED_PORT still present after release"
+ALLOCATED_PORT=""
+note "  cleanup done"
+
+green "PASS[$TEST_NAME]"

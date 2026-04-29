@@ -405,6 +405,7 @@ opencode_run_attach() {
 # registry, route ALL non-tmux modes through `opencode run --attach`.
 # --keys is rejected unless --keys-allow-tmux opts into tmux fallback.
 OC_ADAPTER_USED=0
+CC_ADAPTER_USED=0
 if [[ "$HARNESS" == "opencode" ]]; then
   # Source helpers for spawn-file fallback (oc_attach_args_from_spawn,
   # oc_issue_from_pane_target).
@@ -448,7 +449,67 @@ if [[ "$HARNESS" == "opencode" ]]; then
   fi
 fi
 
-if [[ $OC_ADAPTER_USED -eq 0 ]]; then
+# Claude Channels adapter (Phase 2): when the pane has cc-channel
+# metadata in the registry, route via HTTP POST to the channel server.
+# All non-tmux modes route through the channel; --keys is rejected
+# unless --keys-allow-tmux. Symmetric with the opencode block above.
+if [[ "$HARNESS" == "claude" && $OC_ADAPTER_USED -eq 0 ]]; then
+  # shellcheck source=lib/cc-channel-paths.sh
+  source "$SCRIPT_DIR/lib/cc-channel-paths.sh"
+  cc_issue=$("$SCRIPT_DIR/pane-registry" find-by-pane "$TARGET" 2>/dev/null || echo "")
+  cc_args=""
+  if [[ -n "$cc_issue" ]]; then
+    cc_args=$("$SCRIPT_DIR/pane-registry" cc-channel-args "$cc_issue" 2>/dev/null || echo "")
+  fi
+  # Spawn-file fallback (registry init may not have run yet).
+  if [[ -z "$cc_args" ]]; then
+    derived_issue=$(oc_issue_from_pane_target "$TARGET")
+    if [[ -n "$derived_issue" ]]; then
+      cc_spawn="$(cc_spawn_file "$derived_issue")"
+      if [[ -f "$cc_spawn" ]]; then
+        cc_url=$(jq -r '.url // ""' "$cc_spawn" 2>/dev/null || echo "")
+        cc_transcript=$(jq -r '.transcript // ""' "$cc_spawn" 2>/dev/null || echo "")
+        if [[ -n "$cc_url" && -n "$cc_transcript" ]]; then
+          cc_args="--url $cc_url --transcript $cc_transcript"
+        fi
+      fi
+    fi
+  fi
+  if [[ -n "$cc_args" ]]; then
+    if [[ "$MODE" == "keys" && $KEYS_ALLOW_TMUX -eq 0 ]]; then
+      echo "Error: --keys not supported for claude channels adapter." >&2
+      echo "       Pass --keys-allow-tmux to send via tmux send-keys (true modal cases only)." >&2
+      exit 1
+    fi
+    if [[ "$MODE" != "keys" ]]; then
+      cc_url=$(awk '{for(i=1;i<=NF;i++)if($i=="--url"){print $(i+1);exit}}' <<< "$cc_args")
+      case "$MODE" in
+        payload)      message="$PAYLOAD" ;;
+        option)       message="$OPTION_N" ;;
+        option-multi) message=$(echo "$OPTION_MULTI_CSV" | sed 's/,/, /g') ;;
+      esac
+      # POST to the channel server. The MCP webhook forwards as a
+      # `<channel source="webhook" session="<ISSUE>" ...>` notification
+      # to claude. POST returns immediately; no completion-wait — the
+      # daemon JSONL subscriber detects the eventual assistant turn.
+      cc_resp=$(curl -s -m 10 -X POST -d "$message" "$cc_url/" 2>&1)
+      cc_rc=$?
+      if (( cc_rc != 0 )); then
+        echo "Error: claude channel POST failed (rc=$cc_rc): $cc_resp" >&2
+        exit 5
+      fi
+      if ! grep -q '^ok ' <<< "$cc_resp"; then
+        echo "Error: claude channel POST returned unexpected body: $cc_resp" >&2
+        exit 5
+      fi
+      CC_ADAPTER_USED=1
+    fi
+  else
+    echo "Note: cc-channel-unavailable for $TARGET (no registry metadata); using tmux fallback" >&2
+  fi
+fi
+
+if [[ $OC_ADAPTER_USED -eq 0 && $CC_ADAPTER_USED -eq 0 ]]; then
   # Pre-send busy check (claude only; opencode adapter path bypassed above).
   if pane_is_busy "$TARGET" "$HARNESS"; then
     echo "Error: pane $TARGET shows active spinner; refusing to send. Wait and retry." >&2
