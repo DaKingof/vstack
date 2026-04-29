@@ -2,6 +2,10 @@
 
 Pane targeting, bell handling, and capture-pane idioms for safely observing the per-issue panes spawned by orchestration.
 
+> **Fallback path notice (Phase 1+):** for harnesses with a wired adapter, `pane-poll` and `pane-respond` route data through HTTP / Unix-socket / WS instead of tmux capture-pane / send-keys. The tmux primitives below remain the **fallback path** — used for harnesses without an adapter, and for panes whose bridge metadata is absent (legacy session, port exhausted, adapter not yet wired). Each adapter has an explicit fallback contract; daemon and scripts log `<adapter>-unavailable: <reason>` before falling through, never silent.
+>
+> Adapter coverage to date: opencode (HTTP-attach via `opencode run --attach` + `GET /session/<id>/message`).
+
 ## Pane-0 rule
 
 **Always target the explicit pane index `<session>:<window>.0` for orchestrator-pane reads.**
@@ -130,7 +134,7 @@ Inner pane's shell is dead because the worktree was removed mid-session. After t
 |---------|----------|
 | Claude Code | `(N-1) × Down` then `Enter`. Numbers are NOT shortcuts; they're buffered as text. |
 | codex | (TBD — verify before wiring; do not assume Claude Code's mechanic.) |
-| opencode | Pre-clear input via `Ctrl-A Ctrl-K`, then send the bare digit `N`. opencode treats digits as option shortcuts when the input box is empty and auto-submits — no trailing Enter required. The pre-clear handles stray input that may have leaked into the input buffer (notably OSC palette responses from terminal queries). |
+| opencode | **Adapter path (primary):** `opencode run --attach --format json -- "N"`. The bare digit is sent as message text; opencode's TUI interprets it contextually as an option pick. **Fallback (when adapter unavailable):** `--option` is unsupported in tmux fallback for opencode — the digit-key tmux adapter was removed in Phase 1; use payload mode (free-text `"N"`) instead. |
 | omp | (TBD — verify before wiring.) |
 
 To add an adapter for a new harness:
@@ -146,7 +150,7 @@ To add an adapter for a new harness:
 |---------|----------|-----|
 | Claude Code | `tmux capture-pane -p -S -200` (history) | Default; scrollback is stable. |
 | codex | `tmux capture-pane -p -S -200` (history) | Same. |
-| opencode | `tmux capture-pane -p` (visible viewport only) | TUI sometimes scrolls the rendered buffer above the viewport, so `-S -200` returns stale middle content and misses the live prompt. |
+| opencode | **Adapter path:** `GET /session/<id>/message` → extract last assistant text. No tmux capture. **Fallback:** `tmux capture-pane -p -S -200` (history; previously viewport-only to dodge a TUI scrollback quirk that the adapter sidesteps entirely). |
 | omp | `tmux capture-pane -p -S -200` (history, default) | TBD — verify scrollback behavior in real use; switch to viewport-only if needed. |
 
 When adding a new harness, add its row in each table above and wire the matching adapter in the relevant script/workflow. Do not blanket-apply Claude Code's mechanic to other harnesses without verification.

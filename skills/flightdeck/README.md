@@ -8,8 +8,8 @@ This file is for humans installing or debugging the skill. Agents should read `S
 
 When the user invokes flightdeck's `start` workflow (or its parallel-group variant) from main, it launches one or more issue panes via `open-terminal` and the same agent transitions to master overseer of every spawned pane in the current tmux session. The exact invocation syntax depends on the harness (Claude Code uses `/flightdeck start`, Codex uses `$flightdeck start`, OpenCode uses `/flightdeck start` or similar — see your harness docs). It:
 
-- Polls each pane for prompts (bell flag, capture-pane sentinel matching).
-- Classifies prompts and answers them with learned defaults.
+- Subscribes to per-pane harness adapter event streams (opencode HTTP-attach in Phase 1); falls back to bell flag + capture-pane sentinel matching for adapter-unavailable panes.
+- Classifies prompts and answers them with learned defaults — adapter-mode opencode responses go through `opencode run --attach`, not tmux send-keys.
 - For prompts that trigger sub-agent delegation (rebase resolution, fix delegation), embeds the necessary guidance in the same input as the option pick (a follow-up message arrives too late).
 - Watches PR state, builds a file-level conflict graph between in-flight PRs, plans merge order smallest-scope-first.
 - Force-merges when a PR is APPROVED + all-green + content-disjoint and GitHub's `mergeStateStatus` has been `UNKNOWN` past the configured threshold.
@@ -58,10 +58,10 @@ Every script in `scripts/` appears in `SKILL.md`'s Scripts table. No hidden scri
 | `open-terminal` | Launch worktree(s) with auto-detected harness — never hand-roll tmux/terminal commands |
 | `parallel-groups` | Read/manage parallel issue groups |
 | `flightdeck-state` | Atomic CRUD on `tmp/flightdeck-state-<TMUX_SESSION>.json` (init/get/set/append/increment/archive/master-busy). `init` sweeps stale `.tmp.<PID>` orphans; `archive` rotates terminated state to `<file>-<terminated_at>.json.archive`; `master-busy lock\|unlock\|check` writes the daemon's busy-lockfile atomically |
-| `flightdeck-daemon` | External bash wake driver. Polls inner panes every 2s, wakes master via `tmux paste-buffer` on bell or canonical-classifier-tag stable. Coalesces simultaneous ready panes. Replaces harness scheduler primitives — works across claude/codex/opencode/omp. Actions: `start \| stop \| status \| events \| ack` |
-| `pane-registry` | Issue↔pane mapping wrapper |
-| `pane-poll` | Bell + capture-pane (pane 0 explicit) + classify |
-| `pane-respond` | Send to pane 0 (free-text / `--option N` / `--keys` modes); harness-aware option pick; validates rebase payloads have preserve/apply/verify triplet |
+| `flightdeck-daemon` | External bash wake driver. Per-pane subscribers (opencode HTTP-attach Phase 1) emit normalized turn-end events; daemon drains the wake-events log and wakes master via `tmux paste-buffer` on canonical classifier tags. Adapter-unavailable panes fall back to the legacy capture-pane + bell + hash-stable loop. Actions: `start \| stop \| status \| events \| ack` |
+| `pane-registry` | Issue↔pane mapping wrapper. Tracks opencode bridge metadata (`oc_url`, `oc_session_id`, `oc_port`); `oc-attach-args <ISSUE>` and `find-by-pane <pane-target>` lookups drive adapter dispatch in pane-respond / pane-poll |
+| `pane-poll` | Bell + per-harness adapter (opencode → `/session/<id>/message`) or tmux capture-pane fallback + classify |
+| `pane-respond` | Send to pane (free-text / `--option N` / `--option-multi` / `--keys` modes); opencode adapter routes via `opencode run --attach --format json`; tmux paste-buffer fallback; validates rebase payloads have preserve/apply/verify triplet |
 | `pane-clear-bell` | Atomic chained `select-window` cycle |
 | `pr-conflict-graph` | File-intersection adjacency for a PR list |
 | `prompt-classify` | Sentinel matcher → handler tag |

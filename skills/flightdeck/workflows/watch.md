@@ -120,13 +120,13 @@ For each tracked issue currently in a non-terminal state (`waiting | prompting |
 
 ## § 3: Decision Routing
 
-**Process prompting issues SEQUENTIALLY, not in parallel.** Round 4 confirmed: when 3+ panes prompt simultaneously and the master interleaves their handler invocations, each opencode `capture-pane` + `send-keys` round-trip's ~5s UI-refresh latency compounds. A 3-prompt burst that should take ~30 seconds balloons to ~3 minutes, the master becomes the bottleneck, and cognitive-load-induced keystroke errors creep in.
+**Process prompting issues SEQUENTIALLY, not in parallel.** Adapter calls (opencode HTTP-attach in Phase 1, future channels/socket/WS) are synchronous — no per-call round-trip cost — but classifier work and decision routing must stay ordered. Concurrent handler invocations across panes interleave decision logs, race the dedup state in the daemon's wake-pending tracker, and create cognitive-load-induced response errors at the master pane. Serialize for ordering, not for latency.
 
 For each issue currently in `state == "prompting"` and not debounced in § 2, **one at a time**:
 
 1. `⤵ workflows/handle-prompt.md <ISSUE_ID> <SUBSTATE_TAG> → § 4` — pass the captured buffer plus the classification tag. Handler decides the response (auto-answer, escalate, or "Type your own" with combined guidance).
 2. After handler returns:
-   - If a response was sent: `pane-respond` already cleared the bell and logged the decision via `pane-registry log-decision`. **Always pass `--confirm-advanced`** — this blocks until the prompt sentinel is gone (8s timeout, exit 4 on miss). Without it the loop moves on to the next issue while the previous send may still be in flight, racing the receiving TUI's redraw.
+   - If a response was sent: `pane-respond` already cleared the bell and logged the decision via `pane-registry log-decision`. For tmux-fallback panes pass `--confirm-advanced` — it polls until the prompt sentinel is gone (8s timeout, exit 4 on miss) so the loop doesn't move on while the previous send is still in flight. Adapter-mode opencode is naturally synchronous (`opencode run --attach` blocks until the turn completes), so `--confirm-advanced` is a safe no-op there.
    - If escalated to user: master state's `paused_for_user` is now populated; the watch loop yields control to the user. Resumption happens when the user re-invokes `watch`.
 3. Re-poll the same window after a confirmed-advanced response to detect the next state (the agent typically advances to its next phase within a few seconds). Only after the prompt has visibly advanced (or `--confirm-advanced` timed out and recovery is logged) move on to the next prompting issue.
 
