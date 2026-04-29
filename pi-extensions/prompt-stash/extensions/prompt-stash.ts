@@ -168,7 +168,7 @@ function renderSearchInput(query: string, cursor: number, width: number, theme: 
 	const after = query.length === 0 ? visibleQuery : safeCursor < query.length ? query.slice(safeCursor + 1) : "";
 	const cursorGlyph = theme.bg("selectedBg", theme.fg("text", cursorChar));
 	const raw = `${theme.fg("borderMuted", "▏ ")}${before}${cursorGlyph}${after}`;
-	return theme.bg("toolPendingBg", padAnsi(raw, safeWidth));
+	return theme.bg("userMessageBg", padAnsi(raw, safeWidth));
 }
 
 function filterItems(items: StashItem[], query: string): StashItem[] {
