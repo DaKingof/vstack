@@ -48,7 +48,7 @@ Master mode entry point. Polls every spawned issue pane, classifies their prompt
    ```
    `start` self-daemonizes via `setsid + nohup`: the call blocks until the child writes its PID file, then returns. Do NOT add `&` or harness-specific backgrounding — the daemon survives the calling shell's lifecycle on its own. The daemon refuses via flock if already running for this session, so the call is idempotent and safe on every `watch` re-entry.
 
-   For codex / opencode / omp masters, prefer the tmux-window spawn mode (set `FD_SPAWN_MODE=tmux-window` env or pass `--in-tmux-window`). The daemon runs inside a dedicated tmux window in the same session; lifetime ties to the tmux session (which is the architectural boundary of a flightdeck session anyway), and the window is visually inspectable. Detach mode is the default for Claude Code where `run_in_background` reparenting is reliable.
+   For codex / opencode / pi masters, prefer the tmux-window spawn mode (set `FD_SPAWN_MODE=tmux-window` env or pass `--in-tmux-window`). The daemon runs inside a dedicated tmux window in the same session; lifetime ties to the tmux session (which is the architectural boundary of a flightdeck session anyway), and the window is visually inspectable. Detach mode is the default for Claude Code where `run_in_background` reparenting is reliable.
 6. **Atomic master-busy lock** — write `tmp/fd-master-<SESSION_KEY>.busy` via temp+mv:
    ```
    .agents/skills/flightdeck/scripts/flightdeck-state master-busy lock

@@ -19,22 +19,21 @@ When the user invokes flightdeck's `start` workflow (or its parallel-group varia
 ## When it activates
 
 - Inside tmux only (`$TMUX` set).
-- After `open-terminal` in orchestration's `start.md` § 4.3 (single-issue) or § 4.4 (multi-issue).
+- When the user invokes `start` from main — flightdeck calls `open-terminal` for each issue and enters its watch loop.
 - For 1 or more issues — single-issue tmux activates flightdeck just as much as multi-issue.
 
 Outside tmux, flightdeck is a no-op.
 
 ## Installation
 
-Flightdeck is published as a vstack skill. Install via the standard vstack flow:
+Install via vstack:
 
 ```
 cd /path/to/your/project
-vstack add flightdeck
-vstack refresh
+vstack add vanillagreencom/vstack --skill flightdeck -y
 ```
 
-vstack pulls flightdeck automatically when the orchestrator role is selected (it's listed under `[role-skills]` in `vstack.toml`). Manual installation is rarely needed.
+Flightdeck's required dependencies (`github`, `linear`, `project-management`, `decider`) are auto-pulled. It's also included by default when an orchestrator-role agent is installed (see `[role-skills]` in `vstack.toml`).
 
 ## System Dependencies
 
@@ -42,12 +41,15 @@ vstack pulls flightdeck automatically when the orchestrator role is selected (it
 
 ## Configuration (env vars)
 
+See `SKILL.md § Configuration` for the canonical list. Common overrides:
+
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `FLIGHTDECK_POLL_INTERVAL` | `30` | Seconds between poll cycles |
 | `FLIGHTDECK_FORCE_MERGE_AFTER_SECS` | `240` | UNKNOWN-state wait threshold before considering force-merge |
 | `FLIGHTDECK_STATE_DIR` | `tmp` | Master-state file directory |
-| `FLIGHTDECK_DEBOUNCE_CYCLES` | `2` | Consecutive poll cycles for "all-done" termination |
+| `FLIGHTDECK_AUTO_MERGE` | `1` | Set `0` to escalate `merge-now` instead of auto-answering |
+| `FLIGHTDECK_OC_FOLLOWUP_PROMPT` | unset | Override the default `/orchestration start <ISSUE>` followup fired post-spawn (for tests / alt workflows) |
 
 ## Scripts
 
@@ -62,7 +64,7 @@ Every script in `scripts/` appears in `SKILL.md`'s Scripts table. No hidden scri
 | `codex-app-server-spawn` / `codex-app-server-stop` | Idempotent per-session bring-up + teardown of the codex `app-server --listen ws://...` shared by all `codex --remote` panes |
 | `pane-registry` | Issue↔pane mapping wrapper. Tracks per-harness bridge metadata (oc/cc/pi/cx URL+id+port fields); per-harness `*-bridge-args <ISSUE>` and `find-by-pane <pane-target>` lookups drive adapter dispatch in pane-respond / pane-poll |
 | `pane-poll` | Bell + per-harness adapter (opencode `/session/<id>/message`, claude JSONL tail, `pi-bridge history`, `codex-bridge turns`) or tmux capture-pane fallback + classify |
-| `pane-respond` | Send to pane (free-text / `--option N` / `--option-multi` / `--keys` modes); per-harness adapters route via `opencode run --attach`, channel POST, `pi-bridge send`, `codex-bridge send`; tmux paste-buffer fallback; validates rebase payloads have preserve/apply/verify triplet |
+| `pane-respond` | Send to pane: free-text / `--option N` / `--option-multi` / `--keys` / `--question <reqID> --answer "<label>"` (opencode question-tool API). Per-harness adapters route via `opencode run --attach`, channel POST, `pi-bridge send`, `codex-bridge send`; tmux paste-buffer fallback. Validates rebase payloads have preserve/apply/verify triplet |
 | `pane-clear-bell` | Atomic chained `select-window` cycle |
 | `pr-conflict-graph` | File-intersection adjacency for a PR list |
 | `prompt-classify` | Sentinel matcher → handler tag |
@@ -71,10 +73,12 @@ Every script in `scripts/` appears in `SKILL.md`'s Scripts table. No hidden scri
 
 Lessons that motivated this skill, distilled into domain-grouped docs under `patterns/`:
 
-- `tmux-monitoring.md` — pane-0 rule, bell handling, capture-pane idioms
+- `tmux-monitoring.md` — pane-0 rule, bell handling, capture-pane idioms, per-harness adapter signals
 - `prompt-handlers.md` — cleanup scope, combine-guidance, bot-review skip, rebase template, parent-vs-related, verify-don't-trust
 - `conflict-detection.md` — defer-ci semantics, file-intersection algorithm, force-merge predicate
 - `decision-biases.md` — smaller-PR-first, scope-creep detector, rule-of-three, expansion bias, merge-order tiebreakers
+- `claude-channels.md` — opt-in claude code Channels MCP webhook + JSONL adapter contract, known orchestration-trust limitation
+- `opencode-questions.md` — opencode question-tool routing via HTTP API (daemon `oc-question` event → `pane-respond --question`); off-list-label policy
 
 ## Debugging
 

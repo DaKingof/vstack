@@ -298,7 +298,7 @@ Worktree creation is idempotent: existing worktrees are reused (rebased onto lat
 
 5. **Create worktree**: `WT_PATH=$(.agents/skills/worktree/scripts/worktree create [ISSUE_ID])`
 
-6. **Launch**: Ask user which harness to launch: `claude` | `codex` | `opencode` | `omp` | `I'll launch it myself`
+6. **Launch**: Ask user which harness to launch: `claude` | `codex` | `opencode` | `pi` | `I'll launch it myself`
    - **Harness selected**: `.agents/skills/flightdeck/scripts/open-terminal [ISSUE_ID] --harness [HARNESS]`, then `⤵ workflows/watch.md [ISSUE_ID] § 1-9 → § 1` — `watch.md § 1` spawns `flightdeck-daemon` (idempotent, flock-protected) which drives wake delivery for the rest of the session. Enter master oversight loop until the spawned pane reaches a terminal state, then return to dashboard.
    - **Manual**: Show the command and worktree path so the user can run it themselves. → § 1.
    - **I'll launch it myself** → § 1.
@@ -312,7 +312,7 @@ Worktree creation is idempotent: existing worktrees are reused (rebased onto lat
 2. **Inform user**:
 
    <output_format>
-   If you are using a desktop app (no terminal), switch to the worktree(s) yourself and run `/orchestration start [ISSUE_ID]` (or `$orchestration start [ISSUE_ID]` on Codex, `/skill:orchestration start [ISSUE_ID]` on omp).
+   If you are using a desktop app (no terminal), switch to the worktree(s) yourself and run `/orchestration start [ISSUE_ID]` (or `$orchestration start [ISSUE_ID]` on Codex, `/skill:orchestration start [ISSUE_ID]` on Pi).
    </output_format>
 
 3. **Ask user** which harness and: `Launch [N] issues` | `Select subset` | `I'll launch them myself` | `Cancel`

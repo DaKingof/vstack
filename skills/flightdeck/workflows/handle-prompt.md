@@ -165,7 +165,7 @@ The agent's reconciliation pass found that a sibling issue's scope has been part
 The harness is asking permission to run a bash command. Default state is bypass-enabled (`--dangerously-skip-permissions` for Claude Code, pre-flight `bypassPermissions` settings file) so this prompt should be rare. It surfaces when:
 
 - Bypass was opted out via `OPEN_TERMINAL_NO_BYPASS=1` / `OPEN_TERMINAL_NO_BYPASS_SETTINGS=1`.
-- Harness has no bypass flag wired yet (codex / opencode adapters TBD).
+- Harness has no bypass flag wired yet for that scenario (codex / opencode rely on per-pane permission deny, not a CLI bypass flag).
 - A specific command pattern bypassed the harness's allowlist (e.g., shell substitutions tripping the parser).
 
 ### Allowlist auto-approve

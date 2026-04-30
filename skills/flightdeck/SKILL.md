@@ -5,7 +5,7 @@ license: MIT
 user-invocable: true
 dependencies:
   required: [github, linear, project-management]
-  optional: [worktree]
+  optional: [decider, worktree]
 metadata:
   author: vanillagreen
   version: "0.2.0"
@@ -113,7 +113,7 @@ Lessons distilled from real multi-issue session experience are grouped by domain
 | `flightdeck-daemon` | External bash wake driver. Per-pane subscribers — opencode HTTP-attach (Phase 1), claude JSONL tail (Phase 2), pi-bridge stream (Phase 3), codex-bridge stream (Phase 4) — emit normalized turn-end events into a wake-events log; daemon main loop drains and routes canonical-tag events through wake_master. Panes without adapter metadata fall through to the legacy capture-pane / bell / hash-stable loop. Coalesces multiple ready panes into one wake. Writes events JSONL master can drain. Actions: `start \| stop \| status \| events \| ack` |
 | `pane-registry` | Issue↔pane mapping CRUD (init from spawned issue list, list, update state per issue, reconcile against live tmux windows to drop stale entries) |
 | `pane-poll` | Single-window status read. Per-harness adapter routes: opencode → `GET /session/<id>/message`; claude → tail of `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`; pi → `pi-bridge history`; codex → `codex-bridge turns`. Tmux `capture-pane` is the fallback when a pane has no bridge metadata. Bell flag + classify. |
-| `pane-respond` | Send a response to a pane. Three modes: positional `<payload>` for free-text, `--option N` for numeric option pick (harness-aware: Claude Code uses arrow navigation; opencode/pi/codex adapters send digits as message text), `--keys k1,k2,...` for multi-step forms (rejected for any adapter unless `--keys-allow-tmux`). Adapter routes: opencode → `opencode run --attach --format json` (fire-and-verify-delivery); claude → channel POST; pi → `pi-bridge send`; codex → `codex-bridge send`. Tmux paste-buffer fallback when bridge metadata absent. Validates rebase-multi-choice payloads include the preserve/apply/verify triplet. |
+| `pane-respond` | Send a response to a pane. Modes: positional `<payload>` (free-text), `--option N` (numeric option pick — Claude Code uses arrow navigation, opencode/pi/codex adapters send digits as message text), `--option-multi N1,N2,...` (multi-select toggles), `--keys k1,k2,...` (raw key sequence — rejected unless `--keys-allow-tmux`), `--question <reqID> --answer "<label>" \| --answer-multi "l1,l2" \| --reject` (opencode question-tool API; routes via `POST <oc_url>/question/<id>/{reply,reject}`). Adapter routes: opencode → `opencode run --attach --format json` (fire-and-verify-delivery); claude → channel POST; pi → `pi-bridge send`; codex → `codex-bridge send`. Tmux paste-buffer fallback when bridge metadata absent. Validates rebase-multi-choice payloads include the preserve/apply/verify triplet. |
 | `pane-clear-bell` | Atomic chained-command bell clear (no flicker) |
 | `pr-conflict-graph` | Build file-intersection adjacency for a list of PR numbers via `gh pr view --json files` |
 | `prompt-classify` | Regex/sentinel matcher mapping a captured prompt buffer to a handler tag (`cleanup-prompt`, `bot-review-wait-stuck`, `rebase-multi-choice`, `audit-relation-prompt`, `merge-ready-but-unknown`, `scope-creep-detected`, `generic-multi-choice`, `rendering`) |
@@ -213,7 +213,7 @@ The user-visible output blocks at the end of `terminate.md` and `close-issue.md`
 5. **Aggressive autonomy on known shapes; escalate on novel shapes**. The classifier returns a tag for known prompt shapes. Unmatched prompts return `generic-multi-choice` and the handler escalates to user — it does NOT pick the first option.
 6. **Daemon-driven wake; no blocking sleeps**. `flightdeck-daemon` (spawned at session start by `watch.md § 1`) is the canonical wake mechanism — it polls inner panes every 2s and types `/flightdeck watch --from-daemon<Enter>` into the master pane via `tmux paste-buffer` when any pane needs attention. Master ends each turn after running `flightdeck-daemon ack` (atomic drain + clear-pending) and removing the master-busy lockfile. No `sleep` workaround, no harness scheduler primitive — the daemon owns wake delivery for every harness uniformly.
    - **Claude Code optional**: `ScheduleWakeup({delaySeconds: 1800})` MAY be armed as a defensive fallback ("if daemon dies, wake me"). Not load-bearing.
-   - **Other harnesses**: no scheduler needed. The daemon's send-keys works for claude/codex/opencode/omp uniformly.
+   - **Other harnesses**: no scheduler needed. The daemon's send-keys works for claude/codex/opencode/pi uniformly.
 7. **All scripts must appear in this SKILL.md's Scripts table.** No "hidden" scripts. README.md mirrors the table for human readers.
 
 ## Operational caveats

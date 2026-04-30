@@ -2,9 +2,7 @@
 
 Pane targeting, bell handling, and capture-pane idioms for safely observing the per-issue panes spawned by orchestration.
 
-> **Fallback path notice (Phase 1+):** for harnesses with a wired adapter, `pane-poll` and `pane-respond` route data through HTTP / Unix-socket / WS instead of tmux capture-pane / send-keys. The tmux primitives below remain the **fallback path** — used for harnesses without an adapter, and for panes whose bridge metadata is absent (legacy session, port exhausted, adapter not yet wired). Each adapter has an explicit fallback contract; daemon and scripts log `<adapter>-unavailable: <reason>` before falling through, never silent.
->
-> Adapter coverage to date: opencode (HTTP-attach via `opencode run --attach` + `GET /session/<id>/message`).
+> **Fallback path notice:** all four supported harnesses (opencode, claude code, pi, codex) have a wired adapter — `pane-poll` and `pane-respond` route data through HTTP / Unix-socket / WS rather than tmux capture-pane / send-keys. The tmux primitives below remain the **fallback path** for panes whose bridge metadata is absent (legacy session, port exhausted, missing dependency). Daemon and scripts log `<adapter>-unavailable: <reason>` before falling through, never silent.
 
 ## Pane-0 rule
 
@@ -106,51 +104,47 @@ tmux list-windows -t <session> -F '#{window_index}:#{window_name} bell=#{window_
 
 ## Per-harness signals
 
-Some pane signals are harness-specific. Adapters live in scripts (e.g., `pane-respond` for option-pick mechanics) and in handler workflows (e.g., `close-issue.md` for terminal-state recognition). Document each harness's contract here as it's wired up.
+Per-harness adapters live in `pane-respond` (sending), `pane-poll` (reading), and the daemon's per-pane subscribers. With an adapter wired, structured input/output replaces tmux capture-pane / send-keys for that pane; tmux remains the documented fallback.
+
+### Send path (script: `pane-respond`)
+
+| Harness | Adapter | Tmux fallback |
+|---------|---------|---------------|
+| Claude Code | Channels MCP webhook POST (opt-in via `--use-channels` / `FLIGHTDECK_CLAUDE_CHANNELS=1`) | `tmux load-buffer + paste-buffer + Enter`, plus arrow-nav for `--option N` (Numbers are NOT shortcuts; they're buffered as text). |
+| opencode | `opencode run --attach --format json` to the per-pane HTTP server. `--option N` sends bare digit as message text; `--question` posts to `POST /question/<id>/{reply,reject}`. | Tmux paste-buffer for free text. `--option` not supported (no digit-key tmux mechanic for opencode). |
+| pi | `pi-bridge send --pid <PID> --auto <msg>` via the Unix-socket session bridge | Tmux paste-buffer fallback |
+| codex | `codex-bridge send --url <ws> --thread <TID>` via the JSON-RPC client to `codex app-server` | Tmux paste-buffer fallback |
+
+### Read path (script: `pane-poll` + daemon subscribers)
+
+| Harness | Adapter | Tmux fallback |
+|---------|---------|---------------|
+| Claude Code | Tail `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` for assistant `stop_reason` events | `tmux capture-pane -p -S -200` |
+| opencode | `GET /session/<id>/message` → last assistant text. Daemon also polls `GET /question` for the question tool. | `tmux capture-pane -p -S -200` |
+| pi | `pi-bridge history` / `pi-bridge stream` filtered for assistant `turn_end` | `tmux capture-pane -p -S -200` |
+| codex | `codex-bridge turns` / stream filtered for `thread/status/changed → idle` | `tmux capture-pane -p -S -200` |
 
 ### Idle / quiescent indicator (handler: `close-issue.md` § 1)
 
-| Harness | Signal |
-|---------|--------|
+When an adapter is active, "idle" is observed structurally (turn-end event with no follow-up tool calls within debounce). For tmux fallback only:
+
+| Harness | Tmux-fallback signal |
+|---------|----------------------|
 | Claude Code | `* Idle` line near buffer end, no input cursor waiting |
-| codex | (TBD — add when first wired) |
-| opencode | (TBD — add when first wired) |
-| omp | (TBD — add when first wired) |
+| opencode / pi / codex | Adapter-driven; tmux fallback uses bell-cleared + hash-stable buffer for two consecutive polls |
 
 ### Destroyed-CWD failure pattern (handler: `close-issue.md` § 1)
 
-Inner pane's shell is dead because the worktree was removed mid-session. After that, every Bash call fails to set cwd.
+Inner pane's shell is dead because the worktree was removed mid-session. Subsequent tool calls fail to set cwd.
 
 | Harness | Signal |
 |---------|--------|
-| Claude Code | `Path does not exist` in tool error AND a worktree path in the line; OR explicit `SESSION CWD DESTROYED` message |
-| codex | (TBD) |
-| opencode | (TBD) |
-| omp | (TBD) |
-
-### Option-pick mechanic (script: `pane-respond` `--option` mode)
-
-| Harness | Mechanic |
-|---------|----------|
-| Claude Code | `(N-1) × Down` then `Enter`. Numbers are NOT shortcuts; they're buffered as text. |
-| codex | (TBD — verify before wiring; do not assume Claude Code's mechanic.) |
-| opencode | **Adapter path (primary):** `opencode run --attach --format json -- "N"`. The bare digit is sent as message text; opencode's TUI interprets it contextually as an option pick. **Fallback (when adapter unavailable):** `--option` is unsupported in tmux fallback for opencode — the digit-key tmux adapter was removed in Phase 1; use payload mode (free-text `"N"`) instead. |
-| omp | (TBD — verify before wiring.) |
+| Claude Code | `Path does not exist` in tool error including a worktree path; OR explicit `SESSION CWD DESTROYED` message |
+| opencode / pi / codex | Adapter HTTP/socket call returns connection error (server up but session dead) — caller logs `<adapter>-unavailable: cwd-destroyed` and treats the issue as `dead` |
 
 To add an adapter for a new harness:
-1. Verify the actual keystroke contract by inspecting the harness's TUI in interactive use.
-2. Add a `<harness>_select_option` function in `scripts/pane-respond` next to `claude_select_option`.
-3. Register it in the `select_option_for_harness` dispatch case.
-4. Update this table with the mechanic.
-5. Smoke-test against the harness with options 1, 2, and 3 to confirm correct routing.
-
-### Capture viewport (script: `pane-poll` `--harness` flag)
-
-| Harness | Strategy | Why |
-|---------|----------|-----|
-| Claude Code | `tmux capture-pane -p -S -200` (history) | Default; scrollback is stable. |
-| codex | `tmux capture-pane -p -S -200` (history) | Same. |
-| opencode | **Adapter path:** `GET /session/<id>/message` → extract last assistant text. No tmux capture. **Fallback:** `tmux capture-pane -p -S -200` (history; previously viewport-only to dodge a TUI scrollback quirk that the adapter sidesteps entirely). |
-| omp | `tmux capture-pane -p -S -200` (history, default) | TBD — verify scrollback behavior in real use; switch to viewport-only if needed. |
-
-When adding a new harness, add its row in each table above and wire the matching adapter in the relevant script/workflow. Do not blanket-apply Claude Code's mechanic to other harnesses without verification.
+1. Verify the actual contract by inspecting the harness in interactive use (server endpoints, socket protocol, or keystroke mechanic).
+2. Add a `<harness>_*_*` function in the relevant script (`pane-respond`, `pane-poll`, `flightdeck-daemon`).
+3. Register it in the dispatch case.
+4. Update both tables above with the mechanic.
+5. Add a smoke test under `skills/flightdeck/tests/<harness>-smoke`.

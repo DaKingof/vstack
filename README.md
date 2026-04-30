@@ -33,7 +33,7 @@ This makes `vstack` closer to a package manager than a static dotfiles repo.
 
 ## Features
 
-- **Cross-harness install**: Claude Code, Cursor, OpenCode, and Codex from one CLI.
+- **Cross-harness install**: Claude Code, Cursor, OpenCode, Codex, and Pi from one CLI.
 - **Package source management**: switch between repos, add/remove sources from the TUI.
 - **Global and project scope**: install once per user, or per project.
 - **Dependency resolution**: skills declare required/optional dependencies in `SKILL.md`; required deps are auto-included transitively.
@@ -72,8 +72,11 @@ vstack add vanillagreencom/vstack --all
 # Global install
 vstack add vanillagreencom/vstack --all --global
 
-# Install specific skills to specific harnesses
-vstack add vanillagreencom/vstack --skill rust-safety,perf-zero-alloc --agent claude-code -y
+# Filter what gets installed (each kind narrows independently)
+vstack add vanillagreencom/vstack --harness claude-code,opencode -y          # specific harnesses
+vstack add vanillagreencom/vstack --skill rust-safety,perf-zero-alloc -y     # specific skills
+vstack add vanillagreencom/vstack --agent rust,tpm -y                        # specific agents
+vstack add vanillagreencom/vstack --hook block-bare-cd -y                    # specific hooks
 
 # Regenerate agents/skills after editing vstack.toml
 vstack refresh
@@ -249,13 +252,16 @@ Global install behavior:
 
 ### Pi notes
 
-Pi has no built-in subagent mechanism, so installed `.pi/agents/*.md` files are inert until you also install a Pi extension that loads them. The `pi-session-bridge` package shipped in this repo is unrelated to subagents — it is a TUI side-channel for external controllers.
+vstack writes Pi agent frontmatter (`name`, `description`, `tools`, `model`, optional `pane: true`) plus the standard body sections (Required Skills, Hook Rules, Additional Instructions). Hooks have no native Pi runtime, so they surface as inline safety prose in the agent body.
 
-vstack writes Pi agent frontmatter (`name`, `description`, `tools`, `model`, optional `pane: true`) and the same vstack-managed body sections (Required Skills, Hook Rules, Additional Instructions) used by other harnesses. Hooks have no native Pi runtime and are surfaced only as inline safety prose inside the agent body.
+Pi has no built-in subagent dispatch, so `.pi/agents/*.md` files are inert until an extension loads them — the catalog ships `pi-subagents` as a reference implementation.
 
-When `vstack add` writes a Pi extension, it copies the package directory into `~/.pi/agent/packages/<name>` (or `.pi/packages/<name>` for project scope) and adds the relative `./packages/<name>` entry to Pi's `settings.json` — preserving any existing entries. Pi auto-loads the package on next launch.
+For Pi extensions, `vstack add`:
+- Copies the package into `<scope>/packages/<name>` (`~/.pi/agent` for `--global`, `<project>/.pi` otherwise).
+- Registers `./packages/<name>` in that scope's `settings.json` (preserves unrelated entries).
+- For each entry in the package's `package.json` `bin` map, creates a symlink at `<scope>/bin/<cli-name>` pointing at the installed binary. Pi auto-loads the package on next launch and the CLI is reachable as `<scope>/bin/<cli-name>` (add it to your `PATH` if you want bare-name invocation).
 
-Local-path Pi packages do **not** automatically expose `bin` scripts on `PATH` (this is a Pi limitation, not a vstack one). To use the `pi-bridge` CLI shipped with `pi-session-bridge`, either symlink it into your `PATH`, run the script directly, or use the raw socket protocol. See [`pi-extensions/session-bridge/README.md`](pi-extensions/session-bridge/README.md).
+Pi extensions are scope-exclusive — Pi loads packages from both global and project scopes simultaneously, so duplicate registration would crash startup. Installing the same extension at one scope when it already exists at the other is skipped with a clear notice; switch by removing first (`vstack remove [--global] <name>`) and re-adding at the desired scope. `vstack remove` cleans the package dir, `settings.json` entry, and any `bin` symlinks.
 
 Windows note:
 
