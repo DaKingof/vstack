@@ -1,6 +1,6 @@
 # pi-session-bridge
 
-Pi package that keeps normal interactive Pi TUI sessions visible while exposing a structured Unix-domain JSONL side channel for external controllers.
+Pi package that keeps normal interactive Pi TUI sessions visible while exposing a structured Unix-domain JSONL side channel for external controllers. This is intentionally **not** Pi `--mode rpc`; it keeps the live TUI and borrows compatible JSONL command/response conventions where they fit.
 
 ## Install via vstack
 
@@ -57,6 +57,8 @@ pi-bridge answer --pid <pid> --request-id que_... --answers '[["Stop here"]]'
 # For pi-questions tabs with allowCustom=true, the answer string may be free-form text.
 pi-bridge answer --pid <pid> --request-id que_... --answers '[["Use CC-1234 and continue"]]'
 pi-bridge reject --pid <pid> --request-id que_...
+pi-bridge request --pid <pid> '{"type":"get_state"}'
+printf '{"type":"history","limit":5}\n' | pi-bridge request --pid <pid> -
 ```
 
 If exactly one active bridge exists, target flags are optional.
@@ -69,7 +71,7 @@ When installed via vstack as a local-path Pi package, the `pi-bridge` binary is 
 
 ## Raw protocol
 
-Connect to the advertised Unix socket and exchange LF-delimited JSON.
+Connect to the advertised Unix socket and exchange LF-delimited JSON. Framing follows Pi RPC convention: one strict JSON object per LF-delimited record, optional `id` for response correlation, and `type:"response"` responses.
 
 Commands:
 

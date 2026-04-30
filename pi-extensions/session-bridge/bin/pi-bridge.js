@@ -26,6 +26,7 @@ function usage(exitCode = 0) {
   pi-bridge answer [target] --request-id que_... --answers '[["Label"]]'
   pi-bridge reject [target] --request-id que_...
   pi-bridge emit [target] MESSAGE...
+  pi-bridge request [target] '{"type":"get_state"}'
 
 Target options:
   --pid PID        Match a bridge process id
@@ -294,6 +295,23 @@ async function main() {
 
 	if (command === "emit") {
 		process.exitCode = await request(target, { id, type: "emit", message: rest.join(" ").trim() || "test" });
+		return;
+	}
+
+	if (command === "request" || command === "raw") {
+		const text = rest.join(" ").trim();
+		const jsonText = text === "-" ? fs.readFileSync(0, "utf8").trim() : text;
+		if (!jsonText) die(`Missing JSON command for ${command}`);
+		let raw;
+		try {
+			raw = JSON.parse(jsonText);
+		} catch (error) {
+			die(`Invalid JSON command: ${error.message}`);
+		}
+		if (!raw || typeof raw !== "object" || Array.isArray(raw)) die("JSON command must be an object");
+		if (!raw.id) raw.id = id;
+		if (typeof raw.type !== "string" || raw.type.length === 0) die("JSON command must include a string type");
+		process.exitCode = await request(target, raw);
 		return;
 	}
 

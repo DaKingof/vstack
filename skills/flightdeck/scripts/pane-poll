@@ -203,9 +203,16 @@ if [[ "$HARNESS" == "pi" && $oc_used -eq 0 && $cc_used -eq 0 ]]; then
   if [[ -n "$pi_args" ]]; then
     pi_used=1
     pi_pid_v=$(awk '{for(i=1;i<=NF;i++)if($i=="--pid"){print $(i+1);exit}}' <<< "$pi_args")
+    pi_socket_v=$(awk '{for(i=1;i<=NF;i++)if($i=="--socket"){print $(i+1);exit}}' <<< "$pi_args")
+    pi_target_args=()
+    if [[ -n "$pi_socket_v" ]]; then
+      pi_target_args=(--socket "$pi_socket_v")
+    else
+      pi_target_args=(--pid "$pi_pid_v")
+    fi
     pi_bin=$(pi_resolve_bridge_bin)
     if [[ -n "$pi_bin" ]]; then
-      hist=$("$pi_bin" history --pid "$pi_pid_v" 50 2>/dev/null || echo "")
+      hist=$("$pi_bin" history "${pi_target_args[@]}" 50 2>/dev/null || echo "")
       if [[ -n "$hist" ]]; then
         buf=$(jq -r "$PI_LAST_ASSISTANT_JQ" <<< "$hist" 2>/dev/null || echo "")
       fi

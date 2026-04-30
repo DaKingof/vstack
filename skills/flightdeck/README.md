@@ -8,7 +8,7 @@ This file is for humans installing or debugging the skill. Agents should read `S
 
 When the user invokes flightdeck's `start` workflow (or its parallel-group variant) from main, it launches one or more issue panes via `open-terminal` and the same agent transitions to master overseer of every spawned pane in the current tmux session. The exact invocation syntax depends on the harness (Claude Code uses `/flightdeck start`, Codex uses `$flightdeck start`, OpenCode uses `/flightdeck start` or similar — see your harness docs). It:
 
-- Subscribes to per-pane harness adapter event streams: opencode (HTTP), claude (Channels MCP + JSONL tail), pi (Unix-socket bridge), codex (JSON-RPC over WebSocket app-server). Falls back to bell flag + capture-pane sentinel matching for adapter-unavailable panes.
+- Subscribes to per-pane harness adapter event streams: opencode (HTTP), claude (Channels MCP + JSONL tail), pi (Unix-socket bridge; normal visible Pi TUI, not `--mode rpc`), codex (JSON-RPC over WebSocket app-server). Falls back to bell flag + capture-pane sentinel matching for adapter-unavailable panes.
 - Classifies prompts and answers them with learned defaults — adapter-mode responses go through the harness's structured input path (`opencode run --attach` / question API, channel POST, `pi-bridge send` / `answer|reject`, `codex-bridge send`), not tmux send-keys.
 - For prompts that trigger sub-agent delegation (rebase resolution, fix delegation), embeds the necessary guidance in the same input as the option pick (a follow-up message arrives too late).
 - Watches PR state, builds a file-level conflict graph between in-flight PRs, plans merge order smallest-scope-first.

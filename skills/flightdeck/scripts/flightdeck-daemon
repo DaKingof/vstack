@@ -944,19 +944,19 @@ resolve_cc_meta() {
 }
 
 # --- Pi Session Bridge subscriber (Phase 3) ---------------------------------
-# Per-pi-pane subprocess that pipes `pi-bridge stream --pid <PID>` →
-# jq filter for assistant turn-end events, classifies, appends to
-# fd-wake-events log.
+# Per-pi-pane subprocess that pipes `pi-bridge stream --socket <SOCK>`
+# (or --pid fallback) → jq filter for assistant turn-end events,
+# classifies, appends to fd-wake-events log.
 pi_subscriber_loop() {
   set +e
   set +o pipefail
   exec 200<&- 2>/dev/null || true
-  local pane_id="$1" pi_pid="$2" parent_pid="$3"
+  local pane_id="$1" pi_pid="$2" pi_socket="${3:-}" parent_pid="${4:-}"
   local last_hash=""
   local seen_qids=","
   local sub_log; sub_log="${LOG}.pi-sub-$(pi_pane_id_safe "$pane_id")"
-  printf '%s [pi-sub-start] pane=%s pi_pid=%s parent=%s\n' \
-    "$(date -Iseconds)" "$pane_id" "$pi_pid" "$parent_pid" \
+  printf '%s [pi-sub-start] pane=%s pi_pid=%s socket=%s parent=%s\n' \
+    "$(date -Iseconds)" "$pane_id" "$pi_pid" "$pi_socket" "$parent_pid" \
     >> "$sub_log" 2>/dev/null || true
 
   local pi_bin; pi_bin=$(pi_resolve_bridge_bin) || {
@@ -964,11 +964,17 @@ pi_subscriber_loop() {
       >> "$sub_log" 2>/dev/null || true
     exit 1
   }
+  local pi_target_args=()
+  if [[ -n "$pi_socket" ]]; then
+    pi_target_args=(--socket "$pi_socket")
+  else
+    pi_target_args=(--pid "$pi_pid")
+  fi
 
   # Stream bridge events. We emit two classes:
   #   - pi-question: structured pi-questions prompts opened by the child pane.
   #   - normal assistant turn-end text events, classified through prompt-classify.
-  "$pi_bin" stream --pid "$pi_pid" 2>/dev/null \
+  "$pi_bin" stream "${pi_target_args[@]}" 2>/dev/null \
     | jq --unbuffered -c 'select(
         (.type == "event" and .event == "question" and (.data.action // "") == "opened")
         or
@@ -1046,7 +1052,7 @@ pi_subscriber_loop() {
 }
 
 spawn_pi_subscriber() {
-  local pane_id="$1" pi_pid="$2"
+  local pane_id="$1" pi_pid="$2" pi_socket="${3:-}"
   local pid_file; pid_file=$(pi_subscriber_pid_file "$pane_id")
   if [[ -f "$pid_file" ]]; then
     local existing; existing=$(cat "$pid_file" 2>/dev/null || echo "")
@@ -1055,10 +1061,10 @@ spawn_pi_subscriber() {
       return 0
     fi
   fi
-  pi_subscriber_loop "$pane_id" "$pi_pid" $$ &
+  pi_subscriber_loop "$pane_id" "$pi_pid" "$pi_socket" $$ &
   local sub_pid=$!
   echo "$sub_pid" > "$pid_file"
-  log pi-subscriber-spawn "pane=$pane_id pid=$sub_pid pi_pid=$pi_pid"
+  log pi-subscriber-spawn "pane=$pane_id pid=$sub_pid pi_pid=$pi_pid socket=$pi_socket"
 }
 
 resolve_pi_meta() {
@@ -1320,11 +1326,12 @@ run_loop() {
         fi
         ;;
       pi)
-        local _pmeta _ppid
+        local _pmeta _ppid _psocket
         if _pmeta=$(resolve_pi_meta "${OC_PANE_TARGET[$inner_id]}"); then
           _ppid=$(awk '{for(i=1;i<=NF;i++)if($i=="--pid"){print $(i+1);exit}}' <<< "$_pmeta")
-          if [[ -n "$_ppid" ]]; then
-            spawn_pi_subscriber "$inner_id" "$_ppid"
+          _psocket=$(awk '{for(i=1;i<=NF;i++)if($i=="--socket"){print $(i+1);exit}}' <<< "$_pmeta")
+          if [[ -n "$_ppid" || -n "$_psocket" ]]; then
+            spawn_pi_subscriber "$inner_id" "$_ppid" "$_psocket"
             OC_SUBSCRIBED[$inner_id]=1
           fi
         fi

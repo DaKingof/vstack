@@ -730,6 +730,13 @@ if [[ "$HARNESS" == "pi" && $OC_ADAPTER_USED -eq 0 && $CC_ADAPTER_USED -eq 0 && 
     fi
     if [[ "$MODE" != "keys" ]]; then
       pi_pid=$(awk '{for(i=1;i<=NF;i++)if($i=="--pid"){print $(i+1);exit}}' <<< "$pi_args")
+      pi_socket=$(awk '{for(i=1;i<=NF;i++)if($i=="--socket"){print $(i+1);exit}}' <<< "$pi_args")
+      pi_target_args=()
+      if [[ -n "$pi_socket" ]]; then
+        pi_target_args=(--socket "$pi_socket")
+      else
+        pi_target_args=(--pid "$pi_pid")
+      fi
       case "$MODE" in
         payload)      message="$PAYLOAD" ;;
         option)       message="$OPTION_N" ;;
@@ -740,8 +747,10 @@ if [[ "$HARNESS" == "pi" && $OC_ADAPTER_USED -eq 0 && $CC_ADAPTER_USED -eq 0 && 
       }
       # `pi-bridge send` enqueues the message. --auto chooses
       # send/steer/follow-up based on session state. Returns
-      # quickly; daemon subscriber detects the eventual reply.
-      if ! pi_resp=$("$pi_bin" send --pid "$pi_pid" --auto "$message" 2>&1); then
+      # quickly; daemon subscriber detects the eventual reply. Prefer
+      # the explicit Unix socket when recorded so dispatch does not rely
+      # on registry/PID selection heuristics.
+      if ! pi_resp=$("$pi_bin" send "${pi_target_args[@]}" --auto "$message" 2>&1); then
         echo "Error: pi-bridge send failed: $pi_resp" >&2
         exit 5
       fi
