@@ -23,13 +23,64 @@ import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
 
-const INSTALL_SYMBOL = Symbol.for("vstack.pi-subagents.installed");
+const INSTALL_SYMBOL = Symbol.for("vstack.pi-subagents-tmux.installed");
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PANE_LAUNCHER_VERSION = 5;
 const FIRST_AGENT_COLUMN_ROWS = 3;
 const NEXT_AGENT_COLUMN_ROWS = 4;
+
+type VstackConfig = Record<string, unknown>;
+
+function expandHome(input: string): string {
+	if (input === "~") return os.homedir();
+	if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
+	return input;
+}
+
+function projectSettingsPath(cwd: string): string {
+	let current = path.resolve(cwd);
+	while (true) {
+		const candidate = path.join(current, ".pi", "settings.json");
+		if (fs.existsSync(candidate)) return candidate;
+		if (fs.existsSync(path.join(current, ".pi")) || fs.existsSync(path.join(current, ".git")) || fs.existsSync(path.join(current, ".vstack-lock.json"))) return candidate;
+		const parent = path.dirname(current);
+		if (parent === current) return path.join(path.resolve(cwd), ".pi", "settings.json");
+		current = parent;
+	}
+}
+
+function piSettingsPaths(cwd = process.cwd()): string[] {
+	const userDir = path.resolve(expandHome(process.env.PI_CODING_AGENT_DIR?.trim() || "~/.pi/agent"));
+	return [path.join(userDir, "settings.json"), projectSettingsPath(cwd)];
+}
+
+function readVstackConfig(cwd?: string): VstackConfig {
+	const merged: VstackConfig = {};
+	for (const settingsPath of piSettingsPaths(cwd)) {
+		if (!fs.existsSync(settingsPath)) continue;
+		try {
+			const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+			const config = parsed?.vstack?.extensionManager?.config?.["pi-subagents-tmux"];
+			if (config && typeof config === "object" && !Array.isArray(config)) Object.assign(merged, config);
+		} catch {
+			// Ignore malformed optional manager config.
+		}
+	}
+	return merged;
+}
+
+function settingNumber(key: string, fallback: number, cwd?: string): number {
+	const value = readVstackConfig(cwd)[key];
+	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+	return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function settingBoolean(key: string, fallback: boolean, cwd?: string): boolean {
+	const value = readVstackConfig(cwd)[key];
+	return typeof value === "boolean" ? value : fallback;
+}
 
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
@@ -905,9 +956,10 @@ const SubagentParams = Type.Object({
 });
 
 export default function (pi: ExtensionAPI) {
-	const guard = globalThis as unknown as Record<PropertyKey, unknown>;
+	const guard = pi as unknown as Record<PropertyKey, unknown>;
 	if (guard[INSTALL_SYMBOL]) return;
 	guard[INSTALL_SYMBOL] = true;
+	if (!settingBoolean("enabled", true)) return;
 
 	const childAgentName = process.env.PI_SUBAGENT_CHILD_AGENT;
 	let completionPoller: ReturnType<typeof setInterval> | undefined;
@@ -969,7 +1021,7 @@ export default function (pi: ExtensionAPI) {
 				});
 			};
 			pollInbox();
-			childInboxPoller = setInterval(pollInbox, 1000);
+			childInboxPoller = setInterval(pollInbox, Math.max(500, Math.floor(settingNumber("childInboxPollMs", 1000, ctx.cwd))));
 			return;
 		}
 
@@ -983,7 +1035,7 @@ export default function (pi: ExtensionAPI) {
 			});
 		};
 		poll();
-		completionPoller = setInterval(poll, 2000);
+		completionPoller = setInterval(poll, Math.max(500, Math.floor(settingNumber("completionPollMs", 2000, ctx.cwd))));
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
@@ -1298,12 +1350,13 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (params.tasks && params.tasks.length > 0) {
-				if (params.tasks.length > MAX_PARALLEL_TASKS)
+				const maxParallelTasks = Math.max(1, Math.floor(settingNumber("maxParallelTasks", MAX_PARALLEL_TASKS, ctx.cwd)));
+				if (params.tasks.length > maxParallelTasks)
 					return {
 						content: [
 							{
 								type: "text",
-								text: `Too many parallel tasks (${params.tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`,
+								text: `Too many parallel tasks (${params.tasks.length}). Max is ${maxParallelTasks}.`,
 							},
 						],
 						details: makeDetails("parallel")([]),
@@ -1338,7 +1391,8 @@ export default function (pi: ExtensionAPI) {
 					}
 				};
 
-				const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
+				const maxConcurrency = Math.max(1, Math.floor(settingNumber("maxConcurrency", MAX_CONCURRENCY, ctx.cwd)));
+				const results = await mapWithConcurrencyLimit(params.tasks, maxConcurrency, async (t: { agent: string; task: string; cwd?: string }, index) => {
 					const taskAgent = agents.find((agent) => agent.name === t.agent);
 					const result = taskAgent?.pane
 						? await runPersistentPaneAgent(
@@ -1485,7 +1539,8 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded }, theme, _context) {
+		renderResult(result, { expanded }, theme, context) {
+			const collapsedItemCount = Math.max(1, Math.floor(settingNumber("collapsedItemCount", COLLAPSED_ITEM_COUNT, context?.cwd)));
 			const details = result.details as SubagentDetails | undefined;
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];
@@ -1560,8 +1615,8 @@ export default function (pi: ExtensionAPI) {
 				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 				else {
-					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
-					if (displayItems.length > COLLAPSED_ITEM_COUNT) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
+					text += `\n${renderDisplayItems(displayItems, collapsedItemCount)}`;
+					if (displayItems.length > collapsedItemCount) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				}
 				const usageStr = formatUsageStats(r.usage, r.model);
 				if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;

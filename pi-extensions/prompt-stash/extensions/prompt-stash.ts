@@ -1,16 +1,14 @@
 import {
-	CustomEditor,
 	type ExtensionAPI,
 	type ExtensionContext,
-	type KeybindingsManager,
 	type Theme,
 } from "@mariozechner/pi-coding-agent";
-import type { EditorTheme, TUI } from "@mariozechner/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-const STORE_FILE = "prompt-stash.json";
+const DEFAULT_STORE_FILE = "prompt-stash.json";
 const STORE_VERSION = 1;
 const POPUP_WIDTH = 92;
 const POPUP_MAX_HEIGHT = "80%";
@@ -18,9 +16,6 @@ const LIST_ROWS = 10;
 const PADDING_X = 4;
 const PADDING_Y = 2;
 const INSTALL_SYMBOL = Symbol.for("vstack.prompt-stash.installed");
-const DIM = "\x1b[38;5;8m";
-const RESET = "\x1b[0m";
-const INPUT_BOTTOM_PADDING_LINES = 1;
 
 interface StashItem {
 	id: string;
@@ -31,6 +26,62 @@ interface StashItem {
 interface StashStore {
 	version: number;
 	items: StashItem[];
+}
+
+type VstackConfig = Record<string, unknown>;
+
+function expandHome(input: string): string {
+	if (input === "~") return homedir();
+	if (input.startsWith("~/")) return join(homedir(), input.slice(2));
+	return input;
+}
+
+function projectSettingsPath(cwd: string): string {
+	let current = resolve(cwd);
+	while (true) {
+		const candidate = join(current, ".pi", "settings.json");
+		if (existsSync(candidate)) return candidate;
+		if (existsSync(join(current, ".pi")) || existsSync(join(current, ".git")) || existsSync(join(current, ".vstack-lock.json"))) return candidate;
+		const parent = dirname(current);
+		if (parent === current) return join(resolve(cwd), ".pi", "settings.json");
+		current = parent;
+	}
+}
+
+function piSettingsPaths(cwd = process.cwd()): string[] {
+	const userDir = resolve(expandHome(process.env.PI_CODING_AGENT_DIR?.trim() || "~/.pi/agent"));
+	return [join(userDir, "settings.json"), projectSettingsPath(cwd)];
+}
+
+function readVstackConfig(cwd?: string): VstackConfig {
+	const merged: VstackConfig = {};
+	for (const path of piSettingsPaths(cwd)) {
+		if (!existsSync(path)) continue;
+		try {
+			const parsed = JSON.parse(readFileSync(path, "utf8"));
+			const config = parsed?.vstack?.extensionManager?.config?.["prompt-stash"];
+			if (config && typeof config === "object" && !Array.isArray(config)) Object.assign(merged, config);
+		} catch {
+			// Ignore malformed optional manager config.
+		}
+	}
+	return merged;
+}
+
+function settingNumber(key: string, fallback: number, cwd?: string): number {
+	const value = readVstackConfig(cwd)[key];
+	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+	return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function settingBoolean(key: string, fallback: boolean, cwd?: string): boolean {
+	const value = readVstackConfig(cwd)[key];
+	return typeof value === "boolean" ? value : fallback;
+}
+
+function settingString(key: string, fallback: string, cwd?: string): string {
+	const value = readVstackConfig(cwd)[key];
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
 }
 
 function projectRoot(cwd: string): string {
@@ -51,7 +102,7 @@ function projectRoot(cwd: string): string {
 }
 
 function storePath(ctx: ExtensionContext): string {
-	return join(projectRoot(ctx.cwd), ".pi", STORE_FILE);
+	return join(projectRoot(ctx.cwd), ".pi", settingString("storeFile", DEFAULT_STORE_FILE, ctx.cwd));
 }
 
 function loadItems(path: string): StashItem[] {
@@ -90,7 +141,8 @@ function makeId(): string {
 function stashPrompt(ctx: ExtensionContext, text: string): number {
 	const path = storePath(ctx);
 	const now = new Date().toISOString();
-	const existing = loadItems(path).filter((item) => item.text !== text);
+	const loaded = loadItems(path);
+	const existing = settingBoolean("deduplicate", true, ctx.cwd) ? loaded.filter((item) => item.text !== text) : loaded;
 	const items = [{ id: makeId(), text, createdAt: now }, ...existing];
 	saveItems(path, items);
 	return items.length;
@@ -119,15 +171,6 @@ function searchable(text: string): string {
 
 function isPrintable(data: string): boolean {
 	return data.length === 1 && data >= " " && data !== "\x7f";
-}
-
-function stripAnsi(text: string): string {
-	return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
-}
-
-function isEditorBorderLine(line: string): boolean {
-	const visible = stripAnsi(line).trim();
-	return visible.length > 0 && /^[─━╭╮╰╯┌┐└┘]+$/.test(visible);
 }
 
 function panelLine(content: string, width: number): string {
@@ -180,6 +223,7 @@ function filterItems(items: StashItem[], query: string): StashItem[] {
 async function openStashPopup(ctx: ExtensionContext): Promise<void> {
 	if (!ctx.hasUI) return;
 
+	const listRows = Math.max(1, Math.floor(settingNumber("listRows", LIST_ROWS, ctx.cwd)));
 	const path = storePath(ctx);
 	let items = loadItems(path);
 	if (items.length === 0) {
@@ -205,8 +249,8 @@ async function openStashPopup(ctx: ExtensionContext): Promise<void> {
 				}
 				selected = Math.max(0, Math.min(selected, count - 1));
 				if (selected < scroll) scroll = selected;
-				if (selected >= scroll + LIST_ROWS) scroll = selected - LIST_ROWS + 1;
-				scroll = Math.max(0, Math.min(scroll, Math.max(0, count - LIST_ROWS)));
+				if (selected >= scroll + listRows) scroll = selected - listRows + 1;
+				scroll = Math.max(0, Math.min(scroll, Math.max(0, count - listRows)));
 			};
 
 			const deleteSelected = () => {
@@ -252,7 +296,7 @@ async function openStashPopup(ctx: ExtensionContext): Promise<void> {
 				if (results.length === 0) {
 					lines.push(panelLine(theme.fg("dim", "No matching stashed prompts"), innerWidth));
 				} else {
-					for (const [visibleIndex, item] of results.slice(scroll, scroll + LIST_ROWS).entries()) {
+					for (const [visibleIndex, item] of results.slice(scroll, scroll + listRows).entries()) {
 						const index = scroll + visibleIndex;
 						const count = lineCount(item.text);
 						const countText = `~${count} ${count === 1 ? "line" : "lines"}`;
@@ -269,7 +313,7 @@ async function openStashPopup(ctx: ExtensionContext): Promise<void> {
 					}
 				}
 
-				const emptyRows = Math.max(0, LIST_ROWS - Math.max(1, Math.min(results.length, LIST_ROWS)));
+				const emptyRows = Math.max(0, listRows - Math.max(1, Math.min(results.length, listRows)));
 				for (let i = 0; i < emptyRows; i += 1) lines.push(panelLine("", innerWidth));
 
 				lines.push(panelLine("", innerWidth));
@@ -315,14 +359,14 @@ async function openStashPopup(ctx: ExtensionContext): Promise<void> {
 						tui.requestRender();
 						return;
 					}
-					if (matchesKey(data, "pageUp")) {
-						selected -= LIST_ROWS;
+					if (matchesKey(data, "pageup")) {
+						selected -= listRows;
 						clampSelection();
 						tui.requestRender();
 						return;
 					}
-					if (matchesKey(data, "pageDown")) {
-						selected += LIST_ROWS;
+					if (matchesKey(data, "pagedown")) {
+						selected += listRows;
 						clampSelection();
 						tui.requestRender();
 						return;
@@ -386,7 +430,14 @@ async function openStashPopup(ctx: ExtensionContext): Promise<void> {
 				render,
 			};
 		},
-		{ overlay: true, overlayOptions: { anchor: "center", maxHeight: POPUP_MAX_HEIGHT, width: POPUP_WIDTH } },
+		{
+			overlay: true,
+			overlayOptions: {
+				anchor: "center",
+				maxHeight: settingString("popupMaxHeight", POPUP_MAX_HEIGHT, ctx.cwd),
+				width: Math.max(40, Math.floor(settingNumber("popupWidth", POPUP_WIDTH, ctx.cwd))),
+			},
+		},
 	);
 
 	if (popped != null) {
@@ -394,74 +445,23 @@ async function openStashPopup(ctx: ExtensionContext): Promise<void> {
 	}
 }
 
-class PromptStashEditor extends CustomEditor {
-	private stashOpen = false;
+let stashShortcutOpen = false;
 
-	constructor(
-		tui: TUI,
-		theme: EditorTheme,
-		keybindings: KeybindingsManager,
-		private readonly ctx: ExtensionContext,
-	) {
-		super(tui, theme, keybindings, { paddingX: 0 });
+async function toggleStash(ctx: ExtensionContext): Promise<void> {
+	if (stashShortcutOpen) return;
+	const text = ctx.ui.getEditorText?.() ?? "";
+	if (text.trim().length > 0) {
+		const count = stashPrompt(ctx, text);
+		ctx.ui.setEditorText("");
+		ctx.ui.notify(`Stashed prompt (${count} total)`, "info");
+		return;
 	}
 
-	handleInput(data: string): void {
-		if (matchesKey(data, "ctrl+s")) {
-			void this.toggleStash();
-			return;
-		}
-		super.handleInput(data);
-	}
-
-	render(width: number): string[] {
-		const prompt = this.borderColor("π");
-		const prefix = `${prompt} `;
-		const prefixWidth = visibleWidth("π ");
-		const continuationPrefix = " ".repeat(prefixWidth);
-		const innerWidth = Math.max(1, width - prefixWidth);
-		const rendered = super.render(innerWidth);
-
-		const inputLines: string[] = [];
-		let completionLines: string[] = [];
-		for (let index = 1; index < rendered.length; index += 1) {
-			const line = rendered[index] ?? "";
-			if (isEditorBorderLine(line)) {
-				completionLines = rendered.slice(index + 1);
-				break;
-			}
-			inputLines.push(line);
-		}
-
-		const lines = (inputLines.length > 0 ? inputLines : [""]).map((line, index) => {
-			const linePrefix = index === 0 ? prefix : continuationPrefix;
-			return truncateToWidth(linePrefix + line, width, "");
-		});
-		for (let index = 0; index < INPUT_BOTTOM_PADDING_LINES; index += 1) lines.push("");
-		for (const line of completionLines) {
-			lines.push(truncateToWidth(`${DIM}${continuationPrefix}${RESET}${line}`, width, ""));
-		}
-		return lines;
-	}
-
-	private async toggleStash(): Promise<void> {
-		if (this.stashOpen) return;
-		const text = this.getText();
-		if (text.trim().length > 0) {
-			const count = stashPrompt(this.ctx, text);
-			this.ctx.ui.setEditorText("");
-			this.ctx.ui.notify(`Stashed prompt (${count} total)`, "info");
-			this.tui.requestRender();
-			return;
-		}
-
-		this.stashOpen = true;
-		try {
-			await openStashPopup(this.ctx);
-		} finally {
-			this.stashOpen = false;
-			this.tui.requestRender();
-		}
+	stashShortcutOpen = true;
+	try {
+		await openStashPopup(ctx);
+	} finally {
+		stashShortcutOpen = false;
 	}
 }
 
@@ -469,10 +469,15 @@ export default function promptStash(pi: ExtensionAPI): void {
 	const guard = pi as unknown as Record<PropertyKey, unknown>;
 	if (guard[INSTALL_SYMBOL]) return;
 	guard[INSTALL_SYMBOL] = true;
+	if (!settingBoolean("enabled", true)) return;
 
-	pi.on("session_start", (_event, ctx) => {
-		ctx.ui.setEditorComponent((tui, theme, keybindings) => new PromptStashEditor(tui, theme, keybindings, ctx));
-	});
+	const shortcut = settingString("shortcut", "ctrl+s");
+	if (shortcut !== "none") {
+		pi.registerShortcut(shortcut, {
+			description: "Stash current prompt or pop from prompt stash",
+			handler: async (ctx) => toggleStash(ctx as ExtensionContext),
+		});
+	}
 
 	pi.registerCommand("prompt-stash", {
 		description: "Open the project-local prompt stash popup",

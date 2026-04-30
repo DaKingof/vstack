@@ -254,7 +254,7 @@ Global install behavior:
 
 vstack writes Pi agent frontmatter (`name`, `description`, `tools`, `model`, optional `pane: true`) plus the standard body sections (Required Skills, Hook Rules, Additional Instructions). Hooks have no native Pi runtime, so they surface as inline safety prose in the agent body.
 
-Pi has no built-in subagent dispatch, so `.pi/agents/*.md` files are inert until an extension loads them — the catalog ships `pi-subagents` as a reference implementation.
+Pi has no built-in subagent mechanism, so installed `.pi/agents/*.md` files are inert until you also install a Pi extension that loads them. The `pi-subagents-tmux` package shipped in this repo provides that loader/delegation layer; `pi-session-bridge` is a separate TUI side-channel for external controllers.
 
 For Pi extensions, `vstack add`:
 - Copies the package into `<scope>/packages/<name>` (`~/.pi/agent` for `--global`, `<project>/.pi` otherwise).
@@ -352,16 +352,132 @@ Windows note:
 
 ### Pi Extensions
 
-| Extension | Critical functionality |
-|---|---|
-| `pi-background-tasks` | Non-blocking shell task management for Pi via `bg_task` and `/bg`; tracks logs and can notify on task exit or matching output. |
-| `pi-questions` | Structured multi-tab popup questions for Pi; integrates with `pi-bridge` list/answer/reject and stream events. |
-| `prompt-stash` | Project-local prompt stash history for Pi; `Ctrl+S` stashes editor text or opens a searchable pop/delete popup when empty. |
-| `pi-session-bridge` | Unix-socket JSONL side channel for active Pi sessions: send prompts, steer/follow-up, abort, inspect state/history, questions, and stream events. |
-| `pi-statusline` | Compact interactive Pi TUI status line showing project/git/model/context information. |
-| `pi-subagents` | Delegates work to project/user agents, with persistent tmux panes, grid layout, and automatic completion pickup. |
+All vstack Pi packages declare `vstack.extensionManager.settings` metadata, including an `enabled` feature toggle. Install `pi-extension-manager` to browse inventory, toggle resources, and edit those settings from Pi.
 
-vstack installs selected Pi extension packages into `<scope>/packages/<name>` and registers `./packages/<name>` in Pi's `settings.json`. Detailed usage lives in each package's `pi-extensions/<name>/README.md`.
+#### `pi-extension-manager`
+
+- **Purpose:** Pi-styled extension inventory and settings shell.
+- **Commands:** `/extensions`, `/settings-extensions`, and a best-effort `/settings` wrapper when Pi command precedence permits it.
+- **Notes:** Pi has no public native API for third-party `/settings` tabs or live module unloads; package/module toggles apply after `/reload` or restart.
+- **More:** [pi-extensions/pi-extension-manager/README.md](pi-extensions/pi-extension-manager/README.md).
+
+#### `pi-background-tasks`
+
+- **Purpose:** Adds explicit non-blocking shell task management to Pi so long-running commands do not block the current turn.
+- **Tools:** `bg_task` for spawn/list/log/stop/clear; `bg_status` compatibility tool for PID-based status/log/stop.
+- **Commands:** `/bg`, `/bg run <cmd>`, `/bg list`, `/bg log <id>`, `/bg stop <id>`, `/bg clear`.
+- **UI:** configurable dashboard shortcut opens a task overlay; a compact task widget appears while tasks are tracked.
+- **Settings:** timeout, output caps, wakeup tail size, widget placement, dashboard shortcut, log directory.
+- **More:** [pi-extensions/pi-background-tasks/README.md](pi-extensions/pi-background-tasks/README.md).
+
+#### `pi-questions`
+
+- **Purpose:** Structured multi-tab popup questions for the model and bridge-driven replies.
+- **Tools/commands:** `question`, `/question-demo`.
+- **Settings:** popup dimensions, visible option rows, default header, bridge reply enablement.
+- **More:** [pi-extensions/pi-questions/README.md](pi-extensions/pi-questions/README.md).
+
+#### `pi-session-bridge`
+
+- **Purpose:** Keeps the normal interactive Pi TUI visible while exposing a Unix-socket JSONL side channel for external control and event streaming.
+- **Enables:** send prompts, steer/follow-up, abort, inspect state/history, subscribe to live events, and answer pending `pi-questions` prompts.
+- **CLI:** `pi-bridge` for list/state/commands/stream/send/steer/follow-up/history/emit.
+- **Settings:** bridge dir, history limit, line cap, heartbeat, status badge, startup notifications.
+- **More:** [pi-extensions/session-bridge/README.md](pi-extensions/session-bridge/README.md).
+
+#### `pi-subagents-tmux`
+
+- **Purpose:** Delegates work to `.pi/agents`, `.claude/agents`, and user agents with isolated Pi context; supports persistent tmux panes.
+- **Tools/commands:** `subagent`, `/agents`.
+- **Settings:** parallel task limit, concurrency, collapsed result size, pane polling intervals.
+- **More:** [pi-extensions/pi-subagents-tmux/README.md](pi-extensions/pi-subagents-tmux/README.md).
+
+#### `pi-statusline`
+
+- **Purpose:** Replaces Pi's default footer/editor chrome with a compact Claude-style status line and `π` prompt.
+- **Shows:** repo/project, branch with worktree dirty state, model, thinking level, context window size, remaining context percent.
+- **Settings:** enablement, footer replacement, compact prompt, input padding, git refresh timeout, dirty marker.
+- **More:** [pi-extensions/pi-statusline/README.md](pi-extensions/pi-statusline/README.md).
+
+#### `prompt-stash`
+
+- **Purpose:** Project-local prompt stash history with a stash/pop editor workflow.
+- **Commands/UI:** `/prompt-stash`; configurable stash shortcut (`Ctrl+S` by default).
+- **Settings:** store file, shortcut, popup dimensions, visible rows, deduplication.
+- **More:** [pi-extensions/prompt-stash/README.md](pi-extensions/prompt-stash/README.md).
+
+#### `pi-qol`
+
+- **Purpose:** Reliable multiline input, styled image placeholder chips, and hidden-thinking placeholder settings contract.
+- **Commands:** `/qol status`, `/qol attachments`, `/qol reset`.
+- **Settings:** Shift+Enter handling, fallback newline key, image chip style, attachment count badge, hidden-thinking placeholder preference.
+- **More:** [pi-extensions/pi-qol/README.md](pi-extensions/pi-qol/README.md).
+
+#### `pi-output-policy`
+
+- **Purpose:** OMP-style large-output policy: shell minimization, head/tail truncation, spill-file preservation, UI-safe caps.
+- **Settings:** spill threshold, inline tail budgets, UI safety caps, full-output preservation, shell minimizer controls.
+- **More:** [pi-extensions/pi-output-policy/README.md](pi-extensions/pi-output-policy/README.md).
+
+#### `pi-tool-renderer`
+
+- **Purpose:** Compact Claude/opencode-style built-in tool renderers while preserving original tool execution.
+- **Behavior:** `read`/`bash` collapse to concise summaries; mutation tools show stats and bounded expanded previews via Pi's normal `Ctrl+O` model.
+- **Settings:** preview line counts, command preview width, renderer line width.
+- **More:** [pi-extensions/pi-tool-renderer/README.md](pi-extensions/pi-tool-renderer/README.md).
+
+#### `pi-task-panel`
+
+- **Purpose:** Persistent structured task panel above the editor plus `/todo` commands and `todo_write` tool.
+- **Settings:** default panel state, Ctrl+T takeover opt-in, alternate shortcut, compact count, notes/reminders.
+- **More:** [pi-extensions/pi-task-panel/README.md](pi-extensions/pi-task-panel/README.md).
+
+#### `pi-caveman`
+
+- **Purpose:** Native Pi caveman communication mode via `before_agent_start` prompt injection.
+- **Commands:** `/caveman [mode|off|status]`.
+- **Settings:** enable/default mode, status badge, clarity escape, session override, code/commit/review boundaries.
+- **More:** [pi-extensions/pi-caveman/README.md](pi-extensions/pi-caveman/README.md).
+
+See also: [Pi extension settings audit](docs/pi-extension-settings-audit.md).
+
+Source layout:
+
+```text
+pi-extensions/
+└─ <name>/
+   ├─ package.json        npm-shaped, with `pi.extensions` and optional `bin`
+   ├─ extensions/*.ts     loaded by Pi via the `pi.extensions` manifest
+   ├─ bin/*               optional CLI scripts
+   ├─ README.md
+   └─ THIRD_PARTY_NOTICES.md  optional attribution for vendored/base code
+```
+
+Authoring a new Pi extension package: write a `package.json` with `keywords: ["pi-package"]`, `pi.extensions`, and any `bin` scripts. vstack will pick it up automatically the next time you run `vstack add` against a source repo containing it.
+
+Updates: edit files under `pi-extensions/<name>/` in the vstack repo, then run `vstack refresh` (or `vstack add` again) — installed Pi scopes pick up the change. Users never edit the deployed copy directly.
+
+#### Settings layout
+
+vstack writes Pi's `packages` array using the relative form Pi resolves against the settings file directory:
+
+```json
+{
+  "packages": [
+    "./packages/pi-session-bridge",
+    "./packages/pi-statusline"
+  ]
+}
+```
+
+| Scope | Settings file | Packages directory |
+|---|---|---|
+| Global | `~/.pi/agent/settings.json` | `~/.pi/agent/packages/<name>/` |
+| Project | `.pi/settings.json` | `.pi/packages/<name>/` |
+
+Other entries in `settings.json` are preserved across installs and refreshes; vstack only mutates the `packages` array, dedupes the entries it owns, and writes the file back. A legacy absolute-path entry (from earlier vstack versions) is replaced with the canonical relative form on the next `vstack add`/`refresh`.
+
+The `pi-extension-manager` package stores its own disabled lists and extension setting values under `vstack.extensionManager` in Pi settings. That namespace is intentionally separate from Pi's top-level `extensions` resource-path setting.
 
 ## License
 

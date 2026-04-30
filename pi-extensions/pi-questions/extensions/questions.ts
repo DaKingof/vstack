@@ -1,5 +1,8 @@
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-questions.installed");
 const SERVICE_SYMBOL = Symbol.for("vstack.pi-questions.service");
@@ -8,6 +11,8 @@ const POPUP_MAX_HEIGHT = "80%";
 const PADDING_X = 4;
 const PADDING_Y = 1;
 const OPTION_ROWS = 10;
+
+type VstackConfig = Record<string, unknown>;
 
 type QuestionResult = QuestionAnswerResult | QuestionCancelResult;
 type QuestionSource = "ui" | "bridge" | "tool" | "api" | "shutdown" | "ui_error";
@@ -71,6 +76,60 @@ interface PendingQuestion extends PendingQuestionView {
 	promise: Promise<QuestionResult>;
 	requestRender?: () => void;
 	uiDone?: (result: QuestionResult) => void;
+}
+
+function expandHome(input: string): string {
+	if (input === "~") return homedir();
+	if (input.startsWith("~/")) return join(homedir(), input.slice(2));
+	return input;
+}
+
+function projectSettingsPath(cwd: string): string {
+	let current = resolve(cwd);
+	while (true) {
+		const candidate = join(current, ".pi", "settings.json");
+		if (existsSync(candidate)) return candidate;
+		if (existsSync(join(current, ".pi")) || existsSync(join(current, ".git")) || existsSync(join(current, ".vstack-lock.json"))) return candidate;
+		const parent = dirname(current);
+		if (parent === current) return join(resolve(cwd), ".pi", "settings.json");
+		current = parent;
+	}
+}
+
+function piSettingsPaths(cwd = process.cwd()): string[] {
+	const userDir = resolve(expandHome(process.env.PI_CODING_AGENT_DIR?.trim() || "~/.pi/agent"));
+	return [join(userDir, "settings.json"), projectSettingsPath(cwd)];
+}
+
+function readVstackConfig(cwd?: string): VstackConfig {
+	const merged: VstackConfig = {};
+	for (const path of piSettingsPaths(cwd)) {
+		if (!existsSync(path)) continue;
+		try {
+			const parsed = JSON.parse(readFileSync(path, "utf8"));
+			const config = parsed?.vstack?.extensionManager?.config?.["pi-questions"];
+			if (config && typeof config === "object" && !Array.isArray(config)) Object.assign(merged, config);
+		} catch {
+			// Ignore malformed optional manager config.
+		}
+	}
+	return merged;
+}
+
+function settingNumber(key: string, fallback: number, cwd?: string): number {
+	const value = readVstackConfig(cwd)[key];
+	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+	return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function settingBoolean(key: string, fallback: boolean, cwd?: string): boolean {
+	const value = readVstackConfig(cwd)[key];
+	return typeof value === "boolean" ? value : fallback;
+}
+
+function settingString(key: string, fallback: string, cwd?: string): string {
+	const value = readVstackConfig(cwd)[key];
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
 }
 
 const QUESTION_TOOL_PARAMETERS = {
@@ -218,7 +277,7 @@ function normalizeRequest(payload: unknown): QuestionRequest {
 	});
 
 	const id = readString(input.id, makeRequestId());
-	const firstHeader = questions[0]?.header ?? "Question";
+	const firstHeader = questions[0]?.header ?? settingString("defaultHeader", "Question");
 	return {
 		header: readString(input.header ?? input.title, firstHeader),
 		id,
@@ -311,6 +370,9 @@ class QuestionServiceImpl implements QuestionService {
 	}
 
 	reply(requestId: string, answers: unknown, source: QuestionSource = "bridge"): boolean {
+		if (source === "bridge" && !settingBoolean("bridgeRepliesEnabled", true)) {
+			throw new Error("Bridge replies are disabled by pi-questions settings");
+		}
 		const pending = this.pending.get(requestId);
 		if (!pending) throw new Error(`No pending question request: ${requestId}`);
 		pending.complete({ answers: normalizeAnswers(pending.request, answers), requestId }, source);
@@ -318,6 +380,9 @@ class QuestionServiceImpl implements QuestionService {
 	}
 
 	reject(requestId: string, source: QuestionSource = "bridge"): boolean {
+		if (source === "bridge" && !settingBoolean("bridgeRepliesEnabled", true)) {
+			throw new Error("Bridge replies are disabled by pi-questions settings");
+		}
 		const pending = this.pending.get(requestId);
 		if (!pending) throw new Error(`No pending question request: ${requestId}`);
 		pending.complete({ cancelled: true, requestId }, source);
@@ -365,6 +430,7 @@ function attachContext(ctx: ExtensionContext | undefined, service: QuestionServi
 
 async function openQuestionPopup(ctx: ExtensionContext, pending: PendingQuestion): Promise<void> {
 	const request = pending.request;
+	const optionRows = Math.max(1, Math.floor(settingNumber("optionRows", OPTION_ROWS, ctx.cwd)));
 	const selections = request.questions.map(() => new Set<string>());
 	const selectedRows = request.questions.map(() => 0);
 	const scrollOffsets = request.questions.map(() => 0);
@@ -375,10 +441,10 @@ async function openQuestionPopup(ctx: ExtensionContext, pending: PendingQuestion
 		const optionCount = request.questions[activeTab]?.options.length ?? 0;
 		selectedRows[activeTab] = Math.max(0, Math.min(selectedRows[activeTab] ?? 0, Math.max(0, optionCount - 1)));
 		if (selectedRows[activeTab] < scrollOffsets[activeTab]) scrollOffsets[activeTab] = selectedRows[activeTab];
-		if (selectedRows[activeTab] >= scrollOffsets[activeTab] + OPTION_ROWS) {
-			scrollOffsets[activeTab] = selectedRows[activeTab] - OPTION_ROWS + 1;
+		if (selectedRows[activeTab] >= scrollOffsets[activeTab] + optionRows) {
+			scrollOffsets[activeTab] = selectedRows[activeTab] - optionRows + 1;
 		}
-		scrollOffsets[activeTab] = Math.max(0, Math.min(scrollOffsets[activeTab], Math.max(0, optionCount - OPTION_ROWS)));
+		scrollOffsets[activeTab] = Math.max(0, Math.min(scrollOffsets[activeTab], Math.max(0, optionCount - optionRows)));
 	};
 
 	const answers = () => request.questions.map((_question, index) => [...selections[index]]);
@@ -461,10 +527,10 @@ async function openQuestionPopup(ctx: ExtensionContext, pending: PendingQuestion
 				lines.push(panelLine("", innerWidth));
 
 				const start = scrollOffsets[activeTab];
-				for (const [visibleIndex, option] of question.options.slice(start, start + OPTION_ROWS).entries()) {
+				for (const [visibleIndex, option] of question.options.slice(start, start + optionRows).entries()) {
 					lines.push(renderOption(question, option, start + visibleIndex, innerWidth));
 				}
-				for (let i = question.options.slice(start, start + OPTION_ROWS).length; i < OPTION_ROWS; i += 1) {
+				for (let i = question.options.slice(start, start + optionRows).length; i < optionRows; i += 1) {
 					lines.push(panelLine("", innerWidth));
 				}
 
@@ -505,14 +571,14 @@ async function openQuestionPopup(ctx: ExtensionContext, pending: PendingQuestion
 						tui.requestRender();
 						return;
 					}
-					if (matchesKey(data, "pageUp")) {
-						selectedRows[activeTab] -= OPTION_ROWS;
+					if (matchesKey(data, "pageup")) {
+						selectedRows[activeTab] -= optionRows;
 						clamp();
 						tui.requestRender();
 						return;
 					}
-					if (matchesKey(data, "pageDown")) {
-						selectedRows[activeTab] += OPTION_ROWS;
+					if (matchesKey(data, "pagedown")) {
+						selectedRows[activeTab] += optionRows;
 						clamp();
 						tui.requestRender();
 						return;
@@ -530,7 +596,14 @@ async function openQuestionPopup(ctx: ExtensionContext, pending: PendingQuestion
 				render,
 			};
 		},
-		{ overlay: true, overlayOptions: { anchor: "center", maxHeight: POPUP_MAX_HEIGHT, width: POPUP_WIDTH } },
+		{
+			overlay: true,
+			overlayOptions: {
+				anchor: "center",
+				maxHeight: settingString("popupMaxHeight", POPUP_MAX_HEIGHT, ctx.cwd),
+				width: Math.max(40, Math.floor(settingNumber("popupWidth", POPUP_WIDTH, ctx.cwd))),
+			},
+		},
 	);
 }
 
@@ -543,6 +616,7 @@ export default function questions(pi: ExtensionAPI): void {
 	const guard = pi as unknown as Record<PropertyKey, unknown>;
 	if (guard[INSTALL_SYMBOL]) return;
 	guard[INSTALL_SYMBOL] = true;
+	if (!settingBoolean("enabled", true)) return;
 
 	const service = getService();
 	let activeCtx: ExtensionContext | undefined;
@@ -603,17 +677,30 @@ export default function questions(pi: ExtensionAPI): void {
 				const result: QuestionCancelResult = { cancelled: true, error: "No active Pi context", requestId: "que_unavailable" };
 				return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
 			}
+			if (!runCtx.hasUI) {
+				const result: QuestionCancelResult = { cancelled: true, error: "No interactive UI available for question popup", requestId: typeof params.id === "string" ? params.id : "que_unavailable" };
+				return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+			}
 			activeCtx = runCtx;
 			attachContext(runCtx, service);
 			const result = await service.ask(runCtx, params, "tool");
 			return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
 		},
 		renderCall(args, theme) {
-			const request = normalizeRequest(args);
+			let label = "pending";
+			let header = "Question";
+			try {
+				const request = normalizeRequest(args);
+				label = request.id;
+				header = request.header;
+			} catch {
+				if (typeof args?.id === "string") label = args.id;
+				if (typeof args?.header === "string") header = args.header;
+			}
 			return {
 				invalidate() {},
 				render(width: number) {
-					const text = `${theme.fg("accent", theme.bold("? Question"))} ${theme.fg("muted", request.id)} ${request.header}`;
+					const text = `${theme.fg("accent", theme.bold("? Question"))} ${theme.fg("muted", label)} ${header}`;
 					return [truncateToWidth(text, width, "")];
 				},
 			};

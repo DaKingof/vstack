@@ -19,12 +19,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 const PROTOCOL = "pi-session-bridge.v1";
+const INSTALL_SYMBOL = Symbol.for("vstack.pi-session-bridge.installed");
 const STATUS_KEY = "session-bridge";
 const QUESTION_SERVICE_SYMBOL = Symbol.for("vstack.pi-questions.service");
 const DEFAULT_HISTORY_LIMIT = 500;
-const MAX_LINE_BYTES = 1024 * 1024;
+const DEFAULT_MAX_LINE_BYTES = 1024 * 1024;
 
 type JsonObject = Record<string, unknown>;
+type VstackConfig = Record<string, unknown>;
 type Delivery = "auto" | "steer" | "followUp" | "now";
 
 interface BridgeClient {
@@ -59,10 +61,69 @@ interface QuestionService {
 	subscribe(listener: (event: unknown) => void): () => void;
 }
 
+function expandHome(input: string): string {
+	if (input === "~") return os.homedir();
+	if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
+	return input;
+}
+
+function projectSettingsPath(cwd: string): string {
+	let current = path.resolve(cwd);
+	while (true) {
+		const candidate = path.join(current, ".pi", "settings.json");
+		if (fs.existsSync(candidate)) return candidate;
+		if (fs.existsSync(path.join(current, ".pi")) || fs.existsSync(path.join(current, ".git")) || fs.existsSync(path.join(current, ".vstack-lock.json"))) return candidate;
+		const parent = path.dirname(current);
+		if (parent === current) return path.join(path.resolve(cwd), ".pi", "settings.json");
+		current = parent;
+	}
+}
+
+function piSettingsPaths(cwd = process.cwd()): string[] {
+	const userDir = path.resolve(expandHome(process.env.PI_CODING_AGENT_DIR?.trim() || "~/.pi/agent"));
+	return [path.join(userDir, "settings.json"), projectSettingsPath(cwd)];
+}
+
+function readVstackConfig(cwd?: string): VstackConfig {
+	const merged: VstackConfig = {};
+	for (const settingsPath of piSettingsPaths(cwd)) {
+		if (!fs.existsSync(settingsPath)) continue;
+		try {
+			const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+			const config = parsed?.vstack?.extensionManager?.config?.["pi-session-bridge"];
+			if (config && typeof config === "object" && !Array.isArray(config)) Object.assign(merged, config);
+		} catch {
+			// Ignore malformed optional manager config.
+		}
+	}
+	return merged;
+}
+
+function settingNumber(key: string, fallback: number, cwd?: string): number {
+	const value = readVstackConfig(cwd)[key];
+	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+	return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function settingBoolean(key: string, fallback: boolean, cwd?: string): boolean {
+	const value = readVstackConfig(cwd)[key];
+	return typeof value === "boolean" ? value : fallback;
+}
+
+function settingString(key: string, fallback: string, cwd?: string): string {
+	const value = readVstackConfig(cwd)[key];
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
+}
+
 export default function sessionBridge(pi: ExtensionAPI) {
+	const guard = pi as unknown as Record<PropertyKey, unknown>;
+	if (guard[INSTALL_SYMBOL]) return;
+	guard[INSTALL_SYMBOL] = true;
+	if (!settingBoolean("enabled", true)) return;
+
 	const clients = new Set<BridgeClient>();
 	const history: JsonObject[] = [];
-	const historyLimit = readPositiveInt(process.env.PI_BRIDGE_HISTORY, DEFAULT_HISTORY_LIMIT);
+	const historyLimit = readPositiveInt(process.env.PI_BRIDGE_HISTORY, settingNumber("historyLimit", DEFAULT_HISTORY_LIMIT));
 	const bridgeDir = getBridgeDir();
 	const instancesDir = path.join(bridgeDir, "instances");
 	const socketPath = path.join(bridgeDir, `pi-${process.pid}.sock`);
@@ -148,6 +209,7 @@ export default function sessionBridge(pi: ExtensionAPI) {
 	}
 
 	async function start(ctx: ExtensionContext, reason: string) {
+		stopping = false;
 		currentCtx = ctx;
 		if (server) {
 			writeRegistrySoon(reason);
@@ -175,15 +237,15 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		await fs.promises.chmod(instancesDir, 0o700).catch(() => undefined);
 		await writeRegistry(reason);
 
-		heartbeat = setInterval(() => writeRegistrySoon("heartbeat"), 15_000);
+		heartbeat = setInterval(() => writeRegistrySoon("heartbeat"), settingNumber("heartbeatMs", 15_000, ctx.cwd));
 		heartbeat.unref?.();
 
 		exitHandler = () => cleanupSync();
 		process.once("exit", exitHandler);
 
 		if (ctx.hasUI) {
-			ctx.ui.setStatus(STATUS_KEY, `bridge:${process.pid}`);
-			ctx.ui.notify(`Session bridge listening at ${socketPath}`, "info");
+			if (settingBoolean("showStatus", true, ctx.cwd)) ctx.ui.setStatus(STATUS_KEY, `bridge:${process.pid}`);
+			if (settingBoolean("notifyOnStart", true, ctx.cwd)) ctx.ui.notify(`Session bridge listening at ${socketPath}`, "info");
 		}
 
 		ensureQuestionSubscription();
@@ -218,6 +280,7 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		await unlinkIfExists(socketPath);
 		await unlinkIfExists(registryPath);
 		currentCtx = undefined;
+		stopping = false;
 	}
 
 	function cleanupSync() {
@@ -237,7 +300,7 @@ export default function sessionBridge(pi: ExtensionAPI) {
 
 		socket.on("data", (chunk) => {
 			client.buffer += chunk;
-			if (Buffer.byteLength(client.buffer, "utf8") > MAX_LINE_BYTES) {
+			if (Buffer.byteLength(client.buffer, "utf8") > settingNumber("maxLineBytes", DEFAULT_MAX_LINE_BYTES, currentCtx?.cwd)) {
 				send(client, { type: "response", success: false, error: "Input line exceeds 1 MiB" });
 				client.buffer = "";
 				return;
@@ -470,6 +533,8 @@ function normalizeDelivery(value: unknown, fallback: Delivery): Delivery {
 
 function getBridgeDir() {
 	if (process.env.PI_BRIDGE_DIR?.trim()) return path.resolve(process.env.PI_BRIDGE_DIR);
+	const configured = settingString("bridgeDir", "");
+	if (configured) return path.resolve(expandHome(configured));
 	const uid = typeof process.getuid === "function" ? process.getuid() : os.userInfo().username;
 	return path.join(os.tmpdir(), `pi-session-bridge-${uid}`);
 }

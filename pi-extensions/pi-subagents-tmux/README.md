@@ -1,4 +1,4 @@
-# pi-subagents
+# pi-subagents-tmux
 
 Pi package for delegating work to specialized agents from a running Pi session.
 
@@ -67,3 +67,11 @@ pane: true
 The parent Pi session writes tasks to `.pi/subagent-runtime/inbox/<agent>/` and polls `.pi/subagent-runtime/outbox/<agent>/` for completion JSON. Completions are surfaced back into the main conversation automatically.
 
 Persistent panes require running Pi inside tmux.
+
+## Settings
+
+`pi-extension-manager` exposes:
+
+- `maxParallelTasks` and `maxConcurrency` for one-shot delegation limits.
+- `collapsedItemCount` for compact result rendering.
+- `completionPollMs` and `childInboxPollMs` for persistent pane polling intervals.
