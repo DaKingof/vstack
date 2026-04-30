@@ -26,9 +26,14 @@ pi_pane_id_safe() {
 
 pi_subscriber_pid_file() { echo "$(fd_resolve_state_dir)/fd-pi-subscriber-$(pi_pane_id_safe "$1").pid"; }
 
-# Resolve the pi-bridge CLI. Prefer PATH; fall back to the canonical
-# vstack install path. Empty stdout + non-zero exit when not found.
+# Resolve the pi-bridge CLI. Prefer an explicit test/operator override,
+# then PATH, then the canonical vstack install path. Empty stdout +
+# non-zero exit when not found.
 pi_resolve_bridge_bin() {
+  if [[ -n "${PI_BRIDGE_BIN:-}" && -x "$PI_BRIDGE_BIN" ]]; then
+    echo "$PI_BRIDGE_BIN"
+    return 0
+  fi
   local p
   p=$(command -v pi-bridge 2>/dev/null || true)
   if [[ -n "$p" && -x "$p" ]]; then
@@ -44,6 +49,10 @@ pi_resolve_bridge_bin() {
 
 # Resolve the pi binary similarly.
 pi_resolve_pi_bin() {
+  if [[ -n "${PI_BIN:-}" && -x "$PI_BIN" ]]; then
+    echo "$PI_BIN"
+    return 0
+  fi
   if [[ -x /usr/bin/pi ]]; then
     echo "/usr/bin/pi"
     return 0
@@ -62,6 +71,10 @@ pi_resolve_pi_bin() {
 # the user's settings.json has the package registered (vstack install
 # adds it, but the array can drift).
 pi_resolve_bridge_extension() {
+  if [[ -n "${PI_SESSION_BRIDGE_EXTENSION:-}" && -f "$PI_SESSION_BRIDGE_EXTENSION" ]]; then
+    echo "$PI_SESSION_BRIDGE_EXTENSION"
+    return 0
+  fi
   local p="$HOME/.pi/agent/packages/pi-session-bridge/extensions/session-bridge.ts"
   if [[ -f "$p" ]]; then
     echo "$p"
@@ -114,8 +127,14 @@ pi_bridge_is_fresh() {
   kill -0 "$pid" 2>/dev/null || return 1
   [[ -S "$socket" ]] || return 1
   local bin; bin=$(pi_resolve_bridge_bin) || return 1
+  local target_args=()
+  if [[ -n "$socket" ]]; then
+    target_args=(--socket "$socket")
+  else
+    target_args=(--pid "$pid")
+  fi
   local proto
-  proto=$("$bin" state --pid "$pid" 2>/dev/null \
+  proto=$("$bin" state "${target_args[@]}" 2>/dev/null \
     | jq -r '.data.protocol // ""' 2>/dev/null)
   [[ "$proto" == "pi-session-bridge.v1" ]]
 }

@@ -19,6 +19,8 @@
 #                               agents. Default off (bypass enabled). Inner agents need bypass
 #                               to silently spawn sub-agent panes via tmux without prompting
 #                               the (often absent) human at the master pane.
+#   PI_BRIDGE_DISCOVERY_TIMEOUT - Seconds to wait for pi-session-bridge metadata after
+#                               opening a Pi pane (default: 30). Test/operator override.
 
 set -euo pipefail
 
@@ -628,14 +630,16 @@ spawn_pi_bridge_tmux() {
     return 1
   fi
 
-  # Discover the new pi pid by cwd match.
-  local pid
-  if ! pid=$(pi_discover_pid "$wt_path" 30); then
-    echo "  pi-bridge-unavailable: bridge discovery timed out (no pi instance with matching cwd)" >&2
-    # The pane is already open; pane-respond / pane-poll will fall
-    # through to tmux send-keys / capture-pane via the standard
-    # fallback contract.
-    return 1
+  # Discover the new pi pid by cwd match. If discovery fails after the
+  # pane is already open, do NOT fall through to legacy spawn — that
+  # would create a duplicate issue pane. The open pane simply runs with
+  # tmux send-keys / capture-pane fallback because no bridge metadata
+  # was persisted.
+  local pid discovery_timeout
+  discovery_timeout="${PI_BRIDGE_DISCOVERY_TIMEOUT:-30}"
+  if ! pid=$(pi_discover_pid "$wt_path" "$discovery_timeout"); then
+    echo "  pi-bridge-unavailable: bridge discovery timed out (no pi instance with matching cwd); keeping opened pane on tmux fallback" >&2
+    return 0
   fi
 
   # Read state to capture sessionId + socket.
@@ -892,9 +896,9 @@ for ISSUE in "${ISSUES[@]}"; do
   # installs pi-session-bridge to ~/.pi/agent/packages/) and auto-
   # loads on every pi process. After tmux opens the pi window, we
   # poll pi-bridge list to discover the new pid + socket, then write
-  # spawn metadata. On any failure (no pi/pi-bridge, discovery
-  # timeout) — fall through to legacy spawn (pi without bridge data
-  # = tmux send-keys/capture-pane fallback).
+  # spawn metadata. Pre-open failures (no pi/pi-bridge/extension) fall
+  # through to legacy spawn. Post-open discovery timeout keeps the
+  # already-opened pane and uses tmux send-keys/capture-pane fallback.
   if [[ "$TERMINAL_MODE" == "tmux" && "$HARNESS" == "pi" && -z "$CMD_TEMPLATE" ]]; then
     if spawn_pi_bridge_tmux "$ISSUE" "$WT_PATH"; then
       LAUNCHED=$((LAUNCHED + 1))

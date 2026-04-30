@@ -17,7 +17,17 @@ set -euo pipefail
 TEST_NAME="pi-bridge-smoke"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SKILL_DIR/../.." && pwd)"
 SCRIPTS="$SKILL_DIR/scripts"
+
+# Prefer the checkout's bridge CLI/extension so this smoke covers the
+# code under test even when an older package copy is installed globally.
+if [[ -z "${PI_BRIDGE_BIN:-}" && -x "$REPO_ROOT/pi-extensions/session-bridge/bin/pi-bridge.js" ]]; then
+  export PI_BRIDGE_BIN="$REPO_ROOT/pi-extensions/session-bridge/bin/pi-bridge.js"
+fi
+if [[ -z "${PI_SESSION_BRIDGE_EXTENSION:-}" && -f "$REPO_ROOT/pi-extensions/session-bridge/extensions/session-bridge.ts" ]]; then
+  export PI_SESSION_BRIDGE_EXTENSION="$REPO_ROOT/pi-extensions/session-bridge/extensions/session-bridge.ts"
+fi
 
 # shellcheck source=../scripts/lib/pi-bridge-paths.sh
 source "$SCRIPTS/lib/pi-bridge-paths.sh"
@@ -95,13 +105,18 @@ done
 note "  pi_pid=$PI_PID"
 
 # --- Step 3: pi-bridge state ------------------------------------------------
-note "step 3: pi-bridge state — protocol + sessionId"
+note "step 3: pi-bridge state — protocol + sessionId + socket targeting"
 state=$("$PI_BRIDGE_BIN" state --pid "$PI_PID" 2>/dev/null)
 proto=$(jq -r '.data.protocol // ""' <<< "$state" 2>/dev/null)
 session_id=$(jq -r '.data.sessionId // ""' <<< "$state" 2>/dev/null)
+socket_path=$(jq -r '.data.socketPath // ""' <<< "$state" 2>/dev/null)
 [[ "$proto" == "pi-session-bridge.v1" ]] || fail "protocol mismatch: $proto"
 [[ -n "$session_id" && "$session_id" != "null" ]] || fail "sessionId not set"
-note "  protocol=$proto session=$session_id"
+[[ -n "$socket_path" && -S "$socket_path" ]] || fail "socketPath not set or not a socket: $socket_path"
+state_by_socket=$("$PI_BRIDGE_BIN" state --socket "$socket_path" 2>/dev/null)
+jq -e --argjson pid "$PI_PID" '.success == true and .data.pid == $pid and .data.protocol == "pi-session-bridge.v1"' \
+  <<< "$state_by_socket" >/dev/null 2>&1 || fail "state --socket mismatch: $state_by_socket"
+note "  protocol=$proto session=$session_id socket=$socket_path"
 
 # --- Step 4: pi-bridge commands --------------------------------------------
 # The bridge extension registers slash-commands inside the pi session
@@ -110,21 +125,26 @@ note "  protocol=$proto session=$session_id"
 # is loaded and active.
 note "step 4: pi-bridge commands lists bridge slash-commands"
 commands=$("$PI_BRIDGE_BIN" commands --pid "$PI_PID" 2>/dev/null)
-if ! grep -q '"bridge-status"\|"bridge-ping"' <<< "$commands"; then
+if ! grep -q '"bridge-status\(:[0-9][0-9]*\)\?"\|"bridge-ping\(:[0-9][0-9]*\)\?"' <<< "$commands"; then
   red "  commands output (first 40 lines):"; printf '%s\n' "$commands" | head -n 40 >&2
   fail "expected bridge-status/bridge-ping commands not present"
 fi
 note "  bridge-status / bridge-ping present"
 
-# --- Step 5: pi-bridge emit + history --------------------------------------
-note "step 5: pi-bridge emit 'smoke' + verify in history"
-emit_resp=$("$PI_BRIDGE_BIN" emit --pid "$PI_PID" "PI-SMOKE-OK-$$" 2>&1)
+# --- Step 5: pi-bridge request + emit + history -----------------------------
+note "step 5: pi-bridge raw request + socket-scoped emit/history"
+request_resp=$("$PI_BRIDGE_BIN" request --socket "$socket_path" '{"type":"get_state"}' 2>&1)
+jq -e --argjson pid "$PI_PID" '.success == true and .command == "get_state" and .data.pid == $pid' \
+  <<< "$request_resp" >/dev/null 2>&1 || fail "request get_state returned non-success: $request_resp"
+note "  raw request ok"
+
+emit_resp=$("$PI_BRIDGE_BIN" emit --socket "$socket_path" "PI-SMOKE-OK-$$" 2>&1)
 jq -e '.success == true' <<< "$emit_resp" >/dev/null 2>&1 \
   || fail "emit returned non-success: $emit_resp"
 note "  emit ok"
 
 sleep 1
-hist=$("$PI_BRIDGE_BIN" history --pid "$PI_PID" 50 2>/dev/null)
+hist=$("$PI_BRIDGE_BIN" history --socket "$socket_path" 50 2>/dev/null)
 if ! jq -e --arg msg "PI-SMOKE-OK-$$" '
   (.data.events // []) | any(. as $e | (
     ($e | tostring) | contains($msg)
