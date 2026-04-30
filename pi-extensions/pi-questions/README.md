@@ -47,7 +47,7 @@ Cancellation/reject:
 - `↑/↓` or `j/k`: move selection
 - `Enter`: single-select picks row and advances; multi-select advances/submits
 - `Space`: toggles row in multi-select tabs
-- `Esc` / `Ctrl+C`: cancel the whole request
+- `Esc`: cancel the whole request
 
 ## Flightdeck-style bridge control
 

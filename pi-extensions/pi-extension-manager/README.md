@@ -4,9 +4,9 @@ Pi extension inventory and settings manager for vstack-installed packages.
 
 Commands:
 
-- `/extensions` — open the Extensions tab directly.
-- `/settings extensions` — same target when Pi allows extension commands to handle `/settings`.
-- `/settings` — vstack settings shell with General, Extensions, and Audit tabs when command shadowing is available.
+- `/extensions` — open the full Extensions manager popup.
+- `/extension-settings` — quick inline settings editor for packages that expose vstack settings. Booleans/enums toggle with Enter/Space; strings/numbers/paths edit directly in the popup with Enter/Space or `e`, then Enter saves and Esc cancels.
+- `/settings` — vstack settings shell with General, Extensions, and Audit tabs when command shadowing is explicitly enabled.
 
 Settings are persisted under `vstack.extensionManager` in Pi `settings.json` files so they do not collide with Pi's own top-level `extensions` array.
 

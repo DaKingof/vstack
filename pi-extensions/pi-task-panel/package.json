@@ -56,9 +56,9 @@
         {
           "key": "alternateShortcut",
           "label": "Alternate shortcut",
-          "description": "Always-available task panel shortcut when Ctrl+T is not taken over.",
+          "description": "Always-available task panel shortcut when Ctrl+T is not taken over. Cycles hidden → show compact → show all.",
           "type": "string",
-          "default": "ctrl+shift+t",
+          "default": "alt+t",
           "category": "Keyboard",
           "apply": "reload",
           "requiresReload": true
@@ -68,7 +68,7 @@
           "label": "Compact task count",
           "description": "Maximum tasks shown in compact mode.",
           "type": "number",
-          "default": 5,
+          "default": 4,
           "category": "Panel",
           "apply": "live"
         },

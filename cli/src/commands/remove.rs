@@ -26,12 +26,15 @@ pub fn run(names: &[String], global: bool) -> Result<()> {
         };
 
         // Pi extensions live in a separate location and are removed via
-        // the dedicated helper.
+        // the dedicated helper. Also allow removing stale/manual Pi packages
+        // that are present on disk or in settings but missing from the lock.
         let mut removed = Vec::new();
-        if matches!(
+        let remove_as_pi_extension = matches!(
             lock_entry.as_ref().map(|e| e.kind),
             Some(crate::config::ItemKind::PiExtension)
-        ) {
+        ) || (lock_entry.is_none()
+            && crate::pi_extension::is_pi_extension_installed(name, global));
+        if remove_as_pi_extension {
             removed.extend(crate::pi_extension::remove_pi_extension(name, global)?);
         } else {
             removed.extend(installer::remove_item(name, &harnesses, global)?);
@@ -40,8 +43,13 @@ pub fn run(names: &[String], global: bool) -> Result<()> {
         if removed.is_empty() {
             eprintln!("  {name}: not found");
         } else {
+            let pi_settings_path = config::pi_settings_path(global);
             for path in &removed {
-                eprintln!("  removed {}", path.display());
+                if path == &pi_settings_path {
+                    eprintln!("  updated {}", path.display());
+                } else {
+                    eprintln!("  removed {}", path.display());
+                }
             }
             lock.remove(name);
         }

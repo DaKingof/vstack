@@ -4,7 +4,7 @@ This audit covers every local vstack Pi package under `pi-extensions/`. Each pac
 
 ## Runtime constraints
 
-Pi's public extension API does not currently expose a native API to inject a third-party tab into the built-in `/settings` UI or to unload already-loaded extension modules. `pi-extension-manager` therefore provides a Pi-styled settings shell through `/extensions`, `/settings-extensions`, and a best-effort `/settings` wrapper.
+Pi's public extension API does not currently expose a native API to inject a third-party tab into the built-in `/settings` UI or to unload already-loaded extension modules. `pi-extension-manager` therefore provides a full Pi-styled settings shell through `/extensions`, quick inline settings through `/extension-settings`, plus a best-effort `/settings` wrapper when explicitly enabled.
 
 Settings persist under `vstack.extensionManager.config.<packageName>` in Pi `settings.json` files to avoid colliding with Pi's own top-level `extensions` resource array.
 
@@ -49,7 +49,7 @@ Settings persist under `vstack.extensionManager.config.<packageName>` in Pi `set
 ### `prompt-stash`
 
 - Toggle: `enabled` registers/unregisters `/prompt-stash` and the stash/pop shortcut after reload.
-- Useful settings: store file, shortcut, popup width/max-height, visible stash rows, deduplication.
+- Useful settings: per-session store file name, shortcut, popup width/max-height, visible stash rows, deduplication.
 - Apply semantics: popup/storage settings are live; shortcut registration needs reload.
 
 ### `pi-qol`
@@ -61,7 +61,7 @@ Settings persist under `vstack.extensionManager.config.<packageName>` in Pi `set
 ### `pi-output-policy`
 
 - Toggle: `enabled` applies/skips tool-result minimization/truncation live.
-- Useful settings: spill threshold, inline tail budget, max text block/line count/line width, full-output preservation, shell minimizer controls.
+- Useful settings: spill threshold, inline tail budget, max text block/line count/line width, per-session full-output preservation, shell minimizer controls.
 - Apply semantics: live.
 
 ### `pi-tool-renderer`
@@ -73,7 +73,7 @@ Settings persist under `vstack.extensionManager.config.<packageName>` in Pi `set
 ### `pi-task-panel`
 
 - Toggle: `enabled` registers/unregisters `todo_write`, `/todo`, panel widget, reminders, and shortcuts after reload.
-- Useful settings: default panel state, Ctrl+T takeover, alternate shortcut, compact task count, expanded notes, auto-show, incomplete-task reminders.
+- Useful settings: default panel state, Ctrl+T takeover, Alt+T tri-state toggle, compact task count, active-task auto-advance/hide, expanded notes, auto-show, incomplete-task reminders.
 - Apply semantics: panel/reminder settings are live; shortcut registration needs reload.
 
 ### `pi-caveman`

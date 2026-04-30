@@ -28,12 +28,12 @@ const BG_MESSAGE_TYPE = "vstack-background-tasks:event";
 const BG_WIDGET_KEY = "vstack-background-tasks";
 const BG_INSTALL_SYMBOL = Symbol.for("vstack.background-tasks.installed");
 
-const DEFAULT_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_TIMEOUT_MS = 0;
 const DEFAULT_OUTPUT_SETTLE_MS = 1_500;
 const DEFAULT_FORCE_KILL_GRACE_MS = 5_000;
-const DEFAULT_OUTPUT_BUFFER_MAX_CHARS = 120_000;
-const DEFAULT_OUTPUT_ALERT_MAX_CHARS = 3_000;
-const DEFAULT_LOG_TAIL_MAX_CHARS = 5_000;
+const DEFAULT_OUTPUT_BUFFER_MAX_CHARS = 1_000_000;
+const DEFAULT_OUTPUT_ALERT_MAX_CHARS = 10_000;
+const DEFAULT_LOG_TAIL_MAX_CHARS = 50_000;
 const DASHBOARD_WIDTH = 96;
 const DASHBOARD_MAX_HEIGHT = "80%";
 const DASHBOARD_PADDING_X = 2;
@@ -176,6 +176,13 @@ function logFilePath(id: string, now: number = Date.now()): string {
 function tailText(text: string, maxChars: number = settingNumber("outputAlertMaxChars", DEFAULT_OUTPUT_ALERT_MAX_CHARS)): string {
 	if (text.length <= maxChars) return text;
 	return `[...truncated]\n${text.slice(-maxChars)}`;
+}
+
+function formatTaskLog(output: string, logFile: string, cwd?: string): string {
+	if (!output) return "(empty)";
+	const maxChars = Math.max(1, Math.floor(settingNumber("logTailMaxChars", DEFAULT_LOG_TAIL_MAX_CHARS, cwd)));
+	if (output.length <= maxChars) return output;
+	return `[...truncated]\n${output.slice(-maxChars)}\n\n[Background log truncated. Showing last ${maxChars} of ${output.length} character(s). Full log: ${logFile}]`;
 }
 
 function trimOutputBuffer(output: string, lastAnnouncedLength: number): { output: string; lastAnnouncedLength: number } {
@@ -812,7 +819,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 							"muted",
 							`${running} running · ${sorted.length - running} finished`,
 						)}`,
-						theme.fg("dim", "[↑↓/jk] select · [s] stop · [c] clear · [f] follow · [PgUp/PgDn] scroll · [q/esc] close"),
+						theme.fg("dim", "[↑↓/jk] select · [s] stop · [c] clear · [f] follow · [PgUp/PgDn] scroll · [esc] close"),
 						"",
 					];
 
@@ -875,7 +882,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 						timer = null;
 					},
 					handleInput(data: string) {
-						if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || data === "q") {
+						if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 							done(undefined);
 							return;
 						}
@@ -958,7 +965,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			if (params.action === "list") return makeToolResult(formatTaskListText());
 			const task = resolveTask(undefined, params.pid);
 			if (!task) throw new Error("No background task matched that pid.");
-			if (params.action === "log") return makeToolResult(tailText(getTaskOutput(task), settingNumber("logTailMaxChars", DEFAULT_LOG_TAIL_MAX_CHARS, activeCtx?.cwd)) || "(empty)");
+			if (params.action === "log") return makeToolResult(formatTaskLog(getTaskOutput(task), task.logFile, activeCtx?.cwd));
 			const stopped = requestStop(task, "user");
 			if (!stopped.ok) throw new Error(stopped.message);
 			return makeToolResult(stopped.message, { task: taskSnapshot(task) });
@@ -969,7 +976,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 		name: "bg_task",
 		label: "Background Task",
 		description:
-			"Spawn, inspect, and stop explicit background shell tasks without blocking the current turn. Tasks write persistent logs, default to a 10-minute timeout, stop as a process group on Unix, and can wake the agent on exit or matching output.",
+			"Spawn, inspect, and stop explicit background shell tasks without blocking the current turn. Tasks write persistent logs, do not time out by default, stop as a process group on Unix, and can wake the agent on exit or matching output.",
 		promptSnippet: "Spawn, inspect, and stop explicit non-blocking background shell tasks.",
 		promptGuidelines: [
 			"Use bg_task instead of bash backgrounding/nohup when the user wants a long-running command to continue while the conversation remains usable.",
@@ -986,7 +993,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			notifyOnOutput: Type.Optional(Type.Boolean({ description: "Wake the agent when new output arrives. Defaults to false." })),
 			notifyPattern: Type.Optional(Type.String({ description: "Substring or /regex/flags gate for output wakeups." })),
 			pid: Type.Optional(Type.Number({ description: "PID for action=log or action=stop" })),
-			timeoutSeconds: Type.Optional(Type.Number({ description: "Timeout for spawned tasks. Defaults to 600. Use 0 to disable." })),
+			timeoutSeconds: Type.Optional(Type.Number({ description: "Timeout for spawned tasks. Defaults to 0 (disabled)." })),
 			title: Type.Optional(Type.String({ description: "Optional display label for action=spawn" })),
 		}),
 		async execute(_toolCallId, params): Promise<AgentToolResult<unknown>> {
@@ -1015,7 +1022,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 
 			const task = resolveTask(params.id, params.pid);
 			if (!task) throw new Error("No background task matched that id or pid.");
-			if (params.action === "log") return makeToolResult(tailText(getTaskOutput(task), settingNumber("logTailMaxChars", DEFAULT_LOG_TAIL_MAX_CHARS, activeCtx?.cwd)) || "(empty)");
+			if (params.action === "log") return makeToolResult(formatTaskLog(getTaskOutput(task), task.logFile, activeCtx?.cwd));
 			const stopped = requestStop(task, "user");
 			if (!stopped.ok) throw new Error(stopped.message);
 			return makeToolResult(stopped.message, { task: taskSnapshot(task) });
@@ -1072,7 +1079,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 					ctx.ui.notify("No background task matched that id or pid.", "warning");
 					return;
 				}
-				if (trimmed.startsWith("log ")) ctx.ui.notify(tailText(getTaskOutput(task), settingNumber("logTailMaxChars", DEFAULT_LOG_TAIL_MAX_CHARS, ctx.cwd)) || "(empty)", "info");
+				if (trimmed.startsWith("log ")) ctx.ui.notify(formatTaskLog(getTaskOutput(task), task.logFile, ctx.cwd), "info");
 				else await openDashboard(ctx, task);
 				return;
 			}

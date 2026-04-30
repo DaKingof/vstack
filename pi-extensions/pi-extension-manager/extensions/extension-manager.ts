@@ -1180,6 +1180,260 @@ function countBy<T>(items: T[], key: (item: T) => string): Record<string, number
 	return out;
 }
 
+interface QuickSettingTarget {
+	item: InventoryItem;
+	schema: SettingsSchema;
+	extensionId: string;
+}
+
+interface QuickSettingRow extends QuickSettingTarget {
+	id: string;
+	packageName: string;
+}
+
+interface QuickSettingsUiState {
+	editing?: { buffer: string; rowId: string };
+	scroll: number;
+	search: string;
+	selected: number;
+}
+
+type QuickSettingsAction = { type: "close" } | undefined;
+
+const QUICK_SETTINGS_ROWS = 18;
+
+function settingPackages(inventory: Inventory): InventoryItem[] {
+	return inventory.packages.filter((item) => item.packageName && item.settingsSchema?.length && item.state !== "shadowed");
+}
+
+function stringifySettingValue(value: unknown): string {
+	if (value === undefined || value === null) return "";
+	if (typeof value === "boolean") return value ? "true" : "false";
+	if (typeof value === "object") return JSON.stringify(value);
+	return String(value);
+}
+
+function quickSettingRows(inventory: Inventory): QuickSettingRow[] {
+	const rows: QuickSettingRow[] = [];
+	for (const item of settingPackages(inventory).sort((a, b) => a.displayName.localeCompare(b.displayName))) {
+		const extensionId = selectedPackageForSetting(item) ?? item.displayName;
+		const schemas = (item.settingsSchema ?? []).filter((schema) => schema.type !== "secret");
+		for (const schema of schemas) {
+			rows.push({
+				extensionId,
+				id: `${item.id}::${schema.key}`,
+				item,
+				packageName: item.displayName,
+				schema,
+			});
+		}
+	}
+	return rows;
+}
+
+function filterQuickSettingRows(rows: QuickSettingRow[], search: string, inventory: Inventory): QuickSettingRow[] {
+	const query = search.trim().toLowerCase();
+	if (!query) return rows;
+	return rows.filter((row) => {
+		const config = getConfigValue(inventory, row.extensionId, row.schema);
+		const hay = [
+			row.packageName,
+			row.schema.key,
+			row.schema.label,
+			row.schema.description,
+			row.schema.type,
+			formatSettingValue({ ...row.schema, secret: false }, config.value),
+		].join("\n").toLowerCase();
+		return hay.includes(query);
+	});
+}
+
+function quickSettingEditValue(inventory: Inventory, row: QuickSettingRow): string {
+	const value = getConfigValue(inventory, row.extensionId, row.schema).value;
+	return stringifySettingValue(value ?? row.schema.default ?? "");
+}
+
+function saveQuickSetting(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, inventory: Inventory, row: QuickSettingRow, value: unknown): void {
+	setConfigValue(inventory, row.item, row.schema, value);
+	pi.events.emit(SETTINGS_EVENT, { extensionId: row.extensionId, key: row.schema.key, value });
+	const apply = row.schema.apply ?? (row.schema.requiresReload ? "reload" : "live");
+	if (apply !== "live") ctx.ui.notify(applyMessage(row.schema), apply === "restart" ? "warning" : "info");
+}
+
+function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, inventory: Inventory, ui: QuickSettingsUiState, theme: Theme, requestRender: () => void, done: (action: QuickSettingsAction) => void) {
+	const rows = quickSettingRows(inventory);
+	const filtered = () => filterQuickSettingRows(rows, ui.search, inventory);
+	const clamp = () => {
+		const count = filtered().length;
+		ui.selected = Math.max(0, Math.min(ui.selected, Math.max(0, count - 1)));
+		if (ui.selected < ui.scroll) ui.scroll = ui.selected;
+		if (ui.selected >= ui.scroll + QUICK_SETTINGS_ROWS) ui.scroll = ui.selected - QUICK_SETTINGS_ROWS + 1;
+		ui.scroll = Math.max(0, Math.min(ui.scroll, Math.max(0, count - QUICK_SETTINGS_ROWS)));
+	};
+	const selectedRow = () => {
+		clamp();
+		return filtered()[ui.selected];
+	};
+	const editOrToggle = () => {
+		const row = selectedRow();
+		if (!row) return;
+		const current = getConfigValue(inventory, row.extensionId, row.schema).value;
+		if (row.schema.type === "boolean" || row.schema.type === "enum") {
+			saveQuickSetting(pi, ctx, inventory, row, nextSettingValue(row.schema, current));
+			requestRender();
+			return;
+		}
+		ui.editing = { buffer: quickSettingEditValue(inventory, row), rowId: row.id };
+		requestRender();
+	};
+
+	const saveInlineEdit = () => {
+		const editing = ui.editing;
+		if (!editing) return;
+		const row = rows.find((candidate) => candidate.id === editing.rowId);
+		if (!row) {
+			ui.editing = undefined;
+			requestRender();
+			return;
+		}
+		try {
+			const value = parseSettingInput(row.schema, editing.buffer);
+			saveQuickSetting(pi, ctx, inventory, row, value);
+			ui.editing = undefined;
+			requestRender();
+		} catch (error) {
+			ctx.ui.notify(stringifyError(error), "error");
+		}
+	};
+
+	function handleInput(data: string): void {
+		if (ui.editing) {
+			if (data === "\u001b" || matchesKey(data, "ctrl+c")) {
+				ui.editing = undefined;
+				requestRender();
+				return;
+			}
+			if (matchesKey(data, "enter") || matchesKey(data, "return")) return saveInlineEdit();
+			if (matchesKey(data, "backspace")) {
+				ui.editing.buffer = ui.editing.buffer.slice(0, -1);
+				requestRender();
+				return;
+			}
+			if (matchesKey(data, "ctrl+u")) {
+				ui.editing.buffer = "";
+				requestRender();
+				return;
+			}
+			if (data.length === 1 && data >= " " && data !== "\x7f") {
+				ui.editing.buffer += data;
+				requestRender();
+			}
+			return;
+		}
+		if (data === "\u001b" || matchesKey(data, "ctrl+c")) return done({ type: "close" });
+		if (matchesKey(data, "up")) {
+			ui.selected -= 1;
+			clamp();
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "down")) {
+			ui.selected += 1;
+			clamp();
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "pageup")) {
+			ui.selected -= QUICK_SETTINGS_ROWS;
+			clamp();
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "pagedown")) {
+			ui.selected += QUICK_SETTINGS_ROWS;
+			clamp();
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "backspace")) {
+			ui.search = ui.search.slice(0, -1);
+			ui.selected = 0;
+			clamp();
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "ctrl+u")) {
+			ui.search = "";
+			ui.selected = 0;
+			clamp();
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === " " || data === "e") return editOrToggle();
+		if (data.length === 1 && data >= " " && data !== "\x7f") {
+			ui.search += data;
+			ui.selected = 0;
+			clamp();
+			requestRender();
+		}
+	}
+
+	function render(width: number): string[] {
+		clamp();
+		const safeWidth = Math.max(72, width);
+		const bodyWidth = safeWidth - 4;
+		const visible = filtered().slice(ui.scroll, ui.scroll + QUICK_SETTINGS_ROWS);
+		const lines: string[] = [];
+		lines.push(theme.fg("accent", theme.bold("Extension Settings")));
+		lines.push(theme.fg("dim", ui.editing ? "editing value · enter save · esc cancel · backspace delete · ctrl+u clear" : "↑↓ navigate · enter/space edit/toggle · type search · backspace clear · esc close"));
+		lines.push(ui.editing ? theme.fg("dim", "Inline edit active") : ui.search ? `${theme.fg("muted", "Search:")} ${ui.search}` : theme.fg("dim", "Type to search settings"));
+		lines.push("");
+		if (visible.length === 0) {
+			lines.push(theme.fg("muted", "No matching settings."));
+			return frame(lines, safeWidth, theme);
+		}
+		let lastPackage = "";
+		for (const [visibleIndex, row] of visible.entries()) {
+			const index = ui.scroll + visibleIndex;
+			if (row.packageName !== lastPackage) {
+				if (lastPackage) lines.push("");
+				lines.push(theme.fg("accent", theme.bold(row.packageName)));
+				lastPackage = row.packageName;
+			}
+			const config = getConfigValue(inventory, row.extensionId, row.schema);
+			const marker = index === ui.selected ? theme.fg("accent", "›") : " ";
+			const label = truncateToWidth(row.schema.label ?? row.schema.key, 34, "…");
+			const isEditing = ui.editing?.rowId === row.id;
+			const value = isEditing ? `${ui.editing?.buffer ?? ""}█` : formatSettingValue(row.schema, config.value);
+			const valueText = theme.fg(isEditing || config.explicit ? "accent" : "muted", value);
+			const mode = isEditing ? "editing" : row.schema.type === "boolean" || row.schema.type === "enum" ? "toggle" : "edit";
+			const meta = theme.fg("dim", `${row.schema.type} · ${mode} · ${config.scope}`);
+			lines.push(`${marker} ${label}${" ".repeat(Math.max(1, 36 - visibleWidth(label)))}${valueText} ${meta}`);
+			if (isEditing) lines.push(theme.fg("dim", "    Enter saves · Esc cancels · Backspace deletes · Ctrl+U clears"));
+			else if (index === ui.selected && row.schema.description) lines.push(theme.fg("dim", `    ${truncateToWidth(row.schema.description, bodyWidth - 4, "…")}`));
+		}
+		const moreBefore = ui.scroll > 0 ? `↑ ${ui.scroll}` : "";
+		const moreAfter = ui.scroll + QUICK_SETTINGS_ROWS < filtered().length ? `↓ ${filtered().length - ui.scroll - QUICK_SETTINGS_ROWS}` : "";
+		if (moreBefore || moreAfter) lines.push("", theme.fg("dim", [moreBefore, moreAfter].filter(Boolean).join(" · ")));
+		return frame(lines, safeWidth, theme);
+	}
+
+	return { handleInput, invalidate() {}, render };
+}
+
+async function openQuickSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext): Promise<void> {
+	const inventory = buildInventory(pi, ctx as ExtensionContext);
+	if (settingPackages(inventory).length === 0) {
+		ctx.ui.notify("No vstack extension settings are declared by installed packages.", "info");
+		return;
+	}
+	const ui: QuickSettingsUiState = { scroll: 0, search: "", selected: 0 };
+	await ctx.ui.custom<QuickSettingsAction>(
+		(tui, theme, _keybindings, done) => createQuickSettingsComponent(pi, ctx, inventory, ui, theme, () => tui.requestRender(), done),
+		{ overlay: true, overlayOptions: { anchor: "center", maxHeight: DEFAULT_MAX_HEIGHT, width: DEFAULT_WIDTH } },
+	);
+}
+
 function stringifyError(error: unknown): string {
 	if (error instanceof Error) return `${error.name}: ${error.message}`;
 	return String(error);
@@ -1195,6 +1449,11 @@ export default function extensionManager(pi: ExtensionAPI): void {
 		{ baseDir: userPiDir(), exists: existsSync(join(userPiDir(), "settings.json")), json: readJsonObject(join(userPiDir(), "settings.json")).json, path: join(userPiDir(), "settings.json"), scope: "user" },
 		{ baseDir: projectPiDir, exists: existsSync(join(projectPiDir, "settings.json")), json: readJsonObject(join(projectPiDir, "settings.json")).json, path: join(projectPiDir, "settings.json"), scope: "project" },
 	]);
+
+	pi.registerCommand("extension-settings", {
+		description: "Quick inline settings editor for vstack Pi extension settings.",
+		handler: async (_args, ctx) => openQuickSettings(pi, ctx),
+	});
 
 	if (loadConfig.config[MANAGER_ID]?.enabled === false) {
 		pi.registerCommand("extensions", {
@@ -1221,17 +1480,11 @@ export default function extensionManager(pi: ExtensionAPI): void {
 		handler: async (_args, ctx) => openManager(pi, ctx, "Extensions"),
 	});
 
-	pi.registerCommand("settings-extensions", {
-		description: "Open the vstack settings shell directly on the Extensions tab.",
-		handler: async (_args, ctx) => openManager(pi, ctx, "Extensions"),
-	});
-
 	// Best-effort /settings integration. Pi's public extension API has no native
-	// settings-tab registration yet. If extension commands are checked before the
-	// built-in /settings handler in the active Pi version, this gives users the
-	// requested /settings extensions entrypoint. If not, /extensions remains the
-	// stable shortcut. The wrapper can be disabled from manager settings.
-	if (loadConfig.config[MANAGER_ID]?.allowSettingsCommandShadow !== false) {
+	// settings-tab registration yet. Newer Pi versions warn when extensions
+	// register commands that collide with built-ins, so keep this opt-in and use
+	// /extensions as the stable shortcut by default.
+	if (loadConfig.config[MANAGER_ID]?.allowSettingsCommandShadow === true) {
 		pi.registerCommand("settings", {
 			description: "vstack settings shell; use /settings extensions to jump to extension management.",
 			handler: async (args, ctx) => {

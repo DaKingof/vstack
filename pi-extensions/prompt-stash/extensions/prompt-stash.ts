@@ -4,9 +4,9 @@ import {
 	type Theme,
 } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 const DEFAULT_STORE_FILE = "prompt-stash.json";
 const STORE_VERSION = 1;
@@ -16,6 +16,7 @@ const LIST_ROWS = 10;
 const PADDING_X = 4;
 const PADDING_Y = 2;
 const INSTALL_SYMBOL = Symbol.for("vstack.prompt-stash.installed");
+const DEFAULT_SHORTCUT = "alt+s";
 
 interface StashItem {
 	id: string;
@@ -36,6 +37,26 @@ function expandHome(input: string): string {
 	return input;
 }
 
+function piUserDir(): string {
+	return resolve(expandHome(process.env.PI_CODING_AGENT_DIR?.trim() || "~/.pi/agent"));
+}
+
+function safeFileName(value: string): string {
+	return value.replace(/[^\w.-]+/g, "_");
+}
+
+function sessionIdForContext(ctx: ExtensionContext): string {
+	const id = ctx.sessionManager.getSessionId();
+	if (id && id.trim()) return id;
+	const file = ctx.sessionManager.getSessionFile();
+	if (file) return basename(file, ".jsonl");
+	return `ephemeral-${process.pid}`;
+}
+
+function sessionStoreDir(ctx: ExtensionContext): string {
+	return join(piUserDir(), "vstack", "prompt-stash", "sessions", safeFileName(sessionIdForContext(ctx)));
+}
+
 function projectSettingsPath(cwd: string): string {
 	let current = resolve(cwd);
 	while (true) {
@@ -49,8 +70,7 @@ function projectSettingsPath(cwd: string): string {
 }
 
 function piSettingsPaths(cwd = process.cwd()): string[] {
-	const userDir = resolve(expandHome(process.env.PI_CODING_AGENT_DIR?.trim() || "~/.pi/agent"));
-	return [join(userDir, "settings.json"), projectSettingsPath(cwd)];
+	return [join(piUserDir(), "settings.json"), projectSettingsPath(cwd)];
 }
 
 function readVstackConfig(cwd?: string): VstackConfig {
@@ -101,8 +121,36 @@ function projectRoot(cwd: string): string {
 	}
 }
 
+function configuredStoreFile(ctx: ExtensionContext): string {
+	// Historical config accepted a project-local path. Treat it as a file name
+	// only so prompt text never lands back in the repository's .pi directory.
+	const file = basename(settingString("storeFile", DEFAULT_STORE_FILE, ctx.cwd));
+	return !file || file === "." || file === ".." ? DEFAULT_STORE_FILE : file;
+}
+
 function storePath(ctx: ExtensionContext): string {
-	return join(projectRoot(ctx.cwd), ".pi", settingString("storeFile", DEFAULT_STORE_FILE, ctx.cwd));
+	return join(sessionStoreDir(ctx), configuredStoreFile(ctx));
+}
+
+function legacyProjectStorePath(ctx: ExtensionContext): string {
+	return join(projectRoot(ctx.cwd), ".pi", configuredStoreFile(ctx));
+}
+
+function migrateLegacyProjectStore(ctx: ExtensionContext, nextPath: string): void {
+	const legacyPath = legacyProjectStorePath(ctx);
+	if (!existsSync(legacyPath)) return;
+	const legacyItems = loadItems(legacyPath);
+	if (legacyItems.length === 0) return;
+	const existingItems = loadItems(nextPath);
+	const seen = new Set(existingItems.map((item) => item.id));
+	const merged = [...existingItems, ...legacyItems.filter((item) => !seen.has(item.id))].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+	saveItems(nextPath, merged);
+	try {
+		unlinkSync(legacyPath);
+	} catch {
+		// Migration succeeded; leave an undeletable legacy file alone rather than
+		// failing prompt stash startup.
+	}
 }
 
 function loadItems(path: string): StashItem[] {
@@ -127,10 +175,10 @@ function loadItems(path: string): StashItem[] {
 }
 
 function saveItems(path: string, items: StashItem[]): void {
-	mkdirSync(dirname(path), { recursive: true });
+	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	const tempPath = `${path}.tmp-${process.pid}`;
 	const store: StashStore = { version: STORE_VERSION, items };
-	writeFileSync(tempPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+	writeFileSync(tempPath, `${JSON.stringify(store, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
 	renameSync(tempPath, path);
 }
 
@@ -140,6 +188,7 @@ function makeId(): string {
 
 function stashPrompt(ctx: ExtensionContext, text: string): number {
 	const path = storePath(ctx);
+	migrateLegacyProjectStore(ctx, path);
 	const now = new Date().toISOString();
 	const loaded = loadItems(path);
 	const existing = settingBoolean("deduplicate", true, ctx.cwd) ? loaded.filter((item) => item.text !== text) : loaded;
@@ -225,6 +274,7 @@ async function openStashPopup(ctx: ExtensionContext): Promise<void> {
 
 	const listRows = Math.max(1, Math.floor(settingNumber("listRows", LIST_ROWS, ctx.cwd)));
 	const path = storePath(ctx);
+	migrateLegacyProjectStore(ctx, path);
 	let items = loadItems(path);
 	if (items.length === 0) {
 		ctx.ui.notify("Prompt stash is empty", "info");
@@ -471,7 +521,11 @@ export default function promptStash(pi: ExtensionAPI): void {
 	guard[INSTALL_SYMBOL] = true;
 	if (!settingBoolean("enabled", true)) return;
 
-	const shortcut = settingString("shortcut", "ctrl+s");
+	pi.on("session_start", async (_event, ctx) => {
+		migrateLegacyProjectStore(ctx, storePath(ctx));
+	});
+
+	const shortcut = settingString("shortcut", DEFAULT_SHORTCUT);
 	if (shortcut !== "none") {
 		pi.registerShortcut(shortcut, {
 			description: "Stash current prompt or pop from prompt stash",
@@ -480,7 +534,7 @@ export default function promptStash(pi: ExtensionAPI): void {
 	}
 
 	pi.registerCommand("prompt-stash", {
-		description: "Open the project-local prompt stash popup",
+		description: "Open the per-session prompt stash popup",
 		handler: async (_args, ctx) => openStashPopup(ctx),
 	});
 }

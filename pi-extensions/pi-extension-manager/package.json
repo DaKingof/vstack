@@ -54,9 +54,9 @@
         {
           "key": "allowSettingsCommandShadow",
           "label": "Register /settings wrapper",
-          "description": "Expose the manager through /settings if Pi lets extension commands shadow built-ins. /extensions always remains available.",
+          "description": "Opt in to a /settings wrapper on Pi versions that allow extension commands to shadow built-ins. /extensions always remains available.",
           "type": "boolean",
-          "default": true,
+          "default": false,
           "category": "Commands",
           "apply": "restart"
         }

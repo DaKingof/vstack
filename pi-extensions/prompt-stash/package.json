@@ -1,7 +1,7 @@
 {
   "name": "prompt-stash",
   "version": "0.1.0",
-  "description": "Pi extension for project-local prompt stash history with Ctrl+S stash/pop workflow.",
+  "description": "Pi extension for per-session prompt stash history with Alt+S stash/pop workflow.",
   "license": "MIT",
   "keywords": [
     "pi-package",
@@ -41,7 +41,7 @@
         {
           "key": "storeFile",
           "label": "Store file",
-          "description": "Project-local stash file under .pi/.",
+          "description": "File name under the per-session global stash directory.",
           "type": "path",
           "default": "prompt-stash.json",
           "category": "Storage",
@@ -52,7 +52,7 @@
           "label": "Stash shortcut",
           "description": "Shortcut for stash/pop. Requires reload because shortcuts are handled by the editor at load.",
           "type": "string",
-          "default": "ctrl+s",
+          "default": "alt+s",
           "category": "Input",
           "apply": "reload",
           "requiresReload": true

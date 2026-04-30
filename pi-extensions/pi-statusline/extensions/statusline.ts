@@ -19,8 +19,10 @@ import { dirname, join, resolve } from "node:path";
 const DIM = "\x1b[38;5;8m";
 const RESET = "\x1b[0m";
 const DEFAULT_INPUT_BOTTOM_PADDING_LINES = 0;
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"]);
+const IMAGE_PATH_PATTERN = /(^|[\s(\[{<"'`])(@?(?:~|\.\.?|\/)[^\s)\]}>"'`]+?\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif))(?=$|[\s)\]}>"'`,.;:!?])/gi;
+const IMAGE_ALIAS_SYMBOL = Symbol.for("vstack.pi-qol.image-path-aliases");
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-statusline.installed");
-const QOL_INSTALL_SYMBOL = Symbol.for("vstack.pi-qol.installed");
 const QOL_STATUS_KEY = "qol-attachments";
 
 interface GitState {
@@ -28,6 +30,12 @@ interface GitState {
 	branch?: string;
 	dirty: boolean;
 	inLinkedWorktree: boolean;
+}
+
+interface ImageAliasState {
+	next: number;
+	byLabel: Record<string, string>;
+	byPath: Record<string, string>;
 }
 
 type VstackConfig = Record<string, unknown>;
@@ -156,26 +164,95 @@ function gitBadge(state: GitState, showDirtyMarker: boolean): string {
 }
 
 function stripAnsi(text: string): string {
-	return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+	return text
+		.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+		.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
 }
 
-function attachmentLabels(text: string): string[] {
+function stripAtPrefix(path: string): string {
+	return path.startsWith("@") ? path.slice(1) : path;
+}
+
+function resolveMaybeImagePath(path: string, cwd: string): string | undefined {
+	const clean = stripAtPrefix(path);
+	const expanded = expandHome(clean);
+	const resolved = expanded.startsWith("/") ? expanded : resolve(cwd, expanded);
+	const lower = resolved.toLowerCase();
+	const dot = lower.lastIndexOf(".");
+	if (dot < 0 || !IMAGE_EXTENSIONS.has(lower.slice(dot))) return undefined;
+	if (!existsSync(resolved)) return undefined;
+	return resolved;
+}
+
+function imagePathLabels(text: string, cwd: string): string[] {
+	const seen = new Set<string>();
+	for (const match of text.matchAll(IMAGE_PATH_PATTERN)) {
+		const resolved = resolveMaybeImagePath(match[2] ?? "", cwd);
+		if (resolved) seen.add(`Image ${basename(resolved)}`);
+	}
+	return [...seen].sort();
+}
+
+function aliasState(): ImageAliasState {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const existing = host[IMAGE_ALIAS_SYMBOL] as ImageAliasState | undefined;
+	if (existing?.byLabel && existing.byPath) return existing;
+	const created: ImageAliasState = { byLabel: {}, byPath: {}, next: 1 };
+	host[IMAGE_ALIAS_SYMBOL] = created;
+	return created;
+}
+
+function aliasForImagePath(path: string): string {
+	const state = aliasState();
+	const existing = state.byPath[path];
+	if (existing) return existing;
+	const label = `[Image #${state.next++}]`;
+	state.byPath[path] = label;
+	state.byLabel[label] = path;
+	return label;
+}
+
+function collapseImagePathsInText(text: string, cwd: string): string {
+	return text.replace(IMAGE_PATH_PATTERN, (match, prefix: string, rawPath: string) => {
+		const resolved = resolveMaybeImagePath(rawPath, cwd);
+		if (!resolved) return match;
+		return `${prefix}${aliasForImagePath(resolved)}`;
+	});
+}
+
+function attachmentLabels(text: string, cwd = process.cwd()): string[] {
 	const seen = new Set<string>();
 	for (const match of text.matchAll(/\[Image\s+#(\d+)\]/gi)) seen.add(`Image #${match[1]}`);
-	return [...seen].sort((a, b) => Number(a.replace(/\D/g, "")) - Number(b.replace(/\D/g, "")));
+	for (const label of imagePathLabels(text, cwd)) seen.add(label);
+	return [...seen].sort((a, b) => Number(a.replace(/\D/g, "")) - Number(b.replace(/\D/g, "")) || a.localeCompare(b));
 }
 
-function chip(label: string, style: string): string {
+function chip(label: string, style: string, theme?: EditorTheme): string {
 	const text = ` ${label} `;
+	if (theme) {
+		if (style === "minimal") return theme.fg("accent", text);
+		if (style === "subtle") return theme.bg("customMessageBg", theme.fg("customMessageLabel", text));
+		return theme.bg("selectedBg", theme.fg("text", text));
+	}
 	if (style === "minimal") return `\x1b[38;5;45m${text}${RESET}`;
 	if (style === "subtle") return `\x1b[48;5;236m\x1b[38;5;153m${text}${RESET}`;
 	return `\x1b[48;5;27m\x1b[38;5;231m${text}${RESET}`;
 }
 
-function styleImageChips(line: string, cwd: string): string {
+function styleImageChips(line: string, cwd: string, theme?: EditorTheme): string {
 	if (!qolSettingBoolean("showImageChips", true, cwd)) return line;
 	const style = qolSettingString("imageChipStyle", "filled", cwd);
-	return line.replace(/\[Image\s+#(\d+)\]/gi, (_match, n) => chip(`Image #${n}`, style));
+	// CustomEditor render lines may contain ANSI spans for cursor/style state.
+	// Match against visible text so leading color codes do not hide image paths.
+	let out = stripAnsi(line).replace(/\[Image\s+#(\d+)\]/gi, (_match, n) => chip(`Image #${n}`, style, theme));
+	let imageIndex = 0;
+	out = out.replace(IMAGE_PATH_PATTERN, (match, prefix: string, rawPath: string) => {
+		const resolved = resolveMaybeImagePath(rawPath, cwd);
+		if (!resolved) return match;
+		imageIndex += 1;
+		return `${prefix}${chip(`Image ${imageIndex}`, style, theme)}`;
+	});
+	return out;
 }
 
 function isEditorBorderLine(line: string): boolean {
@@ -257,29 +334,28 @@ function renderStatusLine(
 class ClaudePromptEditor extends CustomEditor {
 	constructor(
 		tui: TUI,
-		theme: EditorTheme,
+		private readonly editorTheme: EditorTheme,
 		keybindings: KeybindingsManager,
 		private readonly inputBottomPaddingLines: number,
 		private readonly ctx: ExtensionContext,
-		private readonly qolInterop: boolean,
 	) {
-		super(tui, theme, keybindings, { paddingX: 0 });
+		super(tui, editorTheme, keybindings, { paddingX: 0 });
 	}
 
 	handleInput(data: string): void {
-		if (this.qolInterop) {
-			const fallback = qolSettingString("newlineFallbackKey", "ctrl+j", this.ctx.cwd);
-			const newlineEnabled = qolSettingBoolean("newlineOnShiftEnter", true, this.ctx.cwd);
-			const isShiftEnter = matchesKey(data, "shift+enter") || matchesKey(data, "shift+return");
-			const isFallback = fallback !== "none" && matchesKey(data, fallback);
-			if (newlineEnabled && (isShiftEnter || isFallback)) {
-				super.handleInput("\n");
-				this.refreshQolStatus();
-				return;
-			}
+		const fallback = qolSettingString("newlineFallbackKey", "ctrl+j", this.ctx.cwd);
+		const newlineEnabled = qolSettingBoolean("newlineOnShiftEnter", true, this.ctx.cwd);
+		const isShiftEnter = matchesKey(data, "shift+enter") || matchesKey(data, "shift+return");
+		const isFallback = fallback !== "none" && matchesKey(data, fallback);
+		if (newlineEnabled && (isShiftEnter || isFallback)) {
+			super.handleInput("\n");
+			this.collapseImagePaths();
+			this.refreshQolStatus();
+			return;
 		}
 		super.handleInput(data);
-		if (this.qolInterop) this.refreshQolStatus();
+		this.collapseImagePaths();
+		this.refreshQolStatus();
 	}
 
 	render(width: number): string[] {
@@ -306,7 +382,7 @@ class ClaudePromptEditor extends CustomEditor {
 
 		const lines = (inputLines.length > 0 ? inputLines : [""]).map((line, index) => {
 			const linePrefix = index === 0 ? prefix : continuationPrefix;
-			const content = this.qolInterop ? styleImageChips(line, this.ctx.cwd) : line;
+			const content = styleImageChips(line, this.ctx.cwd, this.editorTheme);
 			return truncateToWidth(linePrefix + content, width, "");
 		});
 		for (let index = 0; index < this.inputBottomPaddingLines; index++) {
@@ -320,12 +396,19 @@ class ClaudePromptEditor extends CustomEditor {
 		return lines;
 	}
 
+	private collapseImagePaths(): void {
+		if (!qolSettingBoolean("showImageChips", true, this.ctx.cwd)) return;
+		const text = this.getText();
+		const collapsed = collapseImagePathsInText(text, this.ctx.cwd);
+		if (collapsed !== text) this.setText(collapsed);
+	}
+
 	private refreshQolStatus(): void {
 		if (!qolSettingBoolean("showAttachmentCountInStatus", true, this.ctx.cwd)) {
 			this.ctx.ui.setStatus(QOL_STATUS_KEY, undefined);
 			return;
 		}
-		const count = attachmentLabels(this.getText()).length;
+		const count = attachmentLabels(this.getText(), this.ctx.cwd).length;
 		this.ctx.ui.setStatus(QOL_STATUS_KEY, count > 0 ? `images:${count}` : undefined);
 	}
 }
@@ -368,20 +451,24 @@ export default function statusline(pi: ExtensionAPI) {
 					keybindings,
 					Math.max(0, Math.floor(settingNumber("inputBottomPaddingLines", DEFAULT_INPUT_BOTTOM_PADDING_LINES, ctx.cwd))),
 					ctx,
-					Boolean((pi as unknown as Record<PropertyKey, unknown>)[QOL_INSTALL_SYMBOL]),
 				);
 			});
 		}
 
-		ctx.ui.setWidget("statusline", (tui, theme) => {
-			activeTui = tui;
-			return {
-				invalidate() {},
-				render(width: number): string[] {
-					return [renderStatusLine(width, ctx, gitState ?? makeFallbackGitState(ctx.cwd), pi, theme)];
-				},
-			};
-		});
+		// Defer registration one tick so widgets registered by later-loaded
+		// extensions (notably the task panel) stay above the status line.
+		const statusWidgetTimer = setTimeout(() => {
+			ctx.ui.setWidget("statusline", (tui, theme) => {
+				activeTui = tui;
+				return {
+					invalidate() {},
+					render(width: number): string[] {
+						return [renderStatusLine(width, ctx, gitState ?? makeFallbackGitState(ctx.cwd), pi, theme)];
+					},
+				};
+			});
+		}, 0);
+		statusWidgetTimer.unref?.();
 
 		// Hide pi's built-in footer; our status line lives directly above the input.
 		if (settingBoolean("replaceFooter", true, ctx.cwd)) {
@@ -428,6 +515,8 @@ export default function statusline(pi: ExtensionAPI) {
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		ctx.ui.setStatus(QOL_STATUS_KEY, undefined);
+		ctx.ui.setWidget("statusline", undefined);
+		ctx.ui.setEditorComponent(undefined);
 		activeTui = undefined;
 	});
 }

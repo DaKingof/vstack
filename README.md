@@ -356,8 +356,8 @@ All vstack Pi packages declare `vstack.extensionManager.settings` metadata, incl
 
 #### `pi-extension-manager`
 
-- **Purpose:** Pi-styled extension inventory and settings shell.
-- **Commands:** `/extensions`, `/settings-extensions`, and a best-effort `/settings` wrapper when Pi command precedence permits it.
+- **Purpose:** Pi-styled extension inventory, full settings shell, and quick inline settings editor.
+- **Commands:** `/extensions` for the full popup, `/extension-settings` for quick inline edits, and a best-effort `/settings` wrapper when explicitly enabled.
 - **Notes:** Pi has no public native API for third-party `/settings` tabs or live module unloads; package/module toggles apply after `/reload` or restart.
 - **More:** [pi-extensions/pi-extension-manager/README.md](pi-extensions/pi-extension-manager/README.md).
 
@@ -401,8 +401,8 @@ All vstack Pi packages declare `vstack.extensionManager.settings` metadata, incl
 
 #### `prompt-stash`
 
-- **Purpose:** Project-local prompt stash history with a stash/pop editor workflow.
-- **Commands/UI:** `/prompt-stash`; configurable stash shortcut (`Ctrl+S` by default).
+- **Purpose:** Per-session prompt stash history with a stash/pop editor workflow.
+- **Commands/UI:** `/prompt-stash`; configurable stash shortcut (`Alt+S` by default).
 - **Settings:** store file, shortcut, popup dimensions, visible rows, deduplication.
 - **More:** [pi-extensions/prompt-stash/README.md](pi-extensions/prompt-stash/README.md).
 
@@ -428,8 +428,8 @@ All vstack Pi packages declare `vstack.extensionManager.settings` metadata, incl
 
 #### `pi-task-panel`
 
-- **Purpose:** Persistent structured task panel above the editor plus `/todo` commands and `todo_write` tool.
-- **Settings:** default panel state, Ctrl+T takeover opt-in, alternate shortcut, compact count, notes/reminders.
+- **Purpose:** Persistent structured task panel above the status line/editor plus `/todo` commands and `todo_write` tool.
+- **Settings:** default panel state, Ctrl+T takeover opt-in, Alt+T tri-state toggle, compact count, auto-advance/hide, notes/reminders.
 - **More:** [pi-extensions/pi-task-panel/README.md](pi-extensions/pi-task-panel/README.md).
 
 #### `pi-caveman`

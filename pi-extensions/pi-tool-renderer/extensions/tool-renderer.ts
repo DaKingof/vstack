@@ -68,7 +68,7 @@ function textContent(result: any): string {
 }
 
 function clipLine(line: string, cwd?: string): string {
-	const max = Math.max(40, Math.floor(settingNumber("maxLineWidth", 180, cwd)));
+	const max = Math.max(40, Math.floor(settingNumber("maxLineWidth", 1000, cwd)));
 	return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
@@ -101,10 +101,251 @@ function makeText(text: string): Text {
 	return new Text(text, 0, 0);
 }
 
+function makeEmpty() {
+	return {
+		invalidate() {},
+		render(): string[] {
+			return [];
+		},
+	};
+}
+
+function stackToolCalls(cwd?: string): boolean {
+	return settingBoolean("stackToolCalls", true, cwd);
+}
+
+type StackChildDisplay = "rows" | "headline" | "anchor-list";
+
+function stackChildDisplay(cwd?: string): StackChildDisplay {
+	const value = readVstackConfig(cwd).stackChildDisplay;
+	if (value === "rows" || value === "headline" || value === "anchor-list") return value;
+	return settingBoolean("hideStackChildRows", false, cwd) ? "headline" : "rows";
+}
+
+function stackShell(cwd?: string): { renderShell?: "self" } {
+	return stackToolCalls(cwd) ? { renderShell: "self" } : {};
+}
+
+function stackPrefix(theme: any): string {
+	return theme.fg("muted", "● ");
+}
+
+function readCallText(args: any, theme: any): string {
+	const range = args?.offset || args?.limit ? `:${args.offset ?? 1}${args.limit ? `-${Number(args.offset ?? 1) + Number(args.limit) - 1}` : ""}` : "";
+	return `${theme.fg("toolTitle", theme.bold("Read "))}${theme.fg("accent", `${args?.path ?? ""}${range}`)}`;
+}
+
+function bashCallText(args: any, theme: any, cwd?: string): string {
+	const max = Math.max(20, Math.floor(settingNumber("commandPreviewChars", 96, cwd)));
+	const command = args?.command && args.command.length > max ? `${args.command.slice(0, max - 1)}…` : args?.command;
+	return `${theme.fg("toolTitle", theme.bold("Bash $ "))}${theme.fg("accent", command ?? "")}`;
+}
+
+function readOnlyCallText(toolName: string, args: any, theme: any, cwd?: string): string {
+	const query = args?.pattern ?? args?.glob ?? args?.path ?? args?.query ?? "";
+	return `${theme.fg("toolTitle", theme.bold(`${toolName} `))}${theme.fg("accent", clipLine(String(query), cwd))}`;
+}
+
+type StackableToolName = "read" | "bash" | "grep" | "find" | "ls";
+type StackItemStatus = "running" | "done" | "error";
+
+interface StackItem {
+	args: any;
+	batchId: string;
+	id: string;
+	isError: boolean;
+	resultText: string;
+	status: StackItemStatus;
+	toolName: StackableToolName;
+}
+
+interface StackBatch {
+	anchorId: string;
+	id: string;
+	items: string[];
+	updatedAt: number;
+}
+
+const STACKABLE_TOOLS = new Set<string>(["read", "bash", "grep", "find", "ls"]);
+const stackItems = new Map<string, StackItem>();
+const stackBatches = new Map<string, StackBatch>();
+const stackInvalidators = new Map<string, () => void>();
+let currentStackBatch: StackBatch | null = null;
+let stackBatchCounter = 0;
+
+function isStackableToolName(toolName: unknown): toolName is StackableToolName {
+	return typeof toolName === "string" && STACKABLE_TOOLS.has(toolName);
+}
+
+function notifyStackBatch(batchId: string): void {
+	const batch = stackBatches.get(batchId);
+	if (!batch) return;
+	for (const id of batch.items) stackInvalidators.get(id)?.();
+}
+
+function createStackBatch(firstId: string): StackBatch {
+	const batch: StackBatch = { anchorId: firstId, id: `stack-${++stackBatchCounter}`, items: [], updatedAt: Date.now() };
+	stackBatches.set(batch.id, batch);
+	currentStackBatch = batch;
+	return batch;
+}
+
+function ensureStackItem(toolName: StackableToolName, id: string, args: any): StackItem {
+	const existing = stackItems.get(id);
+	if (existing) {
+		existing.args = args ?? existing.args;
+		return existing;
+	}
+	const batch = currentStackBatch ?? createStackBatch(id);
+	if (!batch.items.includes(id)) batch.items.push(id);
+	const item: StackItem = { args, batchId: batch.id, id, isError: false, resultText: "", status: "running", toolName };
+	stackItems.set(id, item);
+	batch.updatedAt = Date.now();
+	notifyStackBatch(batch.id);
+	return item;
+}
+
+function contextToolCallId(context: any, toolName: string, args: any): string {
+	return String(context?.toolCallId ?? context?.id ?? `${toolName}:${JSON.stringify(args ?? {})}`);
+}
+
+function stackItemCallText(item: StackItem, theme: any, cwd?: string): string {
+	if (item.toolName === "read") return readCallText(item.args, theme);
+	if (item.toolName === "bash") return bashCallText(item.args, theme, cwd);
+	return readOnlyCallText(item.toolName, item.args, theme, cwd);
+}
+
+function stackItemSummary(item: StackItem, theme: any): string {
+	if (item.status === "running") return theme.fg("warning", "running");
+	if (item.isError) return theme.fg("error", "failed");
+	if (item.toolName === "read") {
+		const count = lineCount(item.resultText);
+		let text = theme.fg("success", `${count} line${count === 1 ? "" : "s"}`);
+		if (truncatedMarker(item.resultText)) text += theme.fg("warning", " · truncated");
+		return text;
+	}
+	if (item.toolName === "bash") {
+		const exit = commandExit(item.resultText);
+		const count = lineCount(item.resultText);
+		let text = exit && exit !== 0 ? theme.fg("error", `exit ${exit}`) : theme.fg("success", "done");
+		text += theme.fg("dim", ` · ${count} line${count === 1 ? "" : "s"}`);
+		if (truncatedMarker(item.resultText)) text += theme.fg("warning", " · truncated");
+		return text;
+	}
+	const count = item.resultText.trim() ? lineCount(item.resultText) : 0;
+	let text = theme.fg("success", `${count} result${count === 1 ? "" : "s"}`);
+	if (truncatedMarker(item.resultText)) text += theme.fg("warning", " · truncated");
+	return text;
+}
+
+function stackItemPreview(item: StackItem, cwd?: string): string {
+	if (!item.resultText || item.status === "running") return "";
+	if (item.toolName === "bash") return preview(item.resultText, Math.max(1, Math.floor(settingNumber("bashPreviewLines", 80, cwd))), "tail", cwd);
+	if (item.toolName === "read") return preview(item.resultText, Math.max(1, Math.floor(settingNumber("readPreviewLines", 80, cwd))), "head", cwd);
+	return preview(item.resultText, Math.max(1, Math.floor(settingNumber("searchPreviewLines", 80, cwd))), "head", cwd);
+}
+
+function renderStackItemText(item: StackItem, theme: any, expanded: boolean, cwd?: string, branch = "├"): string {
+	let text = `${theme.fg("muted", `  ${branch} `)}${stackItemCallText(item, theme, cwd)}${theme.fg("dim", " · ")}${stackItemSummary(item, theme)}`;
+	if (expanded) {
+		const previewText = stackItemPreview(item, cwd);
+		if (previewText) {
+			const lines = previewText.split(/\r?\n/).map((line) => `${theme.fg("muted", "  │ ")}${theme.fg("dim", line)}`);
+			text += `\n${lines.join("\n")}`;
+		}
+	}
+	return text;
+}
+
+function plural(count: number, singular: string, pluralText = `${singular}s`): string {
+	return `${count} ${count === 1 ? singular : pluralText}`;
+}
+
+function joinPhrases(parts: string[]): string {
+	if (parts.length <= 1) return parts[0] ?? "";
+	if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+	return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+}
+
+function stackBatchHeadline(batch: StackBatch, theme: any, expanded: boolean, childDisplay: StackChildDisplay): string {
+	const items = batch.items.map((id) => stackItems.get(id)).filter(Boolean) as StackItem[];
+	const running = items.some((item) => item.status === "running");
+	const done = items.filter((item) => item.status !== "running").length;
+	const reads = items.filter((item) => item.toolName === "read").length;
+	const shells = items.filter((item) => item.toolName === "bash").length;
+	const searches = items.filter((item) => item.toolName === "grep" || item.toolName === "find" || item.toolName === "ls").length;
+	const phrases: string[] = [];
+	if (reads > 0) phrases.push(`${running ? "reading" : "read"} ${plural(reads, "file")}`);
+	if (shells > 0) phrases.push(`${running ? "running" : "ran"} ${plural(shells, "shell command")}`);
+	if (searches > 0) phrases.push(`${running ? "searching/listing" : "searched/listed"} ${plural(searches, "time")}`);
+	const lead = joinPhrases(phrases) || (running ? "running tools" : "ran tools");
+	const sentence = lead.charAt(0).toUpperCase() + lead.slice(1);
+	const progress = running ? theme.fg("warning", ` · ${done}/${items.length} done`) : theme.fg("success", " · done");
+	const expandHint = childDisplay === "headline" && !expanded && items.length > 0 ? theme.fg("dim", " · Ctrl+O to expand") : "";
+	return `${stackPrefix(theme)}${sentence}${running ? "…" : ""}${progress}${expandHint}`;
+}
+
+function renderStackBatch(batch: StackBatch, theme: any, expanded: boolean, cwd?: string, childDisplay: StackChildDisplay = "rows"): Text {
+	let text = stackBatchHeadline(batch, theme, expanded, childDisplay);
+	if (childDisplay === "anchor-list" || (childDisplay === "headline" && expanded)) {
+		const items = batch.items.map((id) => stackItems.get(id)).filter(Boolean) as StackItem[];
+		items.forEach((item, index) => {
+			text += `\n${renderStackItemText(item, theme, false, cwd, index === items.length - 1 ? "└" : "├")}`;
+		});
+	}
+	return makeText(text);
+}
+
+function renderStackedToolResult(toolName: StackableToolName, result: any, isPartial: boolean, expanded: boolean, theme: any, context: any, cwd: string) {
+	const id = contextToolCallId(context, toolName, context?.args);
+	const item = ensureStackItem(toolName, id, context?.args ?? {});
+	if (context?.invalidate) stackInvalidators.set(id, context.invalidate);
+	if (!isPartial) {
+		item.status = context?.isError ? "error" : "done";
+		item.isError = Boolean(context?.isError);
+		item.resultText = textContent(result);
+		stackBatches.get(item.batchId)!.updatedAt = Date.now();
+	}
+	const batch = stackBatches.get(item.batchId);
+	if (!batch) return makeEmpty();
+	const effectiveCwd = context?.cwd ?? cwd;
+	const childDisplay = stackChildDisplay(effectiveCwd);
+	if (batch.anchorId === id) return renderStackBatch(batch, theme, expanded, effectiveCwd, childDisplay);
+	if (childDisplay !== "rows") return makeEmpty();
+	const items = batch.items.map((itemId) => stackItems.get(itemId)).filter(Boolean) as StackItem[];
+	const index = Math.max(0, items.findIndex((candidate) => candidate.id === id));
+	return makeText(renderStackItemText(item, theme, false, effectiveCwd, index === items.length - 1 ? "└" : "├"));
+}
+
+function registerStackEvents(pi: ExtensionAPI): void {
+	pi.on("agent_start", () => {
+		currentStackBatch = null;
+	});
+	pi.on("tool_execution_start", (event: any) => {
+		if (isStackableToolName(event.toolName)) {
+			ensureStackItem(event.toolName, String(event.toolCallId), event.args ?? event.input ?? {});
+			return;
+		}
+		currentStackBatch = null;
+	});
+	pi.on("tool_execution_end", (event: any) => {
+		const item = stackItems.get(String(event.toolCallId));
+		if (!item) return;
+		item.status = event.isError ? "error" : "done";
+		item.isError = Boolean(event.isError);
+		item.resultText = textContent(event.result);
+		notifyStackBatch(item.batchId);
+	});
+	pi.on("agent_end", () => {
+		currentStackBatch = null;
+	});
+}
+
 function registerRead(pi: ExtensionAPI, agent: any, cwd: string): void {
 	const original = agent.createReadTool?.(cwd);
 	if (!original) return;
 	pi.registerTool({
+		...stackShell(cwd),
 		name: "read",
 		label: "read",
 		description: original.description,
@@ -112,11 +353,13 @@ function registerRead(pi: ExtensionAPI, agent: any, cwd: string): void {
 		async execute(id: string, params: any, signal: AbortSignal | undefined, onUpdate: unknown) {
 			return original.execute(id, params, signal, onUpdate);
 		},
-		renderCall(args: any, theme: any) {
-			const range = args.offset || args.limit ? `:${args.offset ?? 1}${args.limit ? `-${Number(args.offset ?? 1) + Number(args.limit) - 1}` : ""}` : "";
-			return makeText(`${theme.fg("toolTitle", theme.bold("Read "))}${theme.fg("accent", `${args.path}${range}`)}`);
+		renderCall(args: any, theme: any, context: any) {
+			if (stackToolCalls(context?.cwd ?? cwd)) return makeEmpty();
+			return makeText(readCallText(args, theme));
 		},
 		renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
+			const stacked = stackToolCalls(context?.cwd ?? cwd);
+			if (stacked) return renderStackedToolResult("read", result, isPartial, expanded, theme, context, cwd);
 			if (isPartial) return makeText(theme.fg("warning", "Reading…"));
 			const content = textContent(result);
 			const count = lineCount(content);
@@ -136,6 +379,7 @@ function registerBash(pi: ExtensionAPI, agent: any, cwd: string): void {
 	const original = agent.createBashTool?.(cwd);
 	if (!original) return;
 	pi.registerTool({
+		...stackShell(cwd),
 		name: "bash",
 		label: "bash",
 		description: original.description,
@@ -144,11 +388,12 @@ function registerBash(pi: ExtensionAPI, agent: any, cwd: string): void {
 			return original.execute(id, params, signal, onUpdate);
 		},
 		renderCall(args: any, theme: any, context: any) {
-			const max = Math.max(20, Math.floor(settingNumber("commandPreviewChars", 96, context?.cwd)));
-			const command = args.command && args.command.length > max ? `${args.command.slice(0, max - 1)}…` : args.command;
-			return makeText(`${theme.fg("toolTitle", theme.bold("Bash $ "))}${theme.fg("accent", command ?? "")}`);
+			if (stackToolCalls(context?.cwd ?? cwd)) return makeEmpty();
+			return makeText(bashCallText(args, theme, context?.cwd ?? cwd));
 		},
 		renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
+			const stacked = stackToolCalls(context?.cwd ?? cwd);
+			if (stacked) return renderStackedToolResult("bash", result, isPartial, expanded, theme, context, cwd);
 			if (isPartial) return makeText(theme.fg("warning", "Running…"));
 			const output = textContent(result);
 			const exit = commandExit(output);
@@ -180,18 +425,13 @@ function registerEdit(pi: ExtensionAPI, agent: any, cwd: string): void {
 		renderCall(args: any, theme: any) {
 			return makeText(`${theme.fg("toolTitle", theme.bold("Edit "))}${theme.fg("accent", args.path ?? "")}`);
 		},
-		renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
+		renderResult(result: any, { expanded, isPartial }: any, theme: any, _context: any) {
 			if (isPartial) return makeText(theme.fg("warning", "Editing…"));
 			const diff = result?.details?.diff ?? "";
 			const stats = diffStats(diff);
 			let text = `${theme.fg("success", `+${stats.additions}`)} ${theme.fg("error", `-${stats.removals}`)}`;
 			if (!diff) text = theme.fg("success", "applied");
-			if (expanded && diff) {
-				const limit = Math.max(1, Math.floor(settingNumber("editPreviewLines", 120, context?.cwd)));
-				text += `\n${preview(diff, limit, "head", context?.cwd)}`;
-				const count = lineCount(diff);
-				if (count > limit) text += `\n${theme.fg("muted", `… ${count - limit} more diff line(s)`)}`;
-			}
+			if (expanded && diff) text += `\n${diff}`;
 			return makeText(text);
 		},
 	});
@@ -232,6 +472,7 @@ function registerReadOnly(pi: ExtensionAPI, agent: any, cwd: string, toolName: "
 	const original = agent[factoryName]?.(cwd);
 	if (!original) return;
 	pi.registerTool({
+		...stackShell(cwd),
 		name: toolName,
 		label: toolName,
 		description: original.description,
@@ -239,11 +480,13 @@ function registerReadOnly(pi: ExtensionAPI, agent: any, cwd: string, toolName: "
 		async execute(id: string, params: any, signal: AbortSignal | undefined, onUpdate: unknown) {
 			return original.execute(id, params, signal, onUpdate);
 		},
-		renderCall(args: any, theme: any) {
-			const query = args.pattern ?? args.glob ?? args.path ?? args.query ?? "";
-			return makeText(`${theme.fg("toolTitle", theme.bold(`${toolName} `))}${theme.fg("accent", clipLine(String(query)))}`);
+		renderCall(args: any, theme: any, context: any) {
+			if (stackToolCalls(context?.cwd ?? cwd)) return makeEmpty();
+			return makeText(readOnlyCallText(toolName, args, theme, context?.cwd ?? cwd));
 		},
 		renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
+			const stacked = stackToolCalls(context?.cwd ?? cwd);
+			if (stacked) return renderStackedToolResult(toolName, result, isPartial, expanded, theme, context, cwd);
 			if (isPartial) return makeText(theme.fg("warning", `${toolName}…`));
 			const output = textContent(result);
 			const count = output.trim() ? lineCount(output) : 0;
@@ -265,12 +508,16 @@ export default async function toolRenderer(pi: ExtensionAPI): Promise<void> {
 	guard[INSTALL_SYMBOL] = true;
 	if (!settingBoolean("enabled", true)) return;
 
+	registerStackEvents(pi);
+
 	const agent = await import("@mariozechner/pi-coding-agent");
 	const cwd = process.cwd();
 	registerRead(pi, agent, cwd);
 	registerBash(pi, agent, cwd);
-	registerEdit(pi, agent, cwd);
-	registerWrite(pi, agent, cwd);
+	if (settingBoolean("renderMutationTools", false, cwd)) {
+		registerEdit(pi, agent, cwd);
+		registerWrite(pi, agent, cwd);
+	}
 	registerReadOnly(pi, agent, cwd, "grep", "createGrepTool");
 	registerReadOnly(pi, agent, cwd, "find", "createFindTool");
 	registerReadOnly(pi, agent, cwd, "ls", "createLsTool");

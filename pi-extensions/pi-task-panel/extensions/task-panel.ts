@@ -1,6 +1,6 @@
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { AgentToolResult, ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import { Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -116,22 +116,53 @@ function normalizeState(value: unknown, cwd?: string): TodoState {
 	};
 }
 
-function taskIcon(status: Status): string {
-	if (status === "completed") return "✓";
-	if (status === "in_progress") return "▶";
-	if (status === "abandoned") return "✕";
+function taskIcon(status: Status, active = false): string {
+	if (active || status === "in_progress" || status === "completed") return "●";
 	return "○";
 }
 
-function statusColor(status: Status): string {
-	if (status === "completed") return "muted";
-	if (status === "in_progress") return "accent";
+function markerColor(status: Status, active = false): string {
+	if (active || status === "in_progress") return "accent";
+	if (status === "completed") return "success";
 	if (status === "abandoned") return "error";
 	return "dim";
 }
 
+function taskText(task: TaskItem, active: boolean, theme: Theme): string {
+	if (active || task.status === "in_progress") return theme.fg("accent", task.content);
+	if (task.status === "completed") return theme.fg("muted", theme.strikethrough(task.content));
+	if (task.status === "abandoned") return theme.fg("dim", theme.strikethrough(task.content));
+	return task.content;
+}
+
+function renderTaskLine(task: TaskItem, theme: Theme, active = false): string {
+	const marker = theme.fg(markerColor(task.status, active), taskIcon(task.status, active));
+	const notes = task.notes.length ? theme.fg("dim", ` +${task.notes.length}`) : "";
+	return ` ${marker} ${taskText(task, active, theme)}${notes}`;
+}
+
+function formatShortcutHint(shortcut: string): string {
+	return shortcut
+		.split("+")
+		.map((part) => part.length === 1 ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+		.join("+");
+}
+
+function panelToggleHint(cwd: string): string {
+	const shortcut = settingString("alternateShortcut", "alt+t", cwd);
+	return shortcut === "none" ? "" : `${formatShortcutHint(shortcut)} toggle`;
+}
+
 function activeTask(state: TodoState): TaskItem | undefined {
-	return state.tasks.find((task) => task.status === "in_progress") ?? state.tasks.find((task) => task.status === "pending");
+	return state.tasks.find((task) => task.status === "in_progress") ?? sortTasks(state.tasks).find((task) => task.status === "pending");
+}
+
+function ensureActiveTask(state: TodoState): TaskItem | undefined {
+	const current = state.tasks.find((task) => task.status === "in_progress");
+	if (current) return current;
+	const next = sortTasks(state.tasks).find((task) => task.status === "pending");
+	if (next) next.status = "in_progress";
+	return next;
 }
 
 function remainingCount(state: TodoState): number {
@@ -159,6 +190,20 @@ function ensurePhase(state: TodoState, title: string): string {
 	return phase.id;
 }
 
+function updatePanelAfterTaskChange(state: TodoState, cwd?: string): void {
+	const active = sortTasks(state.tasks.filter((task) => task.status === "in_progress"));
+	for (const task of active.slice(1)) task.status = "pending";
+	const remaining = remainingCount(state);
+	if (remaining === 0 && state.tasks.length > 0) {
+		state.panel = "hidden";
+		return;
+	}
+	if (remaining > 0) {
+		ensureActiveTask(state);
+		if (state.panel === "hidden" && settingBoolean("autoShowOnFirstTask", true, cwd)) state.panel = "compact";
+	}
+}
+
 function addTask(state: TodoState, content: string, phaseTitleText?: string, cwd?: string): TaskItem {
 	const task: TaskItem = {
 		content: content.trim(),
@@ -169,20 +214,27 @@ function addTask(state: TodoState, content: string, phaseTitleText?: string, cwd
 		status: "pending",
 	};
 	state.tasks.push(task);
-	if (state.tasks.length === 1 && settingBoolean("autoShowOnFirstTask", true, cwd) && state.panel === "hidden") state.panel = "compact";
+	updatePanelAfterTaskChange(state, cwd);
 	return task;
 }
 
 function findTask(state: TodoState, token: string): TaskItem | undefined {
-	const needle = token.trim().toLowerCase();
-	return state.tasks.find((task) => task.id === token.trim()) ?? state.tasks.find((task) => task.content.toLowerCase().includes(needle));
+	const trimmed = token.trim();
+	if (!trimmed) return undefined;
+	const needle = trimmed.toLowerCase();
+	return state.tasks.find((task) => task.id === trimmed) ?? state.tasks.find((task) => task.content.toLowerCase().includes(needle));
 }
 
-function startTask(state: TodoState, token: string): TaskItem | undefined {
-	const task = findTask(state, token);
+function findTaskOrActive(state: TodoState, token: string): TaskItem | undefined {
+	return findTask(state, token) ?? (!token.trim() ? activeTask(state) : undefined);
+}
+
+function startTask(state: TodoState, token: string, cwd?: string): TaskItem | undefined {
+	const task = findTaskOrActive(state, token);
 	if (!task) return undefined;
 	for (const candidate of state.tasks) if (candidate.status === "in_progress") candidate.status = "pending";
 	task.status = "in_progress";
+	updatePanelAfterTaskChange(state, cwd);
 	return task;
 }
 
@@ -190,17 +242,19 @@ function isStatus(value: unknown): value is Status {
 	return value === "pending" || value === "in_progress" || value === "completed" || value === "abandoned";
 }
 
-function markStatus(state: TodoState, token: string, status: Status): TaskItem | undefined {
-	const task = findTask(state, token);
+function markStatus(state: TodoState, token: string, status: Status, cwd?: string): TaskItem | undefined {
+	const task = findTaskOrActive(state, token);
 	if (!task) return undefined;
 	task.status = status;
+	updatePanelAfterTaskChange(state, cwd);
 	return task;
 }
 
-function removeTask(state: TodoState, token: string): boolean {
+function removeTask(state: TodoState, token: string, cwd?: string): boolean {
 	const task = findTask(state, token);
 	if (!task) return false;
 	state.tasks = state.tasks.filter((candidate) => candidate.id !== task.id);
+	updatePanelAfterTaskChange(state, cwd);
 	return true;
 }
 
@@ -246,6 +300,7 @@ function parseMarkdown(text: string, cwd?: string): TodoState {
 		item.status = task[1] === "x" || task[1] === "X" ? "completed" : task[1] === "-" ? "abandoned" : task[1] === ">" ? "in_progress" : "pending";
 		lastTask = item;
 	}
+	updatePanelAfterTaskChange(state, cwd);
 	return state;
 }
 
@@ -253,19 +308,23 @@ function renderPanelLines(state: TodoState, theme: Theme, cwd: string): string[]
 	if (state.tasks.length === 0 || state.panel === "hidden") return [];
 	const remaining = remainingCount(state);
 	const active = activeTask(state);
+	const hint = panelToggleHint(cwd);
 	const header = `${theme.fg("accent", theme.bold("Tasks"))} ${theme.fg("muted", `${completedCount(state)}/${state.tasks.length} done · ${remaining} remaining`)}`;
 	if (state.panel === "compact") {
-		const limit = Math.max(1, Math.floor(settingNumber("maxCompactTasks", 5, cwd)));
+		const limit = Math.max(1, Math.floor(settingNumber("maxCompactTasks", 4, cwd)));
 		const candidates = active?.phaseId ? sortTasks(state.tasks.filter((task) => task.phaseId === active.phaseId)) : sortTasks(state.tasks);
-		const visible = candidates.filter((task) => task.status !== "completed" && task.status !== "abandoned").slice(0, limit);
+		const incomplete = candidates.filter((task) => task.status !== "completed" && task.status !== "abandoned");
+		const visible = incomplete.filter((task) => task.id !== active?.id).slice(0, Math.max(0, limit - (active ? 1 : 0)));
 		const lines = [header];
-		if (active) lines.push(`${theme.fg("muted", phaseTitle(state, active.phaseId))} · ${theme.fg("accent", active.content)}`);
-		for (const task of visible) lines.push(` ${theme.fg(statusColor(task.status), taskIcon(task.status))} ${task.content}${task.notes.length ? theme.fg("dim", ` +${task.notes.length}`) : ""}`);
-		const hidden = remaining - visible.length;
-		if (hidden > 0) lines.push(theme.fg("dim", ` +${hidden} more`));
+		if (active) lines.push(renderTaskLine(active, theme, true));
+		for (const task of visible) lines.push(renderTaskLine(task, theme));
+		const shown = visible.length + (active ? 1 : 0);
+		const hidden = Math.max(0, remaining - shown);
+		if (hidden > 0) lines.push(theme.fg("dim", ` +${hidden} more${hint ? ` · ${hint}` : ""}`));
+		else if (hint) lines.push(theme.fg("dim", ` ${hint}`));
 		return lines;
 	}
-	const lines = [header];
+	const lines = [hint ? `${header} ${theme.fg("dim", `· ${hint}`)}` : header];
 	const phases = [...state.phases].sort((a, b) => a.order - b.order);
 	const unphased = sortTasks(state.tasks.filter((task) => !task.phaseId));
 	if (unphased.length) lines.push(...renderTaskGroup("Tasks", unphased, theme, cwd));
@@ -280,8 +339,9 @@ function renderTaskGroup(title: string, tasks: TaskItem[], theme: Theme, cwd: st
 	const lines = [theme.fg("muted", title)];
 	const active = tasks.find((task) => task.status === "in_progress");
 	for (const task of tasks) {
-		lines.push(` ${theme.fg(statusColor(task.status), taskIcon(task.status))} ${task.status === "completed" ? theme.strikethrough(task.content) : task.content}${task.notes.length ? theme.fg("dim", ` +${task.notes.length}`) : ""}`);
-		if (active?.id === task.id && settingBoolean("showNotesInExpanded", true, cwd)) {
+		const isActive = active?.id === task.id;
+		lines.push(renderTaskLine(task, theme, isActive));
+		if (isActive && settingBoolean("showNotesInExpanded", true, cwd)) {
 			for (const note of task.notes) lines.push(theme.fg("dim", `    note: ${note}`));
 		}
 	}
@@ -295,6 +355,24 @@ function writeFileSafe(path: string, text: string): void {
 
 function summarize(state: TodoState): string {
 	return `${state.tasks.length} task(s), ${remainingCount(state)} remaining, panel=${state.panel}`;
+}
+
+function toolResultSummary(action: string, message: string, state: TodoState): string {
+	if (message.startsWith("No task")) return message;
+	const remaining = remainingCount(state);
+	const suffix = remaining === 0 ? "all complete" : `${remaining} remaining`;
+	switch (action) {
+		case "replace": return `${state.tasks.length} tasks written (${suffix})`;
+		case "add_task": return `1 task added (${suffix})`;
+		case "add_phase": return "phase added";
+		case "start_task": return `task started (${suffix})`;
+		case "mark_done": return `1 task completed (${suffix})`;
+		case "drop_task": return `1 task dropped (${suffix})`;
+		case "remove_task": return `1 task removed (${suffix})`;
+		case "append_note": return "task note added";
+		case "set_panel": return `task panel ${state.panel}`;
+		default: return message;
+	}
 }
 
 const TodoToolParams = Type.Object({
@@ -327,6 +405,7 @@ export default function taskPanel(pi: ExtensionAPI): void {
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === STATE_TYPE) state = normalizeState(entry.data, ctx.cwd);
 		}
+		updatePanelAfterTaskChange(state, ctx.cwd);
 		syncWidget(ctx);
 	};
 
@@ -358,11 +437,11 @@ export default function taskPanel(pi: ExtensionAPI): void {
 		}
 		await ctx.ui.custom((_tui, theme, _kb, done) => ({
 			handleInput(data: string) {
-				if (data === "q" || data === "\u001b") done(undefined);
+				if (data === "\u001b" || data === "\u0003") done(undefined);
 			},
 			invalidate() {},
 			render(width: number) {
-				const lines = [theme.fg("accent", theme.bold("Tasks manager")), theme.fg("dim", "q/esc close · use /todo edit for bulk editing"), "", ...renderPanelLines({ ...state, panel: "expanded" }, theme, (ctx as ExtensionContext).cwd)];
+				const lines = [theme.fg("accent", theme.bold("Tasks manager")), theme.fg("dim", "esc close · use /todo edit for bulk editing"), "", ...renderPanelLines({ ...state, panel: "expanded" }, theme, (ctx as ExtensionContext).cwd)];
 				return lines.map((line) => truncateToWidth(line, width, ""));
 			},
 		}), { overlay: true, overlayOptions: { anchor: "center", width: 100, maxHeight: "85%" } });
@@ -380,19 +459,23 @@ export default function taskPanel(pi: ExtensionAPI): void {
 				message = mutate(ctx, () => `Added ${addTask(state, task || rest, phase, ctx.cwd).id}`);
 				break;
 			}
-			case "start": message = mutate(ctx, () => startTask(state, rest)?.content ?? `No task matched: ${rest}`); break;
-			case "done": message = mutate(ctx, () => markStatus(state, rest, "completed")?.content ?? `No task matched: ${rest}`); break;
-			case "drop": message = mutate(ctx, () => markStatus(state, rest, "abandoned")?.content ?? `No task matched: ${rest}`); break;
-			case "rm": message = mutate(ctx, () => removeTask(state, rest) ? `Removed ${rest}` : `No task matched: ${rest}`); break;
-			case "clear-completed": message = mutate(ctx, () => { const before = state.tasks.length; state.tasks = state.tasks.filter((task) => task.status !== "completed"); return `Removed ${before - state.tasks.length} completed task(s)`; }); break;
+			case "start": message = mutate(ctx, () => startTask(state, rest, ctx.cwd)?.content ?? `No task matched: ${rest}`); break;
+			case "done": message = mutate(ctx, () => markStatus(state, rest, "completed", ctx.cwd)?.content ?? `No task matched: ${rest}`); break;
+			case "drop": message = mutate(ctx, () => markStatus(state, rest, "abandoned", ctx.cwd)?.content ?? `No task matched: ${rest}`); break;
+			case "rm": message = mutate(ctx, () => removeTask(state, rest, ctx.cwd) ? `Removed ${rest}` : `No task matched: ${rest}`); break;
+			case "clear-completed": message = mutate(ctx, () => { const before = state.tasks.length; state.tasks = state.tasks.filter((task) => task.status !== "completed"); updatePanelAfterTaskChange(state, ctx.cwd); return `Removed ${before - state.tasks.length} completed task(s)`; }); break;
 			case "hide": message = mutate(ctx, () => { state.panel = "hidden"; return "Task panel hidden"; }); break;
-			case "show": message = mutate(ctx, () => { state.panel = "compact"; return "Task panel shown"; }); break;
-			case "compact": message = mutate(ctx, () => { state.panel = "compact"; return "Task panel compact"; }); break;
-			case "expand": message = mutate(ctx, () => { state.panel = "expanded"; return "Task panel expanded"; }); break;
+			case "show":
+			case "show4":
+			case "show-4":
+			case "compact": message = mutate(ctx, () => { state.panel = "compact"; return `Task panel showing ${Math.max(1, Math.floor(settingNumber("maxCompactTasks", 4, ctx.cwd)))} task(s)`; }); break;
+			case "all":
+			case "show-all":
+			case "expand": message = mutate(ctx, () => { state.panel = "expanded"; return "Task panel showing all tasks"; }); break;
 			case "export": { const out = rest || join(ctx.cwd, ".pi", "tasks.md"); writeFileSafe(resolve(ctx.cwd, out), toMarkdown(state)); message = `Exported tasks to ${out}`; break; }
 			case "import": { const input = resolve(ctx.cwd, rest || join(".pi", "tasks.md")); state = parseMarkdown(readFileSync(input, "utf8"), ctx.cwd); message = mutate(ctx, () => `Imported ${state.tasks.length} task(s)`); break; }
 			case "edit": return ctx.ui.editor("Edit tasks markdown", toMarkdown(state)).then((text) => { if (text !== undefined) { state = parseMarkdown(text, ctx.cwd); ctx.ui.notify(mutate(ctx, () => `Saved ${state.tasks.length} task(s)`), "info"); } });
-			default: message = "Unknown /todo action. Try add/start/done/drop/rm/clear-completed/hide/show/compact/expand/edit/export/import/manage.";
+			default: message = "Unknown /todo action. Try add/start/done/drop/rm/clear-completed/hide/show/show-all/compact/expand/edit/export/import/manage.";
 		}
 		ctx.ui.notify(message, message.startsWith("No task") || message.startsWith("Unknown") ? "warning" : "info");
 	}
@@ -407,6 +490,7 @@ export default function taskPanel(pi: ExtensionAPI): void {
 		promptGuidelines: [
 			"Use todo_write to keep a visible task list when the user asks for multi-step work or when you need to track progress across tool calls.",
 			"Use todo_write replace for a fresh plan, add_task for discovered follow-ups, start_task before working a task, and mark_done/drop_task when status changes.",
+			"todo_write automatically keeps one current task in progress, advances to the next pending task when the active task is completed/dropped, hides the panel when all tasks are complete, and shows it again when pending work appears.",
 		],
 		parameters: TodoToolParams,
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
@@ -414,26 +498,32 @@ export default function taskPanel(pi: ExtensionAPI): void {
 			if (!runCtx) throw new Error("No active Pi context for todo_write");
 			const message = mutate(runCtx, () => {
 				switch (params.action) {
-					case "replace": state = emptyState(runCtx.cwd); for (const input of params.tasks ?? []) { const task = addTask(state, input.content, input.phase, runCtx.cwd); task.status = isStatus(input.status) ? input.status : "pending"; task.notes = input.notes ?? []; } return `Replaced tasks (${state.tasks.length})`;
+					case "replace": state = emptyState(runCtx.cwd); for (const input of params.tasks ?? []) { const task = addTask(state, input.content, input.phase, runCtx.cwd); task.status = isStatus(input.status) ? input.status : "pending"; task.notes = input.notes ?? []; } updatePanelAfterTaskChange(state, runCtx.cwd); return `Replaced tasks (${state.tasks.length})`;
 					case "add_phase": ensurePhase(state, params.phase ?? "General"); return `Added phase ${params.phase ?? "General"}`;
 					case "add_task": return `Added ${addTask(state, params.task ?? "Task", params.phase, runCtx.cwd).id}`;
-					case "start_task": return startTask(state, params.task ?? "")?.content ?? "No task matched";
-					case "mark_done": return markStatus(state, params.task ?? "", "completed")?.content ?? "No task matched";
-					case "drop_task": return markStatus(state, params.task ?? "", "abandoned")?.content ?? "No task matched";
-					case "remove_task": return removeTask(state, params.task ?? "") ? "Removed task" : "No task matched";
-					case "append_note": { const task = findTask(state, params.task ?? ""); if (!task) return "No task matched"; task.notes.push(params.note ?? ""); return `Noted ${task.content}`; }
+					case "start_task": return startTask(state, params.task ?? "", runCtx.cwd)?.content ?? "No task matched";
+					case "mark_done": return markStatus(state, params.task ?? "", "completed", runCtx.cwd)?.content ?? "No task matched";
+					case "drop_task": return markStatus(state, params.task ?? "", "abandoned", runCtx.cwd)?.content ?? "No task matched";
+					case "remove_task": return removeTask(state, params.task ?? "", runCtx.cwd) ? "Removed task" : "No task matched";
+					case "append_note": { const task = findTaskOrActive(state, params.task ?? ""); if (!task) return "No task matched"; task.notes.push(params.note ?? ""); return `Noted ${task.content}`; }
 					case "set_panel": state.panel = params.panel ?? "compact"; return `Panel ${state.panel}`;
 					default: return "No todo action matched";
 				}
 			});
-			return { content: [{ type: "text", text: `${message}\n${summarize(state)}` }], details: cloneState(state) };
+			const summary = toolResultSummary(params.action, message, state);
+			return { content: [{ type: "text", text: `• ${summary}` }], details: { summary, state: cloneState(state) } };
+		},
+		renderCall(_args, theme) {
+			return new Text(theme.fg("toolTitle", "todo_write"), 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			const text = result.content?.find((part: any) => part?.type === "text")?.text ?? "• tasks updated";
+			return new Text(theme.fg("muted", text), 0, 0);
 		},
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		restore(ctx);
-		const alternate = settingString("alternateShortcut", "ctrl+shift+t", ctx.cwd);
-		if (!settingBoolean("takeoverCtrlT", false, ctx.cwd) && ctx.hasUI) ctx.ui.notify(`Task panel loaded. Ctrl+T remains Pi thinking toggle; use ${alternate} or enable takeoverCtrlT in extension settings.`, "info");
 	});
 	pi.on("session_tree", (_event, ctx) => restore(ctx));
 	pi.on("agent_end", (_event, ctx) => {
@@ -447,11 +537,15 @@ export default function taskPanel(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", (_event, ctx) => ctx.ui.setWidget(WIDGET_KEY, undefined));
 
 	const toggle = async (ctx: ExtensionContext) => {
-		state.panel = state.panel === "hidden" ? "compact" : "hidden";
+		state.panel = state.panel === "hidden" ? "compact" : state.panel === "compact" ? "expanded" : "hidden";
 		persist();
 		syncWidget(ctx);
+		if (ctx.hasUI) {
+			const label = state.panel === "hidden" ? "hidden" : state.panel === "compact" ? `showing ${Math.max(1, Math.floor(settingNumber("maxCompactTasks", 4, ctx.cwd)))} task(s)` : "showing all tasks";
+			ctx.ui.notify(`Task panel ${label}`, "info");
+		}
 	};
-	const alternateShortcut = settingString("alternateShortcut", "ctrl+shift+t");
+	const alternateShortcut = settingString("alternateShortcut", "alt+t");
 	if (alternateShortcut !== "none") {
 		pi.registerShortcut(alternateShortcut, { description: "Toggle task panel", handler: async (ctx) => toggle(ctx as ExtensionContext) });
 	}

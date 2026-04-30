@@ -630,42 +630,6 @@ export default function questions(pi: ExtensionAPI): void {
 		service.shutdown();
 	});
 
-	pi.registerCommand("question-demo", {
-		description: "Open a sample structured question popup",
-		handler: async (_args, ctx) => {
-			activeCtx = ctx;
-			attachContext(ctx, service);
-			const result = await service.ask(
-				ctx,
-				{
-					header: "Question demo",
-					questions: [
-						{
-							header: "Action",
-							multiple: false,
-							options: [
-								{ description: "Proceed with the current plan.", label: "Continue" },
-								{ description: "Stop and wait for operator guidance.", label: "Stop here" },
-							],
-							question: "How should Pi proceed?",
-						},
-						{
-							header: "Checks",
-							multiple: true,
-							options: [
-								{ description: "Run fast tests before continuing.", label: "Run tests" },
-								{ description: "Inspect repository status.", label: "Check git status" },
-							],
-							question: "Which follow-up checks should be included?",
-						},
-					],
-				},
-				"api",
-			);
-			ctx.ui.notify(JSON.stringify(result), "info");
-		},
-	});
-
 	pi.registerTool({
 		name: "question",
 		label: "Question",

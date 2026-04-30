@@ -44,9 +44,9 @@
         {
           "key": "defaultTimeoutSeconds",
           "label": "Default timeout",
-          "description": "Default timeout for spawned background tasks. Set 0 to disable timeouts.",
+          "description": "Default timeout for spawned background tasks. Default 0 disables timeouts so long-running work is not killed unexpectedly.",
           "type": "number",
-          "default": 600,
+          "default": 0,
           "category": "Execution",
           "apply": "live"
         },
@@ -73,7 +73,7 @@
           "label": "In-memory output buffer",
           "description": "Maximum characters retained in memory per task; logs still keep full output.",
           "type": "number",
-          "default": 120000,
+          "default": 1000000,
           "category": "Output",
           "apply": "live"
         },
@@ -82,16 +82,16 @@
           "label": "Wakeup output tail",
           "description": "Characters included in output/exit wakeup messages.",
           "type": "number",
-          "default": 3000,
+          "default": 10000,
           "category": "Output",
           "apply": "live"
         },
         {
           "key": "logTailMaxChars",
           "label": "Dashboard/log tail",
-          "description": "Characters shown by dashboard and log actions.",
+          "description": "Characters shown by dashboard and log actions. Log tool output includes the full log path when truncated.",
           "type": "number",
-          "default": 5000,
+          "default": 50000,
           "category": "Output",
           "apply": "live"
         },

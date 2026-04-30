@@ -2,10 +2,12 @@
 
 OMP-style large-output policy for Pi tool results.
 
-- Preserves full oversized output in `.pi/artifacts/output-policy/` when possible.
-- Uses head truncation for read/search/listing tools and tail truncation for command/log tools.
+- Preserves full oversized output under `~/.pi/agent/vstack/pi-output-policy/sessions/<session-id>/artifacts/` when possible, never in the project `.pi/` directory.
+- Uses head truncation for search/listing tools and tail truncation for command/log tools.
+- Leaves file `read` tool results unmodified by default; enable `truncateReadOutputs` to apply head truncation to reads.
+- Leaves edit/write tool results and diff details unmodified by default; enable `truncateMutationOutputs` to apply truncation to file mutations.
 - Adds explicit truncation notices with size, line, direction, and artifact path details.
-- Applies a simple shell-output minimizer before hard truncation.
-- Sanitizes text blocks and details payloads for UI safety.
+- Keeps shell-output minimization disabled by default; enable `shellMinimizer.enabled` to compress noisy command logs.
+- Keeps details payload sanitization disabled by default so extension state, subagent details, and diffs are preserved; enable `sanitizeDetails` for stricter UI safety caps.
 
 Limit: Pi's built-in tools may already truncate before `tool_result`; this extension can only preserve the result text it receives. Custom tools that return full large text benefit most from spill preservation.

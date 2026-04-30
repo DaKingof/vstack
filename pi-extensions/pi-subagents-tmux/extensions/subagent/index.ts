@@ -18,7 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { type AgentToolResult, type ExtensionAPI, getMarkdownTheme, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+import { type AgentToolResult, type ExtensionAPI, type ExtensionContext, getMarkdownTheme, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
@@ -27,7 +27,7 @@ const INSTALL_SYMBOL = Symbol.for("vstack.pi-subagents-tmux.installed");
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
-const PANE_LAUNCHER_VERSION = 5;
+const PANE_LAUNCHER_VERSION = 6;
 const FIRST_AGENT_COLUMN_ROWS = 3;
 const NEXT_AGENT_COLUMN_ROWS = 4;
 
@@ -37,6 +37,30 @@ function expandHome(input: string): string {
 	if (input === "~") return os.homedir();
 	if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
 	return input;
+}
+
+function piUserDir(): string {
+	return path.resolve(expandHome(process.env.PI_CODING_AGENT_DIR?.trim() || "~/.pi/agent"));
+}
+
+function sessionIdForContext(ctx: ExtensionContext): string {
+	const id = ctx.sessionManager.getSessionId();
+	if (id && id.trim()) return id;
+	const file = ctx.sessionManager.getSessionFile();
+	if (file) return path.basename(file, path.extname(file));
+	return `ephemeral-${process.pid}`;
+}
+
+function runtimeSessionId(ctx: ExtensionContext): string {
+	return process.env.PI_SUBAGENT_PARENT_SESSION_ID?.trim() || sessionIdForContext(ctx);
+}
+
+function sessionRuntimeDir(sessionId: string): string {
+	return path.join(piUserDir(), "vstack", "pi-subagents-tmux", "sessions", safeFileName(sessionId));
+}
+
+function runtimeDirForContext(ctx: ExtensionContext): string {
+	return sessionRuntimeDir(runtimeSessionId(ctx));
 }
 
 function projectSettingsPath(cwd: string): string {
@@ -52,8 +76,7 @@ function projectSettingsPath(cwd: string): string {
 }
 
 function piSettingsPaths(cwd = process.cwd()): string[] {
-	const userDir = path.resolve(expandHome(process.env.PI_CODING_AGENT_DIR?.trim() || "~/.pi/agent"));
-	return [path.join(userDir, "settings.json"), projectSettingsPath(cwd)];
+	return [path.join(piUserDir(), "settings.json"), projectSettingsPath(cwd)];
 }
 
 function readVstackConfig(cwd?: string): VstackConfig {
@@ -333,28 +356,66 @@ function setCurrentTmuxPaneTitle(title: string): void {
 	proc.unref?.();
 }
 
-function runtimeDir(cwd: string): string {
-	return path.join(cwd, ".pi", "subagent-runtime");
+function registryPath(runtimeRoot: string): string {
+	return path.join(runtimeRoot, "panes.json");
 }
 
-function registryPath(cwd: string): string {
-	return path.join(runtimeDir(cwd), "panes.json");
+function outboxRoot(runtimeRoot: string): string {
+	return path.join(runtimeRoot, "outbox");
 }
 
-function outboxRoot(cwd: string): string {
-	return path.join(runtimeDir(cwd), "outbox");
+function completionPath(runtimeRoot: string, agentName: string, taskId: string): string {
+	return path.join(outboxRoot(runtimeRoot), safeFileName(agentName), `${safeFileName(taskId)}.json`);
 }
 
-function completionPath(cwd: string, agentName: string, taskId: string): string {
-	return path.join(outboxRoot(cwd), safeFileName(agentName), `${safeFileName(taskId)}.json`);
+function inboxDir(runtimeRoot: string, agentName: string): string {
+	return path.join(runtimeRoot, "inbox", safeFileName(agentName));
 }
 
-function inboxDir(cwd: string, agentName: string): string {
-	return path.join(runtimeDir(cwd), "inbox", safeFileName(agentName));
+function completionArchiveDir(runtimeRoot: string, agentName: string): string {
+	return path.join(runtimeRoot, "processed", safeFileName(agentName));
 }
 
-function completionArchiveDir(cwd: string, agentName: string): string {
-	return path.join(runtimeDir(cwd), "processed", safeFileName(agentName));
+function legacyProjectRuntimeDirs(cwd: string): string[] {
+	const candidates = [path.join(cwd, ".pi", "subagent-runtime")];
+	try {
+		candidates.push(path.join(path.dirname(projectSettingsPath(cwd)), "subagent-runtime"));
+	} catch {
+		// Ignore project-root probing failures; the direct cwd candidate is enough.
+	}
+	return [...new Set(candidates.map((candidate) => path.resolve(candidate)))];
+}
+
+async function stopLegacyPanes(legacyRoot: string): Promise<void> {
+	try {
+		const content = await fs.promises.readFile(path.join(legacyRoot, "panes.json"), "utf-8");
+		const registry = JSON.parse(content) as PaneRegistry;
+		for (const entry of Object.values(registry)) {
+			if (entry.paneId) await tmux(["kill-pane", "-t", entry.paneId]);
+		}
+	} catch {
+		// Best-effort only. The migration still moves files out of the project.
+	}
+}
+
+async function migrateLegacyProjectRuntime(cwd: string, runtimeRoot: string): Promise<void> {
+	for (const legacyRoot of legacyProjectRuntimeDirs(cwd)) {
+		if (legacyRoot === path.resolve(runtimeRoot) || !fs.existsSync(legacyRoot)) continue;
+		await stopLegacyPanes(legacyRoot);
+		await fs.promises.mkdir(runtimeRoot, { recursive: true, mode: 0o700 });
+		const target = path.join(runtimeRoot, `legacy-project-runtime-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+		try {
+			await fs.promises.rename(legacyRoot, target);
+		} catch {
+			try {
+				await fs.promises.cp(legacyRoot, target, { recursive: true, force: false });
+				await fs.promises.rm(legacyRoot, { recursive: true, force: true });
+			} catch {
+				// If the filesystem refuses migration, leave the legacy tree in place
+				// rather than breaking startup. New runtime state still uses runtimeRoot.
+			}
+		}
+	}
 }
 
 function createTaskId(agentName: string): string {
@@ -498,37 +559,39 @@ async function rebalanceColumns(registry: PaneRegistry, primaryPaneId: string): 
 	}
 }
 
-async function readPaneRegistry(cwd: string): Promise<PaneRegistry> {
+async function readPaneRegistry(runtimeRoot: string): Promise<PaneRegistry> {
 	try {
-		const content = await fs.promises.readFile(registryPath(cwd), "utf-8");
+		const content = await fs.promises.readFile(registryPath(runtimeRoot), "utf-8");
 		return JSON.parse(content) as PaneRegistry;
 	} catch {
 		return {};
 	}
 }
 
-async function writePaneRegistry(cwd: string, registry: PaneRegistry): Promise<void> {
-	const filePath = registryPath(cwd);
+async function writePaneRegistry(runtimeRoot: string, registry: PaneRegistry): Promise<void> {
+	const filePath = registryPath(runtimeRoot);
 	await withFileMutationQueue(filePath, async () => {
-		await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-		await fs.promises.writeFile(filePath, `${JSON.stringify(registry, null, "\t")}\n`, "utf-8");
+		await fs.promises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+		await fs.promises.writeFile(filePath, `${JSON.stringify(registry, null, "\t")}\n`, { encoding: "utf-8", mode: 0o600 });
 	});
 }
 
 async function writeLauncher(
+	runtimeRoot: string,
+	parentSessionId: string,
 	cwd: string,
 	agent: AgentConfig,
 	model: string | undefined,
 	thinkingLevel: string | undefined,
 ): Promise<{ sessionFile: string; promptFile: string; launcherFile: string }> {
-	const dir = runtimeDir(cwd);
+	const dir = runtimeRoot;
 	const safeName = safeFileName(agent.name);
 	const sessionsDir = path.join(dir, "sessions");
 	const promptsDir = path.join(dir, "prompts");
 	const launchersDir = path.join(dir, "launchers");
-	await fs.promises.mkdir(sessionsDir, { recursive: true });
-	await fs.promises.mkdir(promptsDir, { recursive: true });
-	await fs.promises.mkdir(launchersDir, { recursive: true });
+	await fs.promises.mkdir(sessionsDir, { recursive: true, mode: 0o700 });
+	await fs.promises.mkdir(promptsDir, { recursive: true, mode: 0o700 });
+	await fs.promises.mkdir(launchersDir, { recursive: true, mode: 0o700 });
 
 	const sessionFile = path.join(sessionsDir, `${safeName}.jsonl`);
 	const promptFile = path.join(promptsDir, `${safeName}.md`);
@@ -549,6 +612,7 @@ async function writeLauncher(
 set -euo pipefail
 cd ${shellQuote(cwd)}
 export PI_SUBAGENT_CHILD_AGENT=${shellQuote(agent.name)}
+export PI_SUBAGENT_PARENT_SESSION_ID=${shellQuote(parentSessionId)}
 exec ${command}
 `;
 	await withFileMutationQueue(launcherFile, async () => {
@@ -559,20 +623,22 @@ exec ${command}
 }
 
 async function ensurePersistentPane(
+	runtimeRoot: string,
+	parentSessionId: string,
 	cwd: string,
 	agent: AgentConfig,
 	parentModel: string | undefined,
 	parentThinkingLevel: string | undefined,
 ): Promise<PaneRegistryEntry> {
 	await ensureTmux();
-	const registry = await readPaneRegistry(cwd);
-	if (await cleanupPaneRegistry(registry)) await writePaneRegistry(cwd, registry);
+	const registry = await readPaneRegistry(runtimeRoot);
+	if (await cleanupPaneRegistry(registry)) await writePaneRegistry(runtimeRoot, registry);
 
 	const existing = registry[agent.name];
 	if (existing && (await paneExists(existing.paneId))) return existing;
 
 	const selectedModel = parentModel ?? agent.model;
-	const paths = await writeLauncher(cwd, agent, selectedModel, parentThinkingLevel);
+	const paths = await writeLauncher(runtimeRoot, parentSessionId, cwd, agent, selectedModel, parentThinkingLevel);
 	const windowName = `subagent:${agent.name}`;
 	const primaryPaneId = await getPrimaryPaneId();
 	const layoutGroup = nextLayoutGroup(registry);
@@ -626,13 +692,13 @@ async function ensurePersistentPane(
 	registry[agent.name] = entry;
 	await rebalanceColumn([...(groupedPaneEntries(registry).get(layoutGroup) ?? [])]);
 	await rebalanceColumns(registry, primaryPaneId);
-	await writePaneRegistry(cwd, registry);
+	await writePaneRegistry(runtimeRoot, registry);
 	return entry;
 }
 
-async function archiveCompletion(cwd: string, agentName: string, filePath: string): Promise<void> {
-	const archiveDir = completionArchiveDir(cwd, agentName);
-	await fs.promises.mkdir(archiveDir, { recursive: true });
+async function archiveCompletion(runtimeRoot: string, agentName: string, filePath: string): Promise<void> {
+	const archiveDir = completionArchiveDir(runtimeRoot, agentName);
+	await fs.promises.mkdir(archiveDir, { recursive: true, mode: 0o700 });
 	const archivedPath = path.join(archiveDir, `${Date.now()}-${path.basename(filePath)}`);
 	await fs.promises.rename(filePath, archivedPath);
 }
@@ -662,9 +728,9 @@ function formatCompletion(completion: PaneCompletion, filePath: string): string 
 		.join("\n");
 }
 
-async function pollPaneCompletions(cwd: string, pi: ExtensionAPI, triggerTurn = true): Promise<number> {
+async function pollPaneCompletions(runtimeRoot: string, pi: ExtensionAPI, triggerTurn = true): Promise<number> {
 	let collected = 0;
-	const root = outboxRoot(cwd);
+	const root = outboxRoot(runtimeRoot);
 	let agentDirs: fs.Dirent[];
 	try {
 		agentDirs = await fs.promises.readdir(root, { withFileTypes: true });
@@ -691,7 +757,7 @@ async function pollPaneCompletions(cwd: string, pi: ExtensionAPI, triggerTurn = 
 					{ customType: "subagent-completion", content, display: true },
 					triggerTurn ? { triggerTurn: true, deliverAs: "followUp" } : undefined,
 				);
-				await archiveCompletion(cwd, completion.agent ?? agentDir.name, filePath);
+				await archiveCompletion(runtimeRoot, completion.agent ?? agentDir.name, filePath);
 				collected++;
 			} catch {
 				// Leave malformed or concurrently-written files in place for the agent/user to fix.
@@ -703,6 +769,8 @@ async function pollPaneCompletions(cwd: string, pi: ExtensionAPI, triggerTurn = 
 
 async function runPersistentPaneAgent(
 	defaultCwd: string,
+	runtimeRoot: string,
+	parentSessionId: string,
 	agents: AgentConfig[],
 	agentName: string,
 	task: string,
@@ -727,19 +795,19 @@ async function runPersistentPaneAgent(
 	}
 
 	const effectiveCwd = cwd ?? defaultCwd;
-	const pane = await ensurePersistentPane(effectiveCwd, agent, parentModel, parentThinkingLevel);
+	const pane = await ensurePersistentPane(runtimeRoot, parentSessionId, effectiveCwd, agent, parentModel, parentThinkingLevel);
 	const taskId = createTaskId(agent.name);
-	const outboxFile = completionPath(effectiveCwd, agent.name, taskId);
-	await fs.promises.mkdir(path.dirname(outboxFile), { recursive: true });
+	const outboxFile = completionPath(runtimeRoot, agent.name, taskId);
+	await fs.promises.mkdir(path.dirname(outboxFile), { recursive: true, mode: 0o700 });
 	const delegation = buildDelegation(agent, task, outboxFile, taskId);
-	const taskFile = path.join(inboxDir(effectiveCwd, agent.name), `${safeFileName(taskId)}.md`);
-	await fs.promises.mkdir(path.dirname(taskFile), { recursive: true });
+	const taskFile = path.join(inboxDir(runtimeRoot, agent.name), `${safeFileName(taskId)}.md`);
+	await fs.promises.mkdir(path.dirname(taskFile), { recursive: true, mode: 0o700 });
 	await fs.promises.writeFile(taskFile, delegation, { encoding: "utf-8", mode: 0o600 });
-	const registry = await readPaneRegistry(effectiveCwd);
+	const registry = await readPaneRegistry(runtimeRoot);
 	if (registry[agent.name]) {
 		registry[agent.name].lastTaskAt = new Date().toISOString();
 		registry[agent.name].lastTaskId = taskId;
-		await writePaneRegistry(effectiveCwd, registry);
+		await writePaneRegistry(runtimeRoot, registry);
 	}
 
 	const text = `Queued task ${taskId} for persistent tmux pane ${pane.paneId} (${pane.windowName}). Inbox file: ${taskFile}. Completion file: ${outboxFile}`;
@@ -977,10 +1045,12 @@ export default function (pi: ExtensionAPI) {
 		return new Text(message.content, 0, 0);
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		if (completionPoller) clearInterval(completionPoller);
 		if (childInboxPoller) clearInterval(childInboxPoller);
 		if (childTitlePoller) clearInterval(childTitlePoller);
+
+		const runtimeRoot = runtimeDirForContext(ctx);
 
 		if (childAgentName) {
 			ctx.ui.setTitle(`pi subagent - ${childAgentName}`);
@@ -993,7 +1063,7 @@ export default function (pi: ExtensionAPI) {
 				if (childPollInFlight || !ctx.isIdle()) return;
 				childPollInFlight = true;
 				(async () => {
-					const inbox = inboxDir(ctx.cwd, childAgentName);
+					const inbox = inboxDir(runtimeRoot, childAgentName);
 					let files: string[];
 					try {
 						files = (await fs.promises.readdir(inbox)).filter((file) => file.endsWith(".md")).sort();
@@ -1004,8 +1074,8 @@ export default function (pi: ExtensionAPI) {
 					if (!file) return;
 
 					const source = path.join(inbox, file);
-					const processing = path.join(runtimeDir(ctx.cwd), "processing", safeFileName(childAgentName), file);
-					await fs.promises.mkdir(path.dirname(processing), { recursive: true });
+					const processing = path.join(runtimeRoot, "processing", safeFileName(childAgentName), file);
+					await fs.promises.mkdir(path.dirname(processing), { recursive: true, mode: 0o700 });
 					try {
 						await fs.promises.rename(source, processing);
 					} catch {
@@ -1026,11 +1096,12 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		ctx.ui.setStatus("subagent", undefined);
+		await migrateLegacyProjectRuntime(ctx.cwd, runtimeRoot);
 		if (!ctx.hasUI) return;
 		const poll = () => {
 			if (completionPollInFlight) return;
 			completionPollInFlight = true;
-			pollPaneCompletions(ctx.cwd, pi).finally(() => {
+			pollPaneCompletions(runtimeRoot, pi).finally(() => {
 				completionPollInFlight = false;
 			});
 		};
@@ -1040,9 +1111,9 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_end", async (_event, ctx) => {
 		if (!childAgentName || !childCurrentTaskFile) return;
-		const doneFile = path.join(runtimeDir(ctx.cwd), "done", safeFileName(childAgentName), path.basename(childCurrentTaskFile));
+		const doneFile = path.join(runtimeDirForContext(ctx), "done", safeFileName(childAgentName), path.basename(childCurrentTaskFile));
 		try {
-			await fs.promises.mkdir(path.dirname(doneFile), { recursive: true });
+			await fs.promises.mkdir(path.dirname(doneFile), { recursive: true, mode: 0o700 });
 			await fs.promises.rename(childCurrentTaskFile, doneFile);
 		} catch {
 			// Keep the processing file as evidence if archival fails.
@@ -1069,6 +1140,8 @@ export default function (pi: ExtensionAPI) {
 
 			const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 			const parentThinkingLevel = pi.getThinkingLevel();
+			const parentSessionId = runtimeSessionId(ctx);
+			const runtimeRoot = sessionRuntimeDir(parentSessionId);
 			const discovery = discoverAgents(ctx.cwd, scopes.has(parts.at(-1) as AgentScope) ? (parts.at(-1) as AgentScope) : scope);
 			const findAgent = (name: string | undefined) => discovery.agents.find((candidate) => candidate.name === name);
 
@@ -1077,7 +1150,7 @@ export default function (pi: ExtensionAPI) {
 					const agent = findAgent(parts[1]);
 					if (!agent) throw new Error(`Unknown agent: ${parts[1] ?? "(missing)"}`);
 					if (!agent.pane) throw new Error(`Agent ${agent.name} is not configured for persistent panes. Add \`pane: true\` to its frontmatter to enable.`);
-					const pane = await ensurePersistentPane(ctx.cwd, agent, parentModel, parentThinkingLevel);
+					const pane = await ensurePersistentPane(runtimeRoot, parentSessionId, ctx.cwd, agent, parentModel, parentThinkingLevel);
 					content = `Started/reused ${agent.name} in ${pane.paneId} (${pane.windowName}).\nSession: ${pane.sessionFile}`;
 				} else if (command === "send") {
 					const agent = findAgent(parts[1]);
@@ -1085,43 +1158,43 @@ export default function (pi: ExtensionAPI) {
 					if (!agent.pane) throw new Error(`Agent ${agent.name} is not configured for persistent panes. Add \`pane: true\` to its frontmatter to enable.`);
 					const task = parts.slice(2).join(" ").trim();
 					if (!task) throw new Error("Usage: /agents send <name> <task>");
-					const pane = await ensurePersistentPane(ctx.cwd, agent, parentModel, parentThinkingLevel);
+					const pane = await ensurePersistentPane(runtimeRoot, parentSessionId, ctx.cwd, agent, parentModel, parentThinkingLevel);
 					const taskId = createTaskId(agent.name);
-					const outboxFile = completionPath(ctx.cwd, agent.name, taskId);
-					await fs.promises.mkdir(path.dirname(outboxFile), { recursive: true });
-					const taskFile = path.join(inboxDir(ctx.cwd, agent.name), `${safeFileName(taskId)}.md`);
-					await fs.promises.mkdir(path.dirname(taskFile), { recursive: true });
+					const outboxFile = completionPath(runtimeRoot, agent.name, taskId);
+					await fs.promises.mkdir(path.dirname(outboxFile), { recursive: true, mode: 0o700 });
+					const taskFile = path.join(inboxDir(runtimeRoot, agent.name), `${safeFileName(taskId)}.md`);
+					await fs.promises.mkdir(path.dirname(taskFile), { recursive: true, mode: 0o700 });
 					await fs.promises.writeFile(taskFile, buildDelegation(agent, task, outboxFile, taskId), {
 						encoding: "utf-8",
 						mode: 0o600,
 					});
-					const registry = await readPaneRegistry(ctx.cwd);
+					const registry = await readPaneRegistry(runtimeRoot);
 					if (registry[agent.name]) {
 						registry[agent.name].lastTaskAt = new Date().toISOString();
 						registry[agent.name].lastTaskId = taskId;
-						await writePaneRegistry(ctx.cwd, registry);
+						await writePaneRegistry(runtimeRoot, registry);
 					}
 					content = `Queued task ${taskId} for ${agent.name} in ${pane.paneId} (${pane.windowName}).\nInbox file: ${taskFile}\nCompletion file: ${outboxFile}`;
 				} else if (command === "attach") {
-					const registry = await readPaneRegistry(ctx.cwd);
+					const registry = await readPaneRegistry(runtimeRoot);
 					const entry = registry[parts[1] ?? ""];
 					if (!entry || !(await paneExists(entry.paneId))) throw new Error(`No live pane for agent: ${parts[1] ?? "(missing)"}`);
 					const result = await tmux(["select-pane", "-t", entry.paneId]);
 					if (result.code !== 0) throw new Error(result.stderr || result.stdout || "tmux select-pane failed");
 					content = `Attached to ${entry.agent} at ${entry.paneId}.`;
 				} else if (command === "stop") {
-					const registry = await readPaneRegistry(ctx.cwd);
+					const registry = await readPaneRegistry(runtimeRoot);
 					const entry = registry[parts[1] ?? ""];
 					if (!entry) throw new Error(`No pane registry entry for agent: ${parts[1] ?? "(missing)"}`);
 					if (await paneExists(entry.paneId)) await tmux(["kill-pane", "-t", entry.paneId]);
 					delete registry[entry.agent];
-					await writePaneRegistry(ctx.cwd, registry);
+					await writePaneRegistry(runtimeRoot, registry);
 					content = `Stopped ${entry.agent} pane ${entry.paneId}.`;
 				} else if (command === "collect") {
-					const collected = await pollPaneCompletions(ctx.cwd, pi, false);
+					const collected = await pollPaneCompletions(runtimeRoot, pi, false);
 					content = `Collected ${collected} subagent completion file${collected === 1 ? "" : "s"}.`;
 				} else if (command === "status") {
-					const registry = await readPaneRegistry(ctx.cwd);
+					const registry = await readPaneRegistry(runtimeRoot);
 					const lines = await Promise.all(
 						Object.values(registry).map(async (entry) => {
 							const live = await paneExists(entry.paneId);
@@ -1227,6 +1300,8 @@ export default function (pi: ExtensionAPI) {
 			const confirmProjectAgents = params.confirmProjectAgents ?? false;
 			const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 			const parentThinkingLevel = pi.getThinkingLevel();
+			const parentSessionId = runtimeSessionId(ctx);
+			const runtimeRoot = sessionRuntimeDir(parentSessionId);
 
 			const hasChain = (params.chain?.length ?? 0) > 0;
 			const hasTasks = (params.tasks?.length ?? 0) > 0;
@@ -1307,6 +1382,8 @@ export default function (pi: ExtensionAPI) {
 					const result = stepAgent?.pane
 						? await runPersistentPaneAgent(
 								ctx.cwd,
+								runtimeRoot,
+								parentSessionId,
 								agents,
 								step.agent,
 								taskWithContext,
@@ -1397,6 +1474,8 @@ export default function (pi: ExtensionAPI) {
 					const result = taskAgent?.pane
 						? await runPersistentPaneAgent(
 								ctx.cwd,
+								runtimeRoot,
+								parentSessionId,
 								agents,
 								t.agent,
 								t.task,
@@ -1451,6 +1530,8 @@ export default function (pi: ExtensionAPI) {
 				const result = agent?.pane
 					? await runPersistentPaneAgent(
 							ctx.cwd,
+							runtimeRoot,
+							parentSessionId,
 							agents,
 							params.agent,
 							params.task,

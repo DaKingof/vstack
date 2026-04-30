@@ -31,7 +31,7 @@
         {
           "key": "enabled",
           "label": "Enable questions",
-          "description": "Register the question tool, /question-demo, popup UI, and bridge question service.",
+          "description": "Register the question tool, popup UI, and bridge question service.",
           "type": "boolean",
           "default": true,
           "category": "General",

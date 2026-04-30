@@ -57,7 +57,7 @@
         {
           "key": "showImageChips",
           "label": "Style image chips",
-          "description": "Render [Image #N] placeholders in the editor as visually distinct chips. Pi still owns attachment state.",
+          "description": "Render [Image #N] placeholders and existing pasted image paths in the editor as visually distinct chips. Pi still owns attachment state.",
           "type": "boolean",
           "default": true,
           "category": "Images",
@@ -66,7 +66,7 @@
         {
           "key": "imageChipStyle",
           "label": "Image chip style",
-          "description": "Visual style for image attachment placeholders.",
+          "description": "Theme-aware visual style for image attachment placeholders. Filled uses selectedBg; subtle uses customMessageBg/customMessageLabel; minimal uses accent text.",
           "type": "enum",
           "enumValues": [
             "minimal",

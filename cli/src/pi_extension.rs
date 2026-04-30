@@ -117,20 +117,89 @@ pub fn discover_pi_extensions(dir: &Path) -> Result<Vec<PiExtension>> {
     Ok(out)
 }
 
+/// Package renames shipped by vstack. Pi de-duplicates packages by identity,
+/// not by the resources they register, so a renamed package can leave a legacy
+/// package behind that registers the same tool/command and crashes Pi startup.
+const PI_EXTENSION_RENAMES: &[(&str, &[&str])] = &[
+    // `pi-subagents` was renamed once the package grew persistent tmux panes.
+    ("pi-subagents-tmux", &["pi-subagents"]),
+];
+
+/// Legacy package names that should be removed from the same scope before the
+/// current package is installed.
+pub fn legacy_names_for(name: &str) -> &'static [&'static str] {
+    PI_EXTENSION_RENAMES
+        .iter()
+        .find_map(|(current, legacy)| (*current == name).then_some(*legacy))
+        .unwrap_or(&[])
+}
+
+/// Does the package appear to be installed in the given Pi scope?
+///
+/// This checks both the deployed package directory and `settings.json`, so it
+/// also catches stale settings entries left after manual deletion.
+pub fn is_pi_extension_installed(name: &str, global: bool) -> bool {
+    let dest = crate::config::pi_packages_dir(global).join(name);
+    dest.exists()
+        || dest.is_symlink()
+        || settings_references_package(name, &dest, global).unwrap_or(false)
+}
+
+fn settings_references_package(name: &str, dest: &Path, global: bool) -> Result<bool> {
+    let settings_path = crate::config::pi_settings_path(global);
+    if !settings_path.exists() {
+        return Ok(false);
+    }
+    let settings = load_or_init_settings(&settings_path)?;
+    Ok(settings
+        .get("packages")
+        .and_then(|p| p.as_array())
+        .is_some_and(|packages| packages.iter().any(|e| entry_matches_package(e, name, dest))))
+}
+
+fn remove_same_scope_legacy_packages(name: &str, global: bool) -> Result<()> {
+    for legacy in legacy_names_for(name) {
+        if !is_pi_extension_installed(legacy, global) {
+            continue;
+        }
+
+        let removed = remove_pi_extension(legacy, global)?;
+        let scope_label = if global { "global" } else { "project" };
+        if removed.is_empty() {
+            eprintln!(
+                "  Migrated legacy pi-extension {legacy} → {name} ({scope_label} scope)"
+            );
+        } else {
+            let removed_list = removed
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            eprintln!(
+                "  Migrated legacy pi-extension {legacy} → {name} ({scope_label} scope): removed {removed_list}"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Install a Pi extension package into the chosen scope.
 ///
 /// Steps:
-/// 1. If the SAME extension is already installed at the OTHER scope,
-///    SKIP the install with a notice. Pi loads packages from BOTH
-///    global and project scopes; identical extensions registered twice
-///    cause "Tool X conflicts with Y" errors at Pi startup. The
-///    existing scope wins — to switch scopes, the user explicitly runs
-///    `vstack remove [--global] <name>` then re-installs at the
-///    desired scope.
-/// 2. Copy the package directory into `<scope>/packages/<name>/`.
-/// 3. For every entry in the package.json `bin` field, create a symlink
+/// 1. Remove any same-scope vstack legacy package names for this package
+///    (for example `pi-subagents` → `pi-subagents-tmux`). Renamed Pi
+///    packages can register the same tools, and Pi treats them as distinct
+///    packages, so leaving the legacy package installed crashes startup.
+/// 2. If the SAME extension (or one of its legacy names) is already installed
+///    at the OTHER scope, SKIP the install with a notice. Pi loads packages
+///    from BOTH global and project scopes; duplicate resources cause
+///    "Tool X conflicts with Y" errors at Pi startup. The existing scope wins
+///    — to switch scopes, the user explicitly runs
+///    `vstack remove [--global] <name>` then re-installs at the desired scope.
+/// 3. Copy the package directory into `<scope>/packages/<name>/`.
+/// 4. For every entry in the package.json `bin` field, create a symlink
 ///    at `<scope>/bin/<cli-name>` pointing at the installed binary.
-/// 4. Add a relative path entry (`./packages/<name>`) to Pi's `settings.json`
+/// 5. Add a relative path entry (`./packages/<name>`) to Pi's `settings.json`
 ///    `packages` array, preserving any existing entries.
 ///
 /// Pi resolves relative path entries against the settings file directory:
@@ -143,10 +212,15 @@ pub fn discover_pi_extensions(dir: &Path) -> Result<Vec<PiExtension>> {
 /// duplicate; callers can use this to omit the entry from the lock file
 /// summary so vstack's view of state stays accurate.
 pub fn install_pi_extension(ext: &PiExtension, global: bool) -> Result<Option<PathBuf>> {
-    // Step 1: cross-scope guard. Pi loads from both scopes — duplicate
-    // registration would crash startup. Existing scope is authoritative.
-    let other_scope_dest = crate::config::pi_packages_dir(!global).join(&ext.name);
-    if other_scope_dest.exists() || other_scope_dest.is_symlink() {
+    // Step 1: same-scope legacy migration for package renames. This is safe to
+    // do automatically because these are vstack-owned package names and the new
+    // package supersedes the old one.
+    remove_same_scope_legacy_packages(&ext.name, global)?;
+
+    // Step 2a: cross-scope guard for the same current package name. Pi loads
+    // from both scopes — duplicate registration would crash startup. Existing
+    // scope is authoritative.
+    if is_pi_extension_installed(&ext.name, !global) {
         let this_label = if global { "global" } else { "project" };
         let other_label = if global { "project" } else { "global" };
         eprintln!(
@@ -156,6 +230,22 @@ pub fn install_pi_extension(ext: &PiExtension, global: bool) -> Result<Option<Pa
             ext.name,
         );
         return Ok(None);
+    }
+
+    // Step 2b: cross-scope guard for legacy package names. We migrate the
+    // selected scope automatically, but do not delete packages from the other
+    // scope as a side effect of this install.
+    for legacy in legacy_names_for(&ext.name) {
+        if is_pi_extension_installed(legacy, !global) {
+            let this_label = if global { "global" } else { "project" };
+            let other_label = if global { "project" } else { "global" };
+            eprintln!(
+                "  Skip pi-extension {} ({this_label} install): legacy package {legacy} is installed at {other_label} scope and registers the same resources. Run `vstack remove {}{legacy}` first.",
+                ext.name,
+                if !global { "--global " } else { "" },
+            );
+            return Ok(None);
+        }
     }
 
     let dest_dir = crate::config::pi_packages_dir(global);
@@ -205,7 +295,9 @@ pub fn remove_pi_extension(name: &str, global: bool) -> Result<Vec<PathBuf>> {
     } else if dest.is_dir() && std::fs::remove_dir_all(&dest).is_ok() {
         removed.push(dest.clone());
     }
-    let _ = unregister_from_pi_settings(name, &dest, global);
+    if unregister_from_pi_settings(name, &dest, global)? {
+        removed.push(crate::config::pi_settings_path(global));
+    }
     Ok(removed)
 }
 
@@ -310,14 +402,15 @@ fn register_in_pi_settings(name: &str, dest: &Path, global: bool) -> Result<()> 
 }
 
 /// Remove the settings entry for `name` (matches relative or absolute form).
-fn unregister_from_pi_settings(name: &str, dest: &Path, global: bool) -> Result<()> {
+/// Returns true when `settings.json` changed.
+fn unregister_from_pi_settings(name: &str, dest: &Path, global: bool) -> Result<bool> {
     let settings_path = crate::config::pi_settings_path(global);
     if !settings_path.exists() {
-        return Ok(());
+        return Ok(false);
     }
     let mut settings = load_or_init_settings(&settings_path)?;
     let Some(map) = settings.as_object_mut() else {
-        return Ok(());
+        return Ok(false);
     };
 
     let mut changed = false;
@@ -334,7 +427,7 @@ fn unregister_from_pi_settings(name: &str, dest: &Path, global: bool) -> Result<
     if changed {
         write_settings(&settings_path, &settings)?;
     }
-    Ok(())
+    Ok(changed)
 }
 
 fn load_or_init_settings(path: &Path) -> Result<serde_json::Value> {
@@ -647,6 +740,93 @@ mod tests {
             assert!(removed.iter().any(|p| p == &link),
                 "expected remove output to include bin link {}", link.display());
             assert!(!link.exists(), "bin link should be gone");
+        });
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn install_pi_subagents_tmux_migrates_legacy_pi_subagents() {
+        let sandbox = std::env::temp_dir().join(format!(
+            "vstack_pi_subagents_migrate_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&sandbox);
+        std::fs::create_dir_all(&sandbox).unwrap();
+        let legacy_src = sandbox.join("src").join("pi-subagents");
+        let current_src = sandbox.join("src").join("pi-subagents-tmux");
+        write_mini_source(&legacy_src, "pi-subagents");
+        write_mini_source(&current_src, "pi-subagents-tmux");
+        let pi_dir = sandbox.join("agent");
+
+        with_pi_dir(&pi_dir, || {
+            let legacy = PiExtension::from_dir(&legacy_src).unwrap();
+            let legacy_dest = install_pi_extension(&legacy, true).unwrap().unwrap();
+            assert!(legacy_dest.exists());
+
+            let current = PiExtension::from_dir(&current_src).unwrap();
+            let current_dest = install_pi_extension(&current, true).unwrap().unwrap();
+            assert!(current_dest.exists());
+            assert!(
+                !legacy_dest.exists(),
+                "legacy package dir should be removed during rename migration"
+            );
+
+            let settings_path = pi_dir.join("settings.json");
+            let settings: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(&settings_path).unwrap(),
+            )
+            .unwrap();
+            let pkgs: Vec<&str> = settings
+                .get("packages")
+                .and_then(|p| p.as_array())
+                .unwrap()
+                .iter()
+                .filter_map(|e| e.as_str())
+                .collect();
+            assert!(pkgs.contains(&"./packages/pi-subagents-tmux"));
+            assert!(
+                !pkgs.contains(&"./packages/pi-subagents"),
+                "legacy settings entry should be removed, got {pkgs:?}"
+            );
+        });
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn remove_pi_extension_cleans_stale_settings_entry() {
+        let sandbox = std::env::temp_dir().join(format!(
+            "vstack_pi_remove_stale_settings_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&sandbox);
+        let pi_dir = sandbox.join("agent");
+
+        with_pi_dir(&pi_dir, || {
+            let settings_path = pi_dir.join("settings.json");
+            std::fs::create_dir_all(&pi_dir).unwrap();
+            std::fs::write(
+                &settings_path,
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "packages": ["./packages/pi-stale"],
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+
+            assert!(is_pi_extension_installed("pi-stale", true));
+            let removed = remove_pi_extension("pi-stale", true).unwrap();
+            assert!(
+                removed.iter().any(|p| p == &settings_path),
+                "settings.json should be reported as changed"
+            );
+
+            let after: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(&settings_path).unwrap(),
+            )
+            .unwrap();
+            assert!(after.get("packages").is_none());
         });
 
         let _ = std::fs::remove_dir_all(&sandbox);

@@ -7,7 +7,7 @@ Pi package for delegating work to specialized agents from a running Pi session.
 - `subagent` tool: delegate a task to one agent, many agents in parallel, or a sequential chain.
 - Project/user agent discovery from `.pi/agents`, `.claude/agents`, and `~/.pi/agent/agents`.
 - Persistent tmux panes for agents with `pane: true` frontmatter.
-- Inbox/outbox handoff under `.pi/subagent-runtime/` so pane agents can receive tasks and report completions automatically.
+- Inbox/outbox handoff under `~/.pi/agent/vstack/pi-subagents-tmux/sessions/<session-id>/` so pane agents can receive tasks and report completions without writing session data into the project.
 - Grid-style tmux layout: first subagent column splits from the main pane, up to three agents stack vertically; later columns rebalance to equal widths.
 - Tmux pane border titles like `subagent:iced` for visual identification.
 
@@ -64,7 +64,7 @@ pane: true
 ---
 ```
 
-The parent Pi session writes tasks to `.pi/subagent-runtime/inbox/<agent>/` and polls `.pi/subagent-runtime/outbox/<agent>/` for completion JSON. Completions are surfaced back into the main conversation automatically.
+The parent Pi session writes tasks to `~/.pi/agent/vstack/pi-subagents-tmux/sessions/<session-id>/inbox/<agent>/` and polls the matching `outbox/<agent>/` for completion JSON. Sessions, prompt copies, launcher scripts, inbox/outbox, processed files, and pane registries are isolated by Pi session ID and never stored under the project's `.pi/` directory. Completions are surfaced back into the main conversation automatically.
 
 Persistent panes require running Pi inside tmux.
 

@@ -1,15 +1,15 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-output-policy.installed");
-const DEFAULT_SPILL_THRESHOLD_KB = 50;
-const DEFAULT_INLINE_TAIL_KB = 20;
-const DEFAULT_INLINE_TAIL_LINES = 500;
-const DEFAULT_MAX_TEXT_BLOCK_KB = 50;
-const DEFAULT_MAX_LINE_COUNT = 3000;
-const DEFAULT_MAX_LINE_WIDTH = 2000;
+const DEFAULT_SPILL_THRESHOLD_KB = 200;
+const DEFAULT_INLINE_TAIL_KB = 100;
+const DEFAULT_INLINE_TAIL_LINES = 2_000;
+const DEFAULT_MAX_TEXT_BLOCK_KB = 200;
+const DEFAULT_MAX_LINE_COUNT = 8_000;
+const DEFAULT_MAX_LINE_WIDTH = 20_000;
 const DEFAULT_MINIMIZER_MAX_CAPTURE_BYTES = 1024 * 1024;
 
 type VstackConfig = Record<string, unknown>;
@@ -36,6 +36,55 @@ function expandHome(input: string): string {
 	return input;
 }
 
+function piUserDir(): string {
+	return resolve(expandHome(process.env.PI_CODING_AGENT_DIR?.trim() || "~/.pi/agent"));
+}
+
+function safeFileName(value: string): string {
+	return value.replace(/[^\w.-]+/g, "_");
+}
+
+function sessionIdForContext(ctx: ExtensionContext): string {
+	const id = ctx.sessionManager.getSessionId();
+	if (id && id.trim()) return id;
+	const file = ctx.sessionManager.getSessionFile();
+	if (file) return basename(file, ".jsonl");
+	return `ephemeral-${process.pid}`;
+}
+
+function artifactDir(ctx: ExtensionContext): string {
+	return join(piUserDir(), "vstack", "pi-output-policy", "sessions", safeFileName(sessionIdForContext(ctx)), "artifacts");
+}
+
+function legacyProjectArtifactDirs(cwd: string): string[] {
+	const candidates = [join(cwd, ".pi", "artifacts", "output-policy")];
+	try {
+		candidates.push(join(dirname(projectSettingsPath(cwd)), "artifacts", "output-policy"));
+	} catch {
+		// Ignore project-root probing failures; the direct cwd candidate is enough.
+	}
+	return [...new Set(candidates.map((candidate) => resolve(candidate)))];
+}
+
+function migrateLegacyProjectArtifacts(ctx: ExtensionContext): void {
+	const targetRoot = artifactDir(ctx);
+	for (const legacyDir of legacyProjectArtifactDirs(ctx.cwd)) {
+		if (legacyDir === resolve(targetRoot) || !existsSync(legacyDir)) continue;
+		mkdirSync(targetRoot, { recursive: true, mode: 0o700 });
+		const target = join(targetRoot, `legacy-project-artifacts-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+		try {
+			renameSync(legacyDir, target);
+		} catch {
+			try {
+				cpSync(legacyDir, target, { recursive: true, force: false });
+				rmSync(legacyDir, { recursive: true, force: true });
+			} catch {
+				// New artifacts use the global per-session path even if legacy cleanup fails.
+			}
+		}
+	}
+}
+
 function projectSettingsPath(cwd: string): string {
 	let current = resolve(cwd);
 	while (true) {
@@ -49,8 +98,7 @@ function projectSettingsPath(cwd: string): string {
 }
 
 function piSettingsPaths(cwd = process.cwd()): string[] {
-	const userDir = resolve(expandHome(process.env.PI_CODING_AGENT_DIR?.trim() || "~/.pi/agent"));
-	return [join(userDir, "settings.json"), projectSettingsPath(cwd)];
+	return [join(piUserDir(), "settings.json"), projectSettingsPath(cwd)];
 }
 
 function readVstackConfig(cwd?: string): VstackConfig {
@@ -137,6 +185,22 @@ function truncateText(text: string, direction: Direction, maxBytes: number, maxL
 	};
 }
 
+function isReadTool(toolName: string): boolean {
+	const name = toolName.toLowerCase();
+	return name === "read" || name.endsWith(".read");
+}
+
+function isMutationTool(toolName: string): boolean {
+	const name = toolName.toLowerCase();
+	return name === "edit" || name === "write" || name.endsWith(".edit") || name.endsWith(".write");
+}
+
+function shouldBypassTool(toolName: string, cwd?: string): boolean {
+	if (isReadTool(toolName) && !settingBoolean("truncateReadOutputs", false, cwd)) return true;
+	if (isMutationTool(toolName) && !settingBoolean("truncateMutationOutputs", false, cwd)) return true;
+	return false;
+}
+
 function directionForTool(toolName: string): Direction {
 	const name = toolName.toLowerCase();
 	if (["bash", "python", "bg_task", "bg_status"].some((prefix) => name.includes(prefix))) return "tail";
@@ -157,7 +221,7 @@ function listSetting(key: string, cwd?: string): string[] {
 }
 
 function shouldMinimize(command: string, cwd?: string): boolean {
-	if (!settingBoolean("shellMinimizer.enabled", true, cwd)) return false;
+	if (!settingBoolean("shellMinimizer.enabled", false, cwd)) return false;
 	const family = commandFamily(command);
 	const defaults = ["git", "npm", "pnpm", "yarn", "bun", "cargo", "pytest", "go", "mvn", "gradle"];
 	const only = listSetting("shellMinimizer.only", cwd);
@@ -197,14 +261,15 @@ function minimizeShellOutput(text: string, command: string, cwd?: string): { tex
 
 function writeArtifact(ctx: ExtensionContext, toolName: string, toolCallId: string | undefined, text: string): { path?: string; error?: string } {
 	if (!settingBoolean("preserveFullOutput", true, ctx.cwd)) return {};
+	migrateLegacyProjectArtifacts(ctx);
 	const safeTool = toolName.replaceAll(/[^a-z0-9_.-]+/gi, "-").slice(0, 40) || "tool";
 	const safeId = (toolCallId ?? Date.now().toString(36)).replaceAll(/[^a-z0-9_.-]+/gi, "-").slice(0, 80);
-	const candidates = [join(ctx.cwd, ".pi", "artifacts", "output-policy"), join(tmpdir(), "pi-output-policy")];
+	const candidates = [artifactDir(ctx), join(tmpdir(), "pi-output-policy", safeFileName(sessionIdForContext(ctx)))];
 	for (const dir of candidates) {
 		try {
 			mkdirSync(dir, { recursive: true, mode: 0o700 });
 			const artifactPath = join(dir, `${Date.now()}-${safeTool}-${safeId}.txt`);
-			writeFileSync(artifactPath, text, "utf8");
+			writeFileSync(artifactPath, text, { encoding: "utf8", mode: 0o600 });
 			return { path: artifactPath };
 		} catch (error) {
 			if (dir === candidates[candidates.length - 1]) return { error: stringifyError(error) };
@@ -222,7 +287,9 @@ function notice(meta: TruncationMeta): string {
 
 function processText(event: any, ctx: ExtensionContext, text: string): { text: string; meta?: TruncationMeta } {
 	const cwd = ctx.cwd;
-	const direction = directionForTool(event.toolName ?? "tool");
+	const toolName = String(event.toolName ?? "tool");
+	if (shouldBypassTool(toolName, cwd)) return { text };
+	const direction = directionForTool(toolName);
 	const maxLineWidth = Math.max(80, Math.floor(settingNumber("maxLineWidth", DEFAULT_MAX_LINE_WIDTH, cwd)));
 	const maxLineCount = Math.max(1, Math.floor(settingNumber("maxLineCount", DEFAULT_MAX_LINE_COUNT, cwd)));
 	const spillThresholdBytes = Math.max(1, Math.floor(settingNumber("spillThresholdKb", DEFAULT_SPILL_THRESHOLD_KB, cwd) * 1024));
@@ -309,8 +376,14 @@ export default function outputPolicy(pi: ExtensionAPI): void {
 	if (guard[INSTALL_SYMBOL]) return;
 	guard[INSTALL_SYMBOL] = true;
 
+	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+		if (settingBoolean("enabled", true, ctx.cwd)) migrateLegacyProjectArtifacts(ctx);
+	});
+
 	pi.on("tool_result", async (event: any, ctx: ExtensionContext) => {
 		if (!settingBoolean("enabled", true, ctx.cwd)) return undefined;
+		const toolName = String(event.toolName ?? "tool");
+		if (shouldBypassTool(toolName, ctx.cwd)) return undefined;
 		let changed = false;
 		const metas: TruncationMeta[] = [];
 		const content = (event.content ?? []).map((part: any) => {
@@ -320,7 +393,8 @@ export default function outputPolicy(pi: ExtensionAPI): void {
 			if (processed.meta) metas.push(processed.meta);
 			return { ...part, text: processed.text };
 		});
-		const sanitizedDetails = sanitizeDetails(event.details);
+		const shouldSanitizeDetails = settingBoolean("sanitizeDetails", false, ctx.cwd);
+		const sanitizedDetails = shouldSanitizeDetails ? sanitizeDetails(event.details) : { changed: false, value: event.details };
 		let details = sanitizedDetails.value;
 		if (metas.length > 0) {
 			details = details && typeof details === "object" && !Array.isArray(details) ? { ...(details as Record<string, unknown>) } : {};

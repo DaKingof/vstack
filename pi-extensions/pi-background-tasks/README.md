@@ -8,7 +8,7 @@ Pi package for explicit, non-blocking background shell tasks.
 - `bg_status` compatibility tool: list/log/stop by PID.
 - `/bg` command: manual task dashboard and task controls.
 - `Ctrl+Shift+B`: opens a padded, bordered background task dashboard in interactive Pi.
-- Persistent log files under `${PI_BG_TASK_DIR:-$TMPDIR/vstack-pi-bg}`.
+- Persistent full log files under `${PI_BG_TASK_DIR:-$TMPDIR/vstack-pi-bg}`; log-tail tool output includes the full log path when truncated.
 - Completion wakeups: spawned tasks can notify the agent when they exit, and optionally when matching output arrives.
 
 ## Examples
@@ -31,7 +31,7 @@ Useful spawn options:
 
 - `notifyOnExit` defaults to `true`.
 - `notifyOnOutput` defaults to `false`; set `notifyPattern` to a substring or `/regex/flags` to gate output wakeups.
-- `timeoutSeconds` defaults to `600`; set `0` to disable expiry.
+- `timeoutSeconds` defaults to `0` (no expiry); set a positive value to enforce a timeout.
 
 ## Notes
 

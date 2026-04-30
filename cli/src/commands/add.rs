@@ -527,6 +527,7 @@ pub fn run(
     // Returns Ok(None) when the install was skipped (cross-scope duplicate);
     // skipped extensions are not added to the lock summary.
     let pi_in_harnesses = harnesses.iter().any(|h| matches!(h, Harness::Pi));
+    let mut migrated_pi_extensions = Vec::new();
     if pi_in_harnesses {
         for ext in &selected_pi_extensions {
             match crate::pi_extension::install_pi_extension(ext, global) {
@@ -544,6 +545,11 @@ pub fn run(
                         path: dest,
                         detail,
                     });
+                    migrated_pi_extensions.extend(
+                        crate::pi_extension::legacy_names_for(&ext.name)
+                            .iter()
+                            .map(|name| name.to_string()),
+                    );
                 }
                 Ok(None) => {
                     // Skipped — cross-scope duplicate. The skip notice was
@@ -576,6 +582,9 @@ pub fn run(
     let lock_path = config::lock_file_path(global);
     let mut lock = LockFile::load(&lock_path).unwrap_or_default();
     lock.version = 1;
+    for legacy in &migrated_pi_extensions {
+        lock.remove(legacy);
+    }
     installer::record_install(
         &mut lock,
         &results,
