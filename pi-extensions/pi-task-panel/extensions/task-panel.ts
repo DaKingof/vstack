@@ -664,10 +664,6 @@ export default function taskPanel(pi: ExtensionAPI): void {
 		state.panel = state.panel === "hidden" ? "compact" : state.panel === "compact" ? "expanded" : "hidden";
 		persist();
 		syncWidget(ctx);
-		if (ctx.hasUI) {
-			const label = state.panel === "hidden" ? "hidden" : state.panel === "compact" ? `showing ${Math.max(1, Math.floor(settingNumber("maxCompactTasks", 4, ctx.cwd)))} task(s)` : "showing all tasks";
-			ctx.ui.notify(`Task panel ${label}`, "info");
-		}
 	};
 	const alternateShortcut = settingString("alternateShortcut", "alt+t");
 	if (alternateShortcut !== "none") {
