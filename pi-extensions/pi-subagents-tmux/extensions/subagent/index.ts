@@ -18,7 +18,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { type AgentToolResult, type ExtensionAPI, type ExtensionContext, getMarkdownTheme, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+import {
+	formatSize,
+	type AgentToolResult,
+	type ExtensionAPI,
+	type ExtensionContext,
+	getMarkdownTheme,
+	truncateHead,
+	truncateTail,
+	type TruncationResult,
+	withFileMutationQueue,
+} from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
@@ -30,6 +40,9 @@ const COLLAPSED_ITEM_COUNT = 10;
 const PANE_LAUNCHER_VERSION = 6;
 const FIRST_AGENT_COLUMN_ROWS = 3;
 const NEXT_AGENT_COLUMN_ROWS = 4;
+const DETAIL_STRING_MAX_CHARS = 8 * 1024;
+const DEFAULT_RESULT_MAX_BYTES = 100 * 1024;
+const DEFAULT_RESULT_MAX_LINES = 4_000;
 
 type VstackConfig = Record<string, unknown>;
 
@@ -110,6 +123,11 @@ function formatTokens(count: number): string {
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	return `${(count / 1000000).toFixed(1)}M`;
+}
+
+function oneLinePreview(text: string | undefined, maxChars: number): string {
+	const compact = (text ?? "").replace(/\s+/g, " ").trim();
+	return compact.length > maxChars ? `${compact.slice(0, Math.max(0, maxChars - 1))}…` : compact;
 }
 
 function formatUsageStats(
@@ -227,7 +245,10 @@ interface SingleResult {
 	model?: string;
 	stopReason?: string;
 	errorMessage?: string;
+	fullOutputError?: string;
+	fullOutputPath?: string;
 	step?: number;
+	truncation?: TruncationResult;
 }
 
 interface SubagentDetails {
@@ -235,6 +256,9 @@ interface SubagentDetails {
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
+	fullOutputError?: string;
+	fullOutputPath?: string;
+	truncation?: TruncationResult;
 }
 
 function getFinalOutput(messages: Message[]): string {
@@ -346,6 +370,207 @@ function safeFileName(value: string): string {
 
 function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+type PreparedSingleResult = {
+	fullOutputError?: string;
+	fullOutputPath?: string;
+	result: SingleResult;
+	text: string;
+	truncation?: TruncationResult;
+};
+
+function stringifyError(error: unknown): string {
+	if (error instanceof Error) return `${error.name}: ${error.message}`;
+	return String(error);
+}
+
+type ResultLimits = { maxBytes: number; maxLines: number };
+
+function resultLimits(cwd?: string): ResultLimits {
+	return {
+		maxBytes: Math.max(1, Math.floor(settingNumber("resultMaxBytes", DEFAULT_RESULT_MAX_BYTES, cwd))),
+		maxLines: Math.max(1, Math.floor(settingNumber("resultMaxLines", DEFAULT_RESULT_MAX_LINES, cwd))),
+	};
+}
+
+function splitResultLimits(total: ResultLimits, parts: number): ResultLimits {
+	const count = Math.max(1, parts);
+	return {
+		maxBytes: Math.max(1024, Math.floor(total.maxBytes / count)),
+		maxLines: Math.max(40, Math.floor(total.maxLines / count)),
+	};
+}
+
+function formatTruncationNotice(
+	truncation: TruncationResult,
+	fullOutputPath?: string,
+	fullOutputError?: string,
+	direction: "head" | "tail" = "head",
+): string {
+	const omittedLines = Math.max(0, truncation.totalLines - truncation.outputLines);
+	const omittedBytes = Math.max(0, truncation.totalBytes - truncation.outputBytes);
+	const shown = direction === "tail" ? `showing last ${truncation.outputLines}` : `showing ${truncation.outputLines}`;
+	const artifact = fullOutputPath
+		? ` Full output saved to: ${fullOutputPath}`
+		: fullOutputError
+			? ` Full output preservation failed: ${fullOutputError}`
+			: "";
+	return `[Output truncated (${direction}): ${shown} of ${truncation.totalLines} lines (${formatSize(
+		truncation.outputBytes,
+	)} of ${formatSize(truncation.totalBytes)}). ${omittedLines} lines (${formatSize(omittedBytes)}) omitted.${artifact}]`;
+}
+
+async function writeFullOutputArtifact(
+	runtimeRoot: string,
+	agentName: string,
+	label: string,
+	text: string,
+): Promise<{ error?: string; path?: string }> {
+	const dir = path.join(runtimeRoot, "outputs", safeFileName(agentName || "subagent"));
+	const filePath = path.join(
+		dir,
+		`${Date.now()}-${Math.random().toString(16).slice(2)}-${safeFileName(label || "output")}.txt`,
+	);
+	try {
+		await withFileMutationQueue(filePath, async () => {
+			await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+			await fs.promises.writeFile(filePath, text, { encoding: "utf-8", mode: 0o600 });
+		});
+		return { path: filePath };
+	} catch (error) {
+		return { error: stringifyError(error) };
+	}
+}
+
+async function truncateForToolResult(
+	text: string,
+	runtimeRoot: string,
+	cwd: string,
+	agentName: string,
+	label: string,
+	direction: "head" | "tail" = "head",
+	limits: ResultLimits = resultLimits(cwd),
+): Promise<Omit<PreparedSingleResult, "result">> {
+	if (!settingBoolean("truncateResults", true, cwd)) return { text };
+	const truncation = (direction === "tail" ? truncateTail : truncateHead)(text, limits);
+	if (!truncation.truncated) return { text: truncation.content };
+
+	const artifact = settingBoolean("preserveFullOutput", true, cwd)
+		? await writeFullOutputArtifact(runtimeRoot, agentName, label, text)
+		: {};
+	return {
+		fullOutputError: artifact.error,
+		fullOutputPath: artifact.path,
+		text: `${truncation.content}\n\n${formatTruncationNotice(truncation, artifact.path, artifact.error, direction)}`,
+		truncation,
+	};
+}
+
+function truncateForDetails(text: string, cwd?: string): string {
+	if (!settingBoolean("truncateResults", true, cwd)) return text;
+	const truncation = truncateHead(text, resultLimits(cwd));
+	if (!truncation.truncated) return truncation.content;
+	return `${truncation.content}\n\n[Output truncated in subagent details: showing ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(
+		truncation.outputBytes,
+	)} of ${formatSize(truncation.totalBytes)}).]`;
+}
+
+function sanitizeDetailValue(value: unknown, depth = 0): unknown {
+	if (depth > 4) return "[Max detail depth reached]";
+	if (value == null || typeof value === "number" || typeof value === "boolean") return value;
+	if (typeof value === "string") {
+		return value.length > DETAIL_STRING_MAX_CHARS
+			? `${value.slice(0, DETAIL_STRING_MAX_CHARS)}… [detail string truncated]`
+			: value;
+	}
+	if (Array.isArray(value)) return value.slice(0, 50).map((item) => sanitizeDetailValue(item, depth + 1));
+	if (typeof value === "object") {
+		const out: Record<string, unknown> = {};
+		for (const [index, [key, nested]] of Object.entries(value as Record<string, unknown>).entries()) {
+			if (index >= 80) {
+				out["[truncated]"] = "detail object field cap reached";
+				break;
+			}
+			out[key] = sanitizeDetailValue(nested, depth + 1);
+		}
+		return out;
+	}
+	return String(value);
+}
+
+function lastAssistantTextPart(messages: Message[]): { messageIndex: number; partIndex: number } | undefined {
+	for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+		const message = messages[messageIndex];
+		if (message.role !== "assistant") continue;
+		for (let partIndex = message.content.length - 1; partIndex >= 0; partIndex -= 1) {
+			const part = message.content[partIndex] as any;
+			if (part?.type === "text" && typeof part.text === "string") return { messageIndex, partIndex };
+		}
+	}
+	return undefined;
+}
+
+function cloneMessagesForDetails(messages: Message[], finalOutputText: string | undefined, cwd?: string): Message[] {
+	const final = lastAssistantTextPart(messages);
+	const cloned: Message[] = [];
+	messages.forEach((message, messageIndex) => {
+		if (message.role !== "assistant") return;
+		const content = message.content.map((part, partIndex) => {
+			const candidate = part as any;
+			if (candidate?.type === "text" && typeof candidate.text === "string") {
+				const isFinal = final?.messageIndex === messageIndex && final?.partIndex === partIndex;
+				return { ...candidate, text: isFinal && finalOutputText !== undefined ? finalOutputText : truncateForDetails(candidate.text, cwd) };
+			}
+			if (candidate?.type === "toolCall") {
+				const next = { ...candidate };
+				if ("arguments" in next) next.arguments = sanitizeDetailValue(next.arguments);
+				if ("args" in next) next.args = sanitizeDetailValue(next.args);
+				return next;
+			}
+			return candidate;
+		});
+		cloned.push({ ...message, content } as Message);
+	});
+	return cloned;
+}
+
+async function prepareSingleResultForReturn(
+	result: SingleResult,
+	runtimeRoot: string,
+	cwd: string,
+	label: string,
+	textOverride?: string,
+	limits?: ResultLimits,
+): Promise<PreparedSingleResult> {
+	const finalOutput = getFinalOutput(result.messages);
+	const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+	const rawText = textOverride ?? (finalOutput || (isError ? result.errorMessage || result.stderr : finalOutput));
+	const direction = isError && !finalOutput ? "tail" : "head";
+	const output = rawText
+		? await truncateForToolResult(rawText, runtimeRoot, cwd, result.agent, label, direction, limits)
+		: { text: rawText };
+	const prepared: SingleResult = {
+		...result,
+		messages: cloneMessagesForDetails(result.messages, output.text || undefined, cwd),
+	};
+	if (isError && output.text && !prepared.errorMessage) prepared.errorMessage = output.text;
+	if (output.truncation) {
+		prepared.fullOutputError = output.fullOutputError;
+		prepared.fullOutputPath = output.fullOutputPath;
+		prepared.truncation = output.truncation;
+	}
+	return { ...output, result: prepared };
+}
+
+function detailsWithTruncation(details: SubagentDetails, prepared: PreparedSingleResult): SubagentDetails {
+	if (!prepared.truncation) return details;
+	return {
+		...details,
+		fullOutputError: prepared.fullOutputError,
+		fullOutputPath: prepared.fullOutputPath,
+		truncation: prepared.truncation,
+	};
 }
 
 function setCurrentTmuxPaneTitle(title: string): void {
@@ -878,9 +1103,15 @@ async function runSingleAgent(
 
 	const emitUpdate = () => {
 		if (onUpdate) {
+			const rawOutput = getFinalOutput(currentResult.messages);
+			const displayText = rawOutput ? truncateForDetails(rawOutput, cwd ?? defaultCwd) : "(running...)";
+			const partialResult: SingleResult = {
+				...currentResult,
+				messages: cloneMessagesForDetails(currentResult.messages, rawOutput ? displayText : undefined, cwd ?? defaultCwd),
+			};
 			onUpdate({
-				content: [{ type: "text", text: getFinalOutput(currentResult.messages) || "(running...)" }],
-				details: makeDetails([currentResult]),
+				content: [{ type: "text", text: displayText }],
+				details: makeDetails([partialResult]),
 			});
 		}
 	};
@@ -936,8 +1167,9 @@ async function runSingleAgent(
 					emitUpdate();
 				}
 
-				if (event.type === "tool_result_end" && event.message) {
-					currentResult.messages.push(event.message as Message);
+				if (event.type === "tool_result_end") {
+					// Tool-result messages can contain large read/bash payloads. The parent result
+					// only needs assistant text/tool-call summaries, so avoid retaining nested output.
 					emitUpdate();
 				}
 			};
@@ -1283,11 +1515,13 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
+		renderShell: "self",
 		name: "subagent",
 		label: "Subagent",
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			`Results are truncated by default to ${DEFAULT_RESULT_MAX_LINES} lines or ${formatSize(DEFAULT_RESULT_MAX_BYTES)}; full oversized output is saved under the session runtime when enabled.`,
 			'Default agent scope is "project" (.pi/agents plus .claude/agents compatibility).',
 			'Use agentScope: "both" to include user-level agents from ~/.pi/agent/agents.',
 		].join(" "),
@@ -1369,7 +1603,17 @@ export default function (pi: ExtensionAPI) {
 								// Combine completed results with current streaming result
 								const currentResult = partial.details?.results[0];
 								if (currentResult) {
-									const allResults = [...results, currentResult];
+									const allResults = [...results, currentResult].map((result) => {
+										const rawOutput = getFinalOutput(result.messages);
+										return {
+											...result,
+											messages: cloneMessagesForDetails(
+												result.messages,
+												rawOutput ? truncateForDetails(rawOutput, ctx.cwd) : undefined,
+												ctx.cwd,
+											),
+										};
+									});
 									onUpdate({
 										content: partial.content,
 										details: makeDetails("chain")(allResults),
@@ -1412,17 +1656,40 @@ export default function (pi: ExtensionAPI) {
 					if (isError) {
 						const errorMsg =
 							result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+						const preparedResults = await Promise.all(
+							results.map((candidate, index) =>
+								prepareSingleResultForReturn(
+									candidate,
+									runtimeRoot,
+									ctx.cwd,
+									`chain-step-${candidate.step ?? index + 1}`,
+									candidate === result ? errorMsg : undefined,
+								),
+							),
+						);
+						const failed = preparedResults[preparedResults.length - 1];
+						failed.result.errorMessage = failed.text || errorMsg;
+						const details = makeDetails("chain")(preparedResults.map((prepared) => prepared.result));
 						return {
-							content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` }],
-							details: makeDetails("chain")(results),
+							content: [
+								{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${failed.text || "(no output)"}` },
+							],
+							details: detailsWithTruncation(details, failed),
 							isError: true,
 						};
 					}
 					previousOutput = getFinalOutput(result.messages);
 				}
+				const preparedResults = await Promise.all(
+					results.map((result, index) =>
+						prepareSingleResultForReturn(result, runtimeRoot, ctx.cwd, `chain-step-${result.step ?? index + 1}`),
+					),
+				);
+				const last = preparedResults[preparedResults.length - 1];
+				const details = makeDetails("chain")(preparedResults.map((prepared) => prepared.result));
 				return {
-					content: [{ type: "text", text: getFinalOutput(results[results.length - 1].messages) || "(no output)" }],
-					details: makeDetails("chain")(results),
+					content: [{ type: "text", text: last.text || "(no output)" }],
+					details: detailsWithTruncation(details, last),
 				};
 			}
 
@@ -1459,11 +1726,22 @@ export default function (pi: ExtensionAPI) {
 					if (onUpdate) {
 						const running = allResults.filter((r) => r.exitCode === -1).length;
 						const done = allResults.filter((r) => r.exitCode !== -1).length;
+						const updateResults = allResults.map((result) => {
+							const rawOutput = getFinalOutput(result.messages);
+							return {
+								...result,
+								messages: cloneMessagesForDetails(
+									result.messages,
+									rawOutput ? truncateForDetails(rawOutput, ctx.cwd) : undefined,
+									ctx.cwd,
+								),
+							};
+						});
 						onUpdate({
 							content: [
 								{ type: "text", text: `Parallel: ${done}/${allResults.length} done, ${running} running...` },
 							],
-							details: makeDetails("parallel")([...allResults]),
+							details: makeDetails("parallel")(updateResults),
 						});
 					}
 				};
@@ -1509,19 +1787,32 @@ export default function (pi: ExtensionAPI) {
 				});
 
 				const successCount = results.filter((r) => r.exitCode === 0).length;
-				const summaries = results.map((r) => {
-					const output = getFinalOutput(r.messages);
-					const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
-					return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}`;
+				const perResultLimits = splitResultLimits(resultLimits(ctx.cwd), results.length);
+				const preparedResults = await Promise.all(
+					results.map((result, index) =>
+						prepareSingleResultForReturn(
+							result,
+							runtimeRoot,
+							ctx.cwd,
+							`parallel-${index + 1}-${result.agent}`,
+							undefined,
+							perResultLimits,
+						),
+					),
+				);
+				const sections = preparedResults.map((prepared) => {
+					const r = prepared.result;
+					const status = r.exitCode === 0 ? "completed" : r.exitCode === -1 ? "running" : "failed";
+					return `## ${r.agent} (${status})\n${prepared.text || "(no output)"}`;
 				});
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
+							text: `Parallel: ${successCount}/${results.length} succeeded\n\n${sections.join("\n\n")}`,
 						},
 					],
-					details: makeDetails("parallel")(results),
+					details: makeDetails("parallel")(preparedResults.map((prepared) => prepared.result)),
 				};
 			}
 
@@ -1557,15 +1848,20 @@ export default function (pi: ExtensionAPI) {
 				if (isError) {
 					const errorMsg =
 						result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+					const prepared = await prepareSingleResultForReturn(result, runtimeRoot, ctx.cwd, "single-error", errorMsg);
+					prepared.result.errorMessage = prepared.text || errorMsg;
+					const details = makeDetails("single")([prepared.result]);
 					return {
-						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
-						details: makeDetails("single")([result]),
+						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${prepared.text || "(no output)"}` }],
+						details: detailsWithTruncation(details, prepared),
 						isError: true,
 					};
 				}
+				const prepared = await prepareSingleResultForReturn(result, runtimeRoot, ctx.cwd, "single");
+				const details = makeDetails("single")([prepared.result]);
 				return {
-					content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
-					details: makeDetails("single")([result]),
+					content: [{ type: "text", text: prepared.text || "(no output)" }],
+					details: detailsWithTruncation(details, prepared),
 				};
 			}
 
@@ -1578,6 +1874,8 @@ export default function (pi: ExtensionAPI) {
 
 		renderCall(args, theme, _context) {
 			const scope: AgentScope = args.agentScope ?? "user";
+			const treeLine = (prefix: "├" | "└", name: string, task?: string) =>
+				`${theme.fg("muted", `  ${prefix} `)}${theme.fg("accent", theme.bold(name))}${task ? theme.fg("text", ` (${oneLinePreview(task, 72)})`) : ""}`;
 			if (args.chain && args.chain.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
@@ -1599,15 +1897,16 @@ export default function (pi: ExtensionAPI) {
 				return new Text(text, 0, 0);
 			}
 			if (args.tasks && args.tasks.length > 0) {
+				const tasks = args.tasks as Array<{ agent: string; task?: string }>;
 				let text =
-					theme.fg("toolTitle", theme.bold("subagent ")) +
-					theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
+					theme.fg("accent", "● ") +
+					theme.fg("toolTitle", theme.bold(`${tasks.length} background agent${tasks.length === 1 ? "" : "s"} launching`)) +
 					theme.fg("muted", ` [${scope}]`);
-				for (const t of args.tasks.slice(0, 3)) {
-					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
-					text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+				const shown = tasks.slice(0, 8);
+				for (const [index, task] of shown.entries()) {
+					text += `\n${treeLine(index === shown.length - 1 && tasks.length <= shown.length ? "└" : "├", task.agent, task.task)}`;
 				}
-				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
+				if (tasks.length > shown.length) text += `\n${theme.fg("muted", `  └ … +${tasks.length - shown.length} more`)}`;
 				return new Text(text, 0, 0);
 			}
 			const agentName = args.agent || "...";
@@ -1629,6 +1928,13 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const mdTheme = getMarkdownTheme();
+			const truncationBadge = (r: SingleResult) => (r.truncation?.truncated ? theme.fg("warning", " · truncated") : "");
+			const fullOutputLine = (r: SingleResult) =>
+				r.fullOutputPath
+					? theme.fg("dim", `Full output: ${r.fullOutputPath}`)
+					: r.fullOutputError
+						? theme.fg("warning", `Full output unavailable: ${r.fullOutputError}`)
+						: "";
 
 			const renderDisplayItems = (items: DisplayItem[], limit?: number) => {
 				const toShow = limit ? items.slice(-limit) : items;
@@ -1657,6 +1963,7 @@ export default function (pi: ExtensionAPI) {
 					const container = new Container();
 					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
+					header += truncationBadge(r);
 					container.addChild(new Text(header, 0, 0));
 					if (isError && r.errorMessage)
 						container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
@@ -1683,6 +1990,8 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 					}
+					const outputPath = fullOutputLine(r);
+					if (outputPath) container.addChild(new Text(outputPath, 0, 0));
 					const usageStr = formatUsageStats(r.usage, r.model);
 					if (usageStr) {
 						container.addChild(new Spacer(1));
@@ -1693,12 +2002,15 @@ export default function (pi: ExtensionAPI) {
 
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
+				text += truncationBadge(r);
 				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 				else {
 					text += `\n${renderDisplayItems(displayItems, collapsedItemCount)}`;
 					if (displayItems.length > collapsedItemCount) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				}
+				const outputPath = fullOutputLine(r);
+				if (outputPath) text += `\n${outputPath}`;
 				const usageStr = formatUsageStats(r.usage, r.model);
 				if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
 				return new Text(text, 0, 0);
@@ -1742,7 +2054,7 @@ export default function (pi: ExtensionAPI) {
 						container.addChild(new Spacer(1));
 						container.addChild(
 							new Text(
-								`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", r.agent)} ${rIcon}`,
+								`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", r.agent)} ${rIcon}${truncationBadge(r)}`,
 								0,
 								0,
 							),
@@ -1768,6 +2080,8 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 
+						const outputPath = fullOutputLine(r);
+						if (outputPath) container.addChild(new Text(outputPath, 0, 0));
 						const stepUsage = formatUsageStats(r.usage, r.model);
 						if (stepUsage) container.addChild(new Text(theme.fg("dim", stepUsage), 0, 0));
 					}
@@ -1789,9 +2103,11 @@ export default function (pi: ExtensionAPI) {
 				for (const r of details.results) {
 					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
 					const displayItems = getDisplayItems(r.messages);
-					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
+					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}${truncationBadge(r)}`;
 					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					const outputPath = fullOutputLine(r);
+					if (outputPath) text += `\n${outputPath}`;
 				}
 				const usageStr = formatUsageStats(aggregateUsage(details.results));
 				if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
@@ -1804,87 +2120,63 @@ export default function (pi: ExtensionAPI) {
 				const successCount = details.results.filter((r) => r.exitCode === 0).length;
 				const failCount = details.results.filter((r) => r.exitCode > 0).length;
 				const isRunning = running > 0;
-				const icon = isRunning
-					? theme.fg("warning", "⏳")
+				const total = details.results.length;
+				const headerLabel = isRunning
+					? `${total} background agent${total === 1 ? "" : "s"} running`
 					: failCount > 0
-						? theme.fg("warning", "◐")
-						: theme.fg("success", "✓");
-				const status = isRunning
-					? `${successCount + failCount}/${details.results.length} done, ${running} running`
-					: `${successCount}/${details.results.length} tasks`;
+						? `${successCount}/${total} background agent${total === 1 ? "" : "s"} completed`
+						: `${total} background agent${total === 1 ? "" : "s"} completed`;
+				const headerText =
+					theme.fg("accent", "● ") +
+					theme.fg("toolTitle", theme.bold(headerLabel)) +
+					(expanded ? "" : theme.fg("muted", " (Ctrl+O to inspect)"));
+				const rowIcon = (r: SingleResult) =>
+					r.exitCode === -1 ? theme.fg("warning", "⏳ ") : r.exitCode === 0 ? theme.fg("success", "✓ ") : theme.fg("error", "✗ ");
+				const treeText = details.results
+					.map((r, index) => {
+						const prefix = index === details.results.length - 1 ? "└" : "├";
+						const task = oneLinePreview(r.task, 72);
+						return `${theme.fg("muted", `  ${prefix} `)}${rowIcon(r)}${theme.fg("accent", theme.bold(r.agent))}${task ? theme.fg("text", ` (${task})`) : ""}${truncationBadge(r)}`;
+					})
+					.join("\n");
 
 				if (expanded && !isRunning) {
-					const container = new Container();
-					container.addChild(
-						new Text(
-							`${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`,
-							0,
-							0,
-						),
-					);
-
-					for (const r of details.results) {
-						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+					const lines = [headerText];
+					for (const [index, r] of details.results.entries()) {
+						const isLast = index === details.results.length - 1;
+						const branch = isLast ? "└" : "├";
+						const stem = theme.fg("muted", isLast ? "     " : "  │  ");
+						const task = oneLinePreview(r.task, 140);
 						const displayItems = getDisplayItems(r.messages);
-						const finalOutput = getFinalOutput(r.messages);
+						const toolCalls = displayItems.filter((item) => item.type === "toolCall");
+						const finalOutput = getFinalOutput(r.messages).trim();
 
-						container.addChild(new Spacer(1));
-						container.addChild(
-							new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0),
+						lines.push(
+							`${theme.fg("muted", `  ${branch} `)}${rowIcon(r)}${theme.fg("accent", theme.bold(r.agent))}${task ? theme.fg("text", ` (${task})`) : ""}${truncationBadge(r)}`,
 						);
-						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
-
-						// Show tool calls
-						for (const item of displayItems) {
-							if (item.type === "toolCall") {
-								container.addChild(
-									new Text(
-										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-										0,
-										0,
-									),
-								);
-							}
+						if (toolCalls.length > 0) {
+							for (const item of toolCalls) lines.push(`${stem}${theme.fg("muted", "→ ")}${formatToolCall(item.name, item.args, theme.fg.bind(theme))}`);
 						}
-
-						// Show final output as markdown
 						if (finalOutput) {
-							container.addChild(new Spacer(1));
-							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
+							if (toolCalls.length > 0) lines.push(stem);
+							for (const line of finalOutput.split(/\r?\n/)) lines.push(`${stem}${line}`);
 						}
-
+						const outputPath = fullOutputLine(r);
+						if (outputPath) lines.push(`${stem}${outputPath}`);
 						const taskUsage = formatUsageStats(r.usage, r.model);
-						if (taskUsage) container.addChild(new Text(theme.fg("dim", taskUsage), 0, 0));
+						if (taskUsage) lines.push(`${stem}${theme.fg("dim", taskUsage)}`);
 					}
 
 					const usageStr = formatUsageStats(aggregateUsage(details.results));
-					if (usageStr) {
-						container.addChild(new Spacer(1));
-						container.addChild(new Text(theme.fg("dim", `Total: ${usageStr}`), 0, 0));
-					}
-					return container;
+					if (usageStr) lines.push("", theme.fg("dim", `Total: ${usageStr}`));
+					return new Text(lines.join("\n"), 0, 0);
 				}
 
-				// Collapsed view (or still running)
-				let text = `${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`;
-				for (const r of details.results) {
-					const rIcon =
-						r.exitCode === -1
-							? theme.fg("warning", "⏳")
-							: r.exitCode === 0
-								? theme.fg("success", "✓")
-								: theme.fg("error", "✗");
-					const displayItems = getDisplayItems(r.messages);
-					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
-					if (displayItems.length === 0)
-						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
-					else text += `\n${renderDisplayItems(displayItems, 5)}`;
-				}
+				let text = `${headerText}\n${treeText}`;
 				if (!isRunning) {
 					const usageStr = formatUsageStats(aggregateUsage(details.results));
-					if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
+					if (usageStr) text += `\n${theme.fg("dim", `Total: ${usageStr}`)}`;
 				}
-				if (!expanded) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				return new Text(text, 0, 0);
 			}
 

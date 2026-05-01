@@ -609,6 +609,7 @@ export default function statusline(pi: ExtensionAPI) {
 		ctx.ui.setStatus(QOL_STATUS_KEY, undefined);
 		ctx.ui.setWidget("statusline", undefined);
 		ctx.ui.setEditorComponent(undefined);
+		ctx.ui.setFooter(undefined);
 		activeTui = undefined;
 	});
 }

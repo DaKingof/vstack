@@ -1,7 +1,7 @@
 {
   "name": "pi-qol",
   "version": "0.1.0",
-  "description": "Pi quality-of-life extension: reliable multiline input, styled pasted-image chips, session naming, handoff, and hidden-thinking placeholder settings contract.",
+  "description": "Pi quality-of-life extension: reliable multiline input, styled pasted-image chips, session naming, handoff, permission prompts, notifications, custom compaction, and hidden-thinking placeholder settings contract.",
   "license": "MIT",
   "keywords": [
     "pi-package",
@@ -28,6 +28,24 @@
           "category": "General",
           "apply": "reload",
           "requiresReload": true
+        },
+        {
+          "key": "permissionGate.enabled",
+          "label": "Prompt before risky bash commands",
+          "description": "Ask for confirmation before bash tool calls matching the configured command list. In non-interactive mode, matches are blocked.",
+          "type": "boolean",
+          "default": true,
+          "category": "Permission Gate",
+          "apply": "live"
+        },
+        {
+          "key": "permissionGate.commands",
+          "label": "Commands to prompt for",
+          "description": "Comma-separated command fragments to confirm before running. Literal entries are case-insensitive and whitespace-tolerant; regex entries may use /pattern/flags. Default prompts only for rm -Rf.",
+          "type": "string",
+          "default": "rm -Rf",
+          "category": "Permission Gate",
+          "apply": "live"
         },
         {
           "key": "newlineOnShiftEnter",
@@ -99,6 +117,350 @@
           "type": "boolean",
           "default": true,
           "category": "Session",
+          "apply": "live"
+        },
+        {
+          "key": "notification.enabled",
+          "label": "Enable notifications",
+          "description": "Send terminal/tmux notifications for ready/input-needed, questions, completed task lists, and critical information.",
+          "type": "boolean",
+          "default": true,
+          "category": "Notifications",
+          "apply": "live"
+        },
+        {
+          "key": "notification.onAgentReady",
+          "label": "Notify when ready",
+          "description": "Notify when an agent turn finishes and Pi is ready for input.",
+          "type": "boolean",
+          "default": true,
+          "category": "Notifications Triggers",
+          "apply": "live"
+        },
+        {
+          "key": "notification.onDirectionNeeded",
+          "label": "Notify when direction needed",
+          "description": "Use stronger notification wording when the last assistant message appears to ask for direction, confirmation, or a choice.",
+          "type": "boolean",
+          "default": true,
+          "category": "Notifications Triggers",
+          "apply": "live"
+        },
+        {
+          "key": "notification.onQuestion",
+          "label": "Notify for question popups",
+          "description": "Notify when pi-questions opens a structured question that requires user input.",
+          "type": "boolean",
+          "default": true,
+          "category": "Notifications Triggers",
+          "apply": "live"
+        },
+        {
+          "key": "notification.onTaskComplete",
+          "label": "Notify when all tasks complete",
+          "description": "Notify when todo_write updates the task panel to all tasks completed.",
+          "type": "boolean",
+          "default": true,
+          "category": "Notifications Triggers",
+          "apply": "live"
+        },
+        {
+          "key": "notification.onCritical",
+          "label": "Notify critical info",
+          "description": "Notify for failed tools and assistant messages containing critical, blocked, security, rate-limit, or cannot-proceed signals.",
+          "type": "boolean",
+          "default": true,
+          "category": "Notifications Triggers",
+          "apply": "live"
+        },
+        {
+          "key": "notification.bell",
+          "label": "Terminal bell",
+          "description": "Emit BEL (\\u0007) for standard terminal/tmux audible or visual bell behavior.",
+          "type": "boolean",
+          "default": true,
+          "category": "Notifications Channels",
+          "apply": "live"
+        },
+        {
+          "key": "notification.bellWhenActive",
+          "label": "Bell when tmux window active",
+          "description": "Also emit BEL when the source tmux window is already active. Disabled by default to avoid noisy bells while you are looking at the Pi window; native terminal notifications still run so Ghostty can decide based on app focus.",
+          "type": "boolean",
+          "default": false,
+          "category": "Notifications Channels",
+          "apply": "live"
+        },
+        {
+          "key": "notification.native",
+          "label": "Native terminal notification",
+          "description": "Send OSC 777/OSC 99 terminal notifications, or Windows toast in Windows Terminal/WSL.",
+          "type": "boolean",
+          "default": true,
+          "category": "Notifications Channels",
+          "apply": "live"
+        },
+        {
+          "key": "notification.tmux",
+          "label": "tmux display-message",
+          "description": "When running inside tmux, also show a transient tmux status-line message. Disabled by default because tmux displays it on the active client, not necessarily as a source-window mark.",
+          "type": "boolean",
+          "default": false,
+          "category": "Notifications Channels",
+          "apply": "live"
+        },
+        {
+          "key": "notification.tmuxWindowMark",
+          "label": "Mark tmux window",
+          "description": "Optionally prefix the source tmux window name when notifying. Disabled by default because BEL should let tmux apply your normal bell styling.",
+          "type": "boolean",
+          "default": false,
+          "category": "Notifications Channels",
+          "apply": "live"
+        },
+        {
+          "key": "notification.tmuxWindowMarkText",
+          "label": "tmux window mark text",
+          "description": "Prefix used when marking the source tmux window.",
+          "type": "string",
+          "default": "!",
+          "category": "Notifications Tuning",
+          "apply": "live"
+        },
+        {
+          "key": "notification.tmuxWindowMarkDurationMs",
+          "label": "tmux window mark duration",
+          "description": "Milliseconds before automatically clearing the tmux window mark. 0 keeps it until next input/agent start/reset.",
+          "type": "number",
+          "default": 0,
+          "category": "Notifications Tuning",
+          "apply": "live"
+        },
+        {
+          "key": "notification.tmuxNativeClientTty",
+          "label": "tmux native via client TTY",
+          "description": "When inside tmux, send OSC terminal notifications directly to attached tmux client TTYs so Ghostty/system notifications still appear for inactive source windows.",
+          "type": "boolean",
+          "default": true,
+          "category": "Notifications Channels",
+          "apply": "live"
+        },
+        {
+          "key": "notification.tmuxPassthrough",
+          "label": "tmux OSC passthrough",
+          "description": "Wrap OSC terminal notifications in tmux passthrough sequences so supported terminals outside tmux can receive them.",
+          "type": "boolean",
+          "default": true,
+          "category": "Notifications Channels",
+          "apply": "live"
+        },
+        {
+          "key": "notification.piUi",
+          "label": "Also show Pi UI notice",
+          "description": "Also call ctx.ui.notify for QOL external notifications. Disabled by default to avoid duplicate in-session noise.",
+          "type": "boolean",
+          "default": false,
+          "category": "Notifications Channels",
+          "apply": "live"
+        },
+        {
+          "key": "notification.oscProtocol",
+          "label": "Terminal notification protocol",
+          "description": "OSC notification protocol. auto uses Kitty OSC 99 when KITTY_WINDOW_ID is present, otherwise OSC 777.",
+          "type": "enum",
+          "enumValues": [
+            "auto",
+            "osc777",
+            "osc99",
+            "off"
+          ],
+          "default": "auto",
+          "category": "Notifications Channels",
+          "apply": "live"
+        },
+        {
+          "key": "notification.cooldownSeconds",
+          "label": "Notification cooldown",
+          "description": "Minimum seconds between duplicate notifications of the same kind.",
+          "type": "number",
+          "default": 8,
+          "category": "Notifications Tuning",
+          "apply": "live"
+        },
+        {
+          "key": "notification.title",
+          "label": "Notification title",
+          "description": "Title used for external terminal notifications.",
+          "type": "string",
+          "default": "Pi",
+          "category": "Notifications Tuning",
+          "apply": "live"
+        },
+        {
+          "key": "notification.readyMessage",
+          "label": "Ready message",
+          "description": "Body text for normal agent-done notifications.",
+          "type": "string",
+          "default": "Ready for input",
+          "category": "Notifications Tuning",
+          "apply": "live"
+        },
+        {
+          "key": "notification.bodyMaxChars",
+          "label": "Notification body length",
+          "description": "Maximum body characters for external notifications.",
+          "type": "number",
+          "default": 240,
+          "category": "Notifications Tuning",
+          "apply": "live"
+        },
+        {
+          "key": "notification.tmuxMessageDurationMs",
+          "label": "tmux message duration",
+          "description": "Milliseconds to display tmux status-line notification messages.",
+          "type": "number",
+          "default": 5000,
+          "category": "Notifications Tuning",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.customEnabled",
+          "label": "Custom compaction summaries",
+          "description": "Use QOL's custom compaction hook instead of Pi's default summary generation. Manual/auto compaction still uses Pi's normal trigger settings.",
+          "type": "boolean",
+          "default": false,
+          "category": "Compaction",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.model",
+          "label": "Compaction model",
+          "description": "Summarizer model as provider/model, a bare model id, or current. Default mirrors Pi's custom-compaction example.",
+          "type": "string",
+          "default": "google/gemini-2.5-flash",
+          "category": "Compaction",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.profile",
+          "label": "Compaction detail profile",
+          "description": "Summary detail level for custom compaction and branch summaries.",
+          "type": "enum",
+          "enumValues": [
+            "concise",
+            "balanced",
+            "exhaustive"
+          ],
+          "default": "balanced",
+          "category": "Compaction",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.maxTokens",
+          "label": "Compaction max output tokens",
+          "description": "Maximum tokens requested from the custom compaction summarizer.",
+          "type": "number",
+          "default": 8192,
+          "category": "Compaction",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.includePreviousSummary",
+          "label": "Include previous summary",
+          "description": "Pass the previous compaction summary to the custom summarizer for iterative continuity.",
+          "type": "boolean",
+          "default": true,
+          "category": "Compaction",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.fallbackToDefault",
+          "label": "Fallback to Pi default compaction",
+          "description": "If custom compaction fails, let Pi run its default compaction instead of cancelling the compaction.",
+          "type": "boolean",
+          "default": true,
+          "category": "Compaction",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.notify",
+          "label": "Show compaction notifications",
+          "description": "Show QOL notifications when custom, remote, branch, or idle compaction starts/fails/completes.",
+          "type": "boolean",
+          "default": true,
+          "category": "Compaction",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.remoteEnabled",
+          "label": "Remote compaction endpoint",
+          "description": "Use a remote HTTP summarization endpoint before falling back to the configured model. Endpoint receives { systemPrompt, prompt, maxTokens } and returns { summary }.",
+          "type": "boolean",
+          "default": false,
+          "category": "Compaction Remote",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.remoteEndpoint",
+          "label": "Remote endpoint URL",
+          "description": "HTTP endpoint for remote compaction summaries. Leave empty to use the configured compaction model.",
+          "type": "string",
+          "default": "",
+          "category": "Compaction Remote",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.branchSummaryEnabled",
+          "label": "Custom branch summaries",
+          "description": "When /tree navigation requests a branch summary, generate it through QOL's custom summarizer.",
+          "type": "boolean",
+          "default": false,
+          "category": "Compaction Branching",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.idleEnabled",
+          "label": "Idle compaction trigger",
+          "description": "Trigger Pi compaction after the session sits idle above the configured token threshold. Inspired by oh-my-pi idle compaction.",
+          "type": "boolean",
+          "default": false,
+          "category": "Compaction Idle",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.idleThresholdTokens",
+          "label": "Idle token threshold",
+          "description": "Token count above which QOL idle compaction can trigger when thresholdTokens and thresholdPercent are unset.",
+          "type": "number",
+          "default": 200000,
+          "category": "Compaction Idle",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.idleTimeoutSeconds",
+          "label": "Idle compaction delay",
+          "description": "Seconds to wait idle before triggering QOL idle compaction.",
+          "type": "number",
+          "default": 300,
+          "category": "Compaction Idle",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.thresholdTokens",
+          "label": "QOL compaction token limit",
+          "description": "Optional fixed token limit for QOL idle compaction. Set -1 to use percentage or idle token threshold.",
+          "type": "number",
+          "default": -1,
+          "category": "Compaction Threshold",
+          "apply": "live"
+        },
+        {
+          "key": "compaction.thresholdPercent",
+          "label": "QOL compaction percent limit",
+          "description": "Optional context-window percentage for QOL idle compaction. Set -1 to use idle token threshold.",
+          "type": "number",
+          "default": -1,
+          "category": "Compaction Threshold",
           "apply": "live"
         },
         {

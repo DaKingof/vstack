@@ -74,4 +74,5 @@ Persistent panes require running Pi inside tmux.
 
 - `maxParallelTasks` and `maxConcurrency` for one-shot delegation limits.
 - `collapsedItemCount` for compact result rendering.
+- `truncateResults`, `resultMaxBytes` (default 102400), `resultMaxLines` (default 4000), and `preserveFullOutput` for result truncation. Oversized one-shot outputs are capped inline and saved under `~/.pi/agent/vstack/pi-subagents-tmux/sessions/<session-id>/outputs/` when preservation is enabled.
 - `completionPollMs` and `childInboxPollMs` for persistent pane polling intervals.

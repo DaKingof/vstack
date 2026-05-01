@@ -88,6 +88,14 @@ interface BackgroundTaskEventDetails {
 	task: BackgroundTaskSnapshot;
 }
 
+interface BackgroundLogTruncation {
+	direction: "tail";
+	fullOutputPath: string;
+	shownChars: number;
+	totalChars: number;
+	truncated: true;
+}
+
 interface SpawnTaskOptions {
 	command: string;
 	cwd?: string;
@@ -178,11 +186,17 @@ function tailText(text: string, maxChars: number = settingNumber("outputAlertMax
 	return `[...truncated]\n${text.slice(-maxChars)}`;
 }
 
+function taskLogTruncation(output: string, logFile: string, cwd?: string): BackgroundLogTruncation | undefined {
+	const maxChars = Math.max(1, Math.floor(settingNumber("logTailMaxChars", DEFAULT_LOG_TAIL_MAX_CHARS, cwd)));
+	if (output.length <= maxChars) return undefined;
+	return { direction: "tail", fullOutputPath: logFile, shownChars: maxChars, totalChars: output.length, truncated: true };
+}
+
 function formatTaskLog(output: string, logFile: string, cwd?: string): string {
 	if (!output) return "(empty)";
-	const maxChars = Math.max(1, Math.floor(settingNumber("logTailMaxChars", DEFAULT_LOG_TAIL_MAX_CHARS, cwd)));
-	if (output.length <= maxChars) return output;
-	return `[...truncated]\n${output.slice(-maxChars)}\n\n[Background log truncated. Showing last ${maxChars} of ${output.length} character(s). Full log: ${logFile}]`;
+	const truncation = taskLogTruncation(output, logFile, cwd);
+	if (!truncation) return output;
+	return `[...truncated]\n${output.slice(-truncation.shownChars)}\n\n[Background log truncated. Showing last ${truncation.shownChars} of ${truncation.totalChars} character(s). Full log: ${logFile}]`;
 }
 
 function trimOutputBuffer(output: string, lastAnnouncedLength: number): { output: string; lastAnnouncedLength: number } {
@@ -965,7 +979,14 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			if (params.action === "list") return makeToolResult(formatTaskListText());
 			const task = resolveTask(undefined, params.pid);
 			if (!task) throw new Error("No background task matched that pid.");
-			if (params.action === "log") return makeToolResult(formatTaskLog(getTaskOutput(task), task.logFile, activeCtx?.cwd));
+			if (params.action === "log") {
+				const output = getTaskOutput(task);
+				const truncation = taskLogTruncation(output, task.logFile, activeCtx?.cwd);
+				return makeToolResult(formatTaskLog(output, task.logFile, activeCtx?.cwd), {
+					task: taskSnapshot(task),
+					...(truncation ? { fullOutputPath: task.logFile, truncation } : {}),
+				});
+			}
 			const stopped = requestStop(task, "user");
 			if (!stopped.ok) throw new Error(stopped.message);
 			return makeToolResult(stopped.message, { task: taskSnapshot(task) });
@@ -1022,7 +1043,14 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 
 			const task = resolveTask(params.id, params.pid);
 			if (!task) throw new Error("No background task matched that id or pid.");
-			if (params.action === "log") return makeToolResult(formatTaskLog(getTaskOutput(task), task.logFile, activeCtx?.cwd));
+			if (params.action === "log") {
+				const output = getTaskOutput(task);
+				const truncation = taskLogTruncation(output, task.logFile, activeCtx?.cwd);
+				return makeToolResult(formatTaskLog(output, task.logFile, activeCtx?.cwd), {
+					task: taskSnapshot(task),
+					...(truncation ? { fullOutputPath: task.logFile, truncation } : {}),
+				});
+			}
 			const stopped = requestStop(task, "user");
 			if (!stopped.ok) throw new Error(stopped.message);
 			return makeToolResult(stopped.message, { task: taskSnapshot(task) });

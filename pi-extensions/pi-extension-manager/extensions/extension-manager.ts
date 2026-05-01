@@ -1,7 +1,7 @@
 /**
  * vstack Pi extension manager.
  *
- * Provides a Pi-styled settings shell with an Extensions tab. Pi does not yet
+ * Provides a Pi-styled settings shell with package tabs. Pi does not yet
  * expose a public API for third-party extensions to inject native built-in
  * /settings tabs, so this extension registers /extensions plus a best-effort
  * /settings wrapper when extension command priority allows it.
@@ -16,19 +16,26 @@ import { homedir } from "node:os";
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-extension-manager.installed");
 const MANAGER_ID = "pi-extension-manager";
 const SETTINGS_EVENT = "vstack:extension-settings-changed";
-const DEFAULT_WIDTH = 118;
+const DEFAULT_WIDTH = 124;
 const DEFAULT_MAX_HEIGHT = "90%";
+const POPUP_PADDING_X = 2;
+const POPUP_PADDING_Y = 1;
 const LEFT_MIN_WIDTH = 34;
 const LEFT_MAX_WIDTH = 48;
 const LIST_ROWS = 18;
 const SETTINGS_ROWS = 10;
+const MANAGER_INNER_ROWS = 30;
+const QUICK_SETTINGS_INNER_ROWS = 28;
 
 type Scope = "user" | "project" | "temporary" | "builtin" | "unknown";
 type ExtensionState = "active" | "disabled" | "shadowed" | "broken";
 type ApplyMode = "live" | "reload" | "session" | "restart";
 type SettingType = "boolean" | "enum" | "string" | "number" | "secret" | "path";
-type TopTab = "General" | "Extensions" | "Audit";
+type TopTab = string;
 type Pane = "list" | "settings";
+
+const TAB_ALL = "all";
+const PACKAGE_TAB_PREFIX = "package:";
 
 interface SettingsSchema {
 	key: string;
@@ -120,6 +127,12 @@ interface Inventory {
 	settingsFiles: SettingsFile[];
 	managerState: ManagerState;
 	auditLines: string[];
+}
+
+interface ManagerTab {
+	id: TopTab;
+	label: string;
+	packageName?: string;
 }
 
 interface ManagerActionEdit {
@@ -519,7 +532,7 @@ function buildInventory(pi: ExtensionAPI, ctx: ExtensionContext): Inventory {
 	}
 
 	applyDisableState(items, managerState);
-	items.sort((a, b) => `${a.kind}:${a.displayName}`.localeCompare(`${b.kind}:${b.displayName}`));
+	items.sort(compareInventoryItems);
 	return { auditLines, items, managerState, packages: items.filter((item) => item.kind === "package"), settingsFiles };
 }
 
@@ -528,6 +541,36 @@ function formatPackageAudit(item: InventoryItem, manifest: PackageManifest): str
 	const settings = settingSchema(manifest);
 	const settingText = settings.length === 0 ? "no declared settings schema" : settings.map((s) => `${s.key}:${s.type}:${s.apply ?? (s.requiresReload ? "reload" : "live")}`).join(", ");
 	return `${manifest.name ?? item.displayName}\n  source: ${item.sourcePath}\n  entrypoints: ${extensions}\n  settings: ${settingText}`;
+}
+
+function kindRank(kind: string): number {
+	const order: Record<string, number> = {
+		package: 0,
+		"extension module": 1,
+		tool: 2,
+		"slash command": 3,
+		"prompt command": 4,
+		"skill command": 5,
+		bin: 6,
+	};
+	return order[kind] ?? 9;
+}
+
+function compareInventoryItems(a: InventoryItem, b: InventoryItem): number {
+	return kindRank(a.kind) - kindRank(b.kind)
+		|| (a.packageName ?? a.sourceName ?? "").localeCompare(b.packageName ?? b.sourceName ?? "")
+		|| a.displayName.localeCompare(b.displayName)
+		|| a.id.localeCompare(b.id);
+}
+
+function kindLabel(kind: string): string {
+	return kind === "extension module" ? "module" : kind.replace(" command", " cmd");
+}
+
+function compactPath(path: string): string {
+	const home = homedir();
+	if (path.startsWith(home)) return `~${path.slice(home.length)}`;
+	return path;
 }
 
 function applyDisableState(items: InventoryItem[], managerState: ManagerState): void {
@@ -638,22 +681,86 @@ function formatSettingValue(schema: SettingsSchema, value: unknown): string {
 	return String(value);
 }
 
+function isPlainSearchInput(data: string): boolean {
+	return data.length === 1 && data >= " " && data !== "\x7f";
+}
+
+function packageTabId(packageName: string): TopTab {
+	return `${PACKAGE_TAB_PREFIX}${packageName}`;
+}
+
+function packageNameForTab(tab: TopTab): string | undefined {
+	return tab.startsWith(PACKAGE_TAB_PREFIX) ? tab.slice(PACKAGE_TAB_PREFIX.length) : undefined;
+}
+
+function isInventoryTab(tab: TopTab): boolean {
+	return tab === TAB_ALL || packageNameForTab(tab) !== undefined;
+}
+
+function itemBelongsToPackage(item: InventoryItem, packageName: string): boolean {
+	return item.packageName === packageName || item.sourceName === packageName || item.provider === packageName || item.sourcePath.includes(`/packages/${packageName}/`);
+}
+
+function managerTabs(inventory: Inventory): ManagerTab[] {
+	const tabs: ManagerTab[] = [{ id: TAB_ALL, label: "All" }];
+	const seen = new Set<string>();
+	for (const item of [...inventory.packages].sort((a, b) => a.displayName.localeCompare(b.displayName))) {
+		if (!item.packageName || item.state === "shadowed" || seen.has(item.packageName)) continue;
+		seen.add(item.packageName);
+		tabs.push({ id: packageTabId(item.packageName), label: item.displayName, packageName: item.packageName });
+	}
+	return tabs;
+}
+
 function selectedPackageForSetting(item: InventoryItem): string | undefined {
 	return item.packageName ?? (item.kind === "package" ? item.displayName : undefined);
 }
 
+function childItemsForPackage(items: InventoryItem[], packageName: string): InventoryItem[] {
+	return items.filter((item) => item.kind !== "package" && itemBelongsToPackage(item, packageName)).sort(compareInventoryItems);
+}
+
+function itemSearchText(item: InventoryItem, allItems: InventoryItem[]): string {
+	const own = [item.displayName, item.kind, item.provider, item.description, item.sourcePath, item.stateReason, item.trigger].join("\n");
+	if (item.kind !== "package" || !item.packageName) return own.toLowerCase();
+	const children = childItemsForPackage(allItems, item.packageName)
+		.map((child) => [child.displayName, child.kind, child.description, child.trigger, child.sourcePath].join("\n"))
+		.join("\n");
+	return `${own}\n${children}`.toLowerCase();
+}
+
+function packageSummaryMatches(item: InventoryItem, allItems: InventoryItem[], ui: ManagerUiState): boolean {
+	const related = item.packageName ? [item, ...childItemsForPackage(allItems, item.packageName)] : [item];
+	if (ui.kindFilter !== "all" && !related.some((candidate) => candidate.kind === ui.kindFilter)) return false;
+	if (ui.providerFilter !== "all" && !related.some((candidate) => candidate.provider === ui.providerFilter)) return false;
+	if (ui.stateFilter !== "all" && !related.some((candidate) => candidate.state === ui.stateFilter)) return false;
+	if (ui.scopeFilter !== "all" && !related.some((candidate) => candidate.scope === ui.scopeFilter)) return false;
+	return true;
+}
+
+function itemMatchesFilters(item: InventoryItem, allItems: InventoryItem[], ui: ManagerUiState, packageSummary: boolean): boolean {
+	if (packageSummary) return packageSummaryMatches(item, allItems, ui);
+	if (ui.kindFilter !== "all" && item.kind !== ui.kindFilter) return false;
+	if (ui.providerFilter !== "all" && item.provider !== ui.providerFilter) return false;
+	if (ui.stateFilter !== "all" && item.state !== ui.stateFilter) return false;
+	if (ui.scopeFilter !== "all" && item.scope !== ui.scopeFilter) return false;
+	return true;
+}
+
 function filteredItems(items: InventoryItem[], ui: ManagerUiState): InventoryItem[] {
 	const query = ui.search.trim().toLowerCase();
-	return items.filter((item) => {
-		if (query) {
-			const hay = [item.displayName, item.kind, item.provider, item.description, item.sourcePath, item.stateReason].join("\n").toLowerCase();
-			if (!hay.includes(query)) return false;
-		}
-		if (ui.kindFilter !== "all" && item.kind !== ui.kindFilter) return false;
-		if (ui.providerFilter !== "all" && item.provider !== ui.providerFilter) return false;
-		if (ui.stateFilter !== "all" && item.state !== ui.stateFilter) return false;
-		if (ui.scopeFilter !== "all" && item.scope !== ui.scopeFilter) return false;
-		return true;
+	const packageName = packageNameForTab(ui.topTab);
+	const allPackageSummary = ui.topTab === TAB_ALL && !ui.showResources;
+	const base = packageName
+		? items.filter((item) => itemBelongsToPackage(item, packageName))
+		: allPackageSummary
+			? items.filter((item) => item.kind === "package")
+			: items;
+	const fallback = allPackageSummary && base.length === 0 ? items : base;
+	return fallback.filter((item) => {
+		const packageSummary = allPackageSummary && item.kind === "package";
+		if (query && !itemSearchText(item, items).includes(query)) return false;
+		return itemMatchesFilters(item, items, ui, packageSummary);
 	});
 }
 
@@ -665,10 +772,13 @@ interface ManagerUiState {
 	settingSelected: number;
 	scroll: number;
 	settingScroll: number;
+	diagnosticsScroll: number;
 	kindFilter: string;
 	providerFilter: string;
 	stateFilter: string;
 	scopeFilter: string;
+	showAudit: boolean;
+	showResources: boolean;
 }
 
 function makeInitialUiState(initialTab: TopTab): ManagerUiState {
@@ -681,13 +791,16 @@ function makeInitialUiState(initialTab: TopTab): ManagerUiState {
 		selected: 0,
 		settingScroll: 0,
 		settingSelected: 0,
+		diagnosticsScroll: 0,
+		showAudit: false,
+		showResources: false,
 		stateFilter: "all",
 		topTab: initialTab,
 		scroll: 0,
 	};
 }
 
-async function openManager(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, initialTab: TopTab = "Extensions"): Promise<void> {
+async function openManager(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, initialTab: TopTab = TAB_ALL): Promise<void> {
 	let ui = makeInitialUiState(initialTab);
 	while (true) {
 		const inventory = buildInventory(pi, ctx as ExtensionContext);
@@ -869,14 +982,15 @@ function createManagerComponent(
 	requestRender: () => void,
 	done: (value: ManagerAction) => void,
 ) {
-	const topTabs: TopTab[] = ["General", "Extensions", "Audit"];
+	const topTabs = managerTabs(inventory);
 	const providers = ["all", ...new Set(inventory.items.map((item) => item.provider))].sort();
 	const kinds = ["all", ...new Set(inventory.items.map((item) => item.kind))].sort();
 	const states = ["all", "active", "disabled", "shadowed", "broken"];
 	const scopes = ["all", "project", "user", "temporary", "builtin", "unknown"];
 
 	function clamp(): void {
-		if (ui.topTab !== "Extensions") return;
+		if (!topTabs.some((tab) => tab.id === ui.topTab)) ui.topTab = TAB_ALL;
+		if (!isInventoryTab(ui.topTab)) return;
 		const list = filteredItems(inventory.items, ui);
 		ui.selected = Math.max(0, Math.min(ui.selected, Math.max(0, list.length - 1)));
 		ui.scroll = Math.max(0, Math.min(ui.scroll, Math.max(0, list.length - LIST_ROWS)));
@@ -894,19 +1008,62 @@ function createManagerComponent(
 		return values[(idx + delta + values.length) % values.length]!;
 	}
 
+	function switchTab(delta: number): void {
+		ui.topTab = cycle(topTabs.map((tab) => tab.id), ui.topTab, delta);
+		ui.selected = 0;
+		ui.scroll = 0;
+		ui.settingSelected = 0;
+		ui.settingScroll = 0;
+		ui.diagnosticsScroll = 0;
+		clamp();
+		requestRender();
+	}
+
+	function diagnosticsMaxScroll(): number {
+		const width = frameContentWidth(DEFAULT_WIDTH);
+		const visibleRows = Math.max(1, MANAGER_INNER_ROWS - 4);
+		return Math.max(0, renderDiagnostics(inventory, width, theme).length - visibleRows);
+	}
+
+	function scrollDiagnostics(delta: number): void {
+		ui.diagnosticsScroll = Math.max(0, Math.min(ui.diagnosticsScroll + delta, diagnosticsMaxScroll()));
+		requestRender();
+	}
+
 	function handleInput(data: string): void {
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) return done({ type: "close" });
 		if (matchesKey(data, "tab")) {
-			ui.topTab = cycle(topTabs, ui.topTab, 1);
-			requestRender();
+			switchTab(1);
 			return;
 		}
 		if (matchesKey(data, "shift+tab")) {
-			ui.topTab = cycle(topTabs, ui.topTab, -1);
+			switchTab(-1);
+			return;
+		}
+		if (matchesKey(data, "alt+a")) {
+			ui.showAudit = !ui.showAudit;
+			ui.diagnosticsScroll = 0;
 			requestRender();
 			return;
 		}
-		if (ui.topTab !== "Extensions") return;
+		if (ui.showAudit) {
+			if (matchesKey(data, "up")) return scrollDiagnostics(-1);
+			if (matchesKey(data, "down")) return scrollDiagnostics(1);
+			if (matchesKey(data, "pageup")) return scrollDiagnostics(-10);
+			if (matchesKey(data, "pagedown")) return scrollDiagnostics(10);
+			if (matchesKey(data, "home")) {
+				ui.diagnosticsScroll = 0;
+				requestRender();
+				return;
+			}
+			if (matchesKey(data, "end")) {
+				ui.diagnosticsScroll = diagnosticsMaxScroll();
+				requestRender();
+				return;
+			}
+			return;
+		}
+		if (!isInventoryTab(ui.topTab)) return;
 		const list = filteredItems(inventory.items, ui);
 		const selected = list[ui.selected];
 		const settings = selected?.settingsSchema ?? [];
@@ -920,14 +1077,14 @@ function createManagerComponent(
 			requestRender();
 			return;
 		}
-		if (matchesKey(data, "up") || data === "k") {
+		if (matchesKey(data, "up")) {
 			if (ui.pane === "settings") ui.settingSelected -= 1;
 			else ui.selected -= 1;
 			clamp();
 			requestRender();
 			return;
 		}
-		if (matchesKey(data, "down") || data === "j") {
+		if (matchesKey(data, "down")) {
 			if (ui.pane === "settings") ui.settingSelected += 1;
 			else ui.selected += 1;
 			clamp();
@@ -960,36 +1117,51 @@ function createManagerComponent(
 			requestRender();
 			return;
 		}
-		if (data === "f") {
+		if (isPlainSearchInput(data)) {
+			ui.search += data;
+			ui.selected = 0;
+			clamp();
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "alt+k")) {
 			ui.kindFilter = cycle(kinds, ui.kindFilter, 1);
 			ui.selected = 0;
 			clamp();
 			requestRender();
 			return;
 		}
-		if (data === "p") {
+		if (matchesKey(data, "alt+p")) {
 			ui.providerFilter = cycle(providers, ui.providerFilter, 1);
 			ui.selected = 0;
 			clamp();
 			requestRender();
 			return;
 		}
-		if (data === "s") {
+		if (matchesKey(data, "alt+s")) {
 			ui.stateFilter = cycle(states, ui.stateFilter, 1);
 			ui.selected = 0;
 			clamp();
 			requestRender();
 			return;
 		}
-		if (data === "S") {
+		if (matchesKey(data, "alt+o")) {
 			ui.scopeFilter = cycle(scopes, ui.scopeFilter, 1);
 			ui.selected = 0;
 			clamp();
 			requestRender();
 			return;
 		}
-		if (data === "P" && selected) return done({ type: "toggle-provider", provider: selected.provider });
-		if ((matchesKey(data, "enter") || matchesKey(data, "return") || data === " ") && selected) {
+		if (matchesKey(data, "alt+r")) {
+			ui.showResources = !ui.showResources;
+			ui.selected = 0;
+			ui.scroll = 0;
+			clamp();
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "alt+t") && selected) return done({ type: "toggle-provider", provider: selected.provider });
+		if ((matchesKey(data, "enter") || matchesKey(data, "return")) && selected) {
 			if (ui.pane === "settings" && settings.length > 0) {
 				const schema = settings[ui.settingSelected];
 				if (!schema) return;
@@ -1002,69 +1174,98 @@ function createManagerComponent(
 			}
 			return done({ type: "toggle-item", itemId: selected.id });
 		}
-		if (data === "e" && selected && settings.length > 0) {
-			const schema = settings[ui.settingSelected];
-			if (schema) return done({ type: "edit-setting", itemId: selected.id, settingKey: schema.key });
-		}
-		if (data.length === 1 && data >= " " && data !== "\x7f") {
-			ui.search += data;
-			ui.selected = 0;
-			clamp();
-			requestRender();
-		}
 	}
 
 	function render(width: number): string[] {
 		clamp();
 		const safeWidth = Math.max(60, width);
-		const bodyWidth = safeWidth - 4;
+		const bodyWidth = frameContentWidth(safeWidth);
 		let lines: string[] = [];
 		lines.push(renderTabBar(topTabs, ui.topTab, bodyWidth, theme));
-		lines.push(theme.fg("dim", "tab switch tabs · ↑↓ navigate · enter/space toggle or edit · esc close"));
-		lines.push("");
-		if (ui.topTab === "General") lines.push(...renderGeneral(inventory, bodyWidth, theme));
-		if (ui.topTab === "Audit") lines.push(...renderAudit(inventory, bodyWidth, theme));
-		if (ui.topTab === "Extensions") lines.push(...renderExtensions(inventory, ui, bodyWidth, theme));
-		return frame(lines, safeWidth, theme);
+		lines.push(theme.fg("dim", ui.showAudit ? "diagnostics · ↑↓ scroll · PgUp/PgDn · Alt+A back · esc close" : "tab switch tabs · ↑↓ navigate · enter toggle/edit · type search · Alt+A diagnostics · esc close"));
+		lines.push(divider(bodyWidth, theme));
+		if (ui.showAudit) lines.push(...renderDiagnosticsViewport(inventory, ui, bodyWidth, theme));
+		else lines.push(...renderExtensions(inventory, ui, bodyWidth, theme));
+		return frame(lines, safeWidth, theme, MANAGER_INNER_ROWS);
 	}
 
 	return { handleInput, invalidate() {}, render };
 }
 
-function renderTabBar(tabs: TopTab[], active: TopTab, width: number, theme: Theme): string {
-	const parts = tabs.map((tab) => (tab === active ? theme.bg("selectedBg", ` ${theme.bold(tab)} `) : theme.fg("muted", ` ${tab} `)));
-	return truncateToWidth(parts.join(" "), width, "");
+function renderTabBar(tabs: ManagerTab[], active: TopTab, width: number, theme: Theme): string {
+	const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.id === active));
+	const partFor = (tab: ManagerTab): string => {
+		const label = ` ${truncateToWidth(tab.label, 18, "…")} `;
+		if (tab.id === active) return theme.fg("accent", theme.inverse(theme.bold(label)));
+		return theme.bg("selectedBg", theme.fg("muted", label));
+	};
+	const renderWindow = (start: number, end: number): string => {
+		const parts = tabs.slice(start, end).map(partFor);
+		if (start > 0) parts.unshift(theme.fg("dim", "‹"));
+		if (end < tabs.length) parts.push(theme.fg("dim", "›"));
+		return parts.join(" ");
+	};
+	let start = activeIndex;
+	let end = activeIndex + 1;
+	let current = renderWindow(start, end);
+	let preferRight = true;
+	while (start > 0 || end < tabs.length) {
+		const addRight = end < tabs.length && (preferRight || start === 0);
+		const addLeft = !addRight && start > 0;
+		const nextStart = addLeft ? start - 1 : start;
+		const nextEnd = addRight ? end + 1 : end;
+		const candidate = renderWindow(nextStart, nextEnd);
+		if (visibleWidth(candidate) > width) {
+			if (addRight && start > 0) {
+				preferRight = false;
+				continue;
+			}
+			break;
+		}
+		start = nextStart;
+		end = nextEnd;
+		current = candidate;
+		preferRight = !preferRight;
+	}
+	return truncateToWidth(current, width, "");
 }
 
-function renderGeneral(inventory: Inventory, width: number, theme: Theme): string[] {
+function renderDiagnosticsViewport(inventory: Inventory, ui: ManagerUiState, width: number, theme: Theme): string[] {
+	const all = renderDiagnostics(inventory, width, theme);
+	const viewportRows = Math.max(1, MANAGER_INNER_ROWS - 4);
+	if (all.length <= viewportRows) {
+		ui.diagnosticsScroll = 0;
+		return all;
+	}
+	const contentRows = Math.max(1, viewportRows - 1);
+	ui.diagnosticsScroll = Math.max(0, Math.min(ui.diagnosticsScroll, Math.max(0, all.length - contentRows)));
+	const visible = all.slice(ui.diagnosticsScroll, ui.diagnosticsScroll + contentRows);
+	const before = ui.diagnosticsScroll > 0 ? `↑ ${ui.diagnosticsScroll}` : "";
+	const afterCount = Math.max(0, all.length - ui.diagnosticsScroll - contentRows);
+	const after = afterCount > 0 ? `↓ ${afterCount}` : "";
+	return [...visible, theme.fg("dim", [before, after].filter(Boolean).join(" · "))];
+}
+
+function renderDiagnostics(inventory: Inventory, width: number, theme: Theme): string[] {
 	const counts = countBy(inventory.items, (item) => item.state);
 	const kinds = countBy(inventory.items, (item) => item.kind);
 	const lines = [
-		theme.fg("accent", theme.bold("vstack Pi Settings")),
-		"",
-		`Inventory: ${inventory.items.length} items · ${counts.active ?? 0} active · ${counts.disabled ?? 0} disabled · ${counts.shadowed ?? 0} shadowed · ${counts.broken ?? 0} broken`,
-		`Kinds: ${Object.entries(kinds).map(([k, v]) => `${k}=${v}`).join(", ")}`,
+		theme.fg("accent", theme.bold("Diagnostics")),
+		`Inventory: ${inventory.items.length} resources · ${counts.active ?? 0} active · ${counts.disabled ?? 0} disabled · ${counts.shadowed ?? 0} shadowed · ${counts.broken ?? 0} broken`,
+		`Kinds: ${Object.entries(kinds).map(([kind, count]) => `${kind}=${count}`).join(", ")}`,
 		"",
 		theme.fg("accent", "Settings files"),
 	];
-	for (const file of inventory.settingsFiles) {
-		lines.push(`${file.scope}: ${file.path}${file.exists ? "" : " (not created yet)"}`);
-	}
-	lines.push("", theme.fg("warning", "Runtime note"));
-	lines.push("Pi currently has no public API for injecting native /settings tabs or unloading extension modules live.");
-	lines.push("This manager provides the integrated settings shell here and applies tool toggles live; package/module toggles apply after /reload or restart.");
-	return lines.map((line) => truncateToWidth(line, width, ""));
-}
-
-function renderAudit(inventory: Inventory, width: number, theme: Theme): string[] {
-	const lines = [theme.fg("accent", theme.bold("Local package settings audit")), ""];
-	if (inventory.auditLines.length === 0) lines.push("No package manifests found in current Pi settings.");
+	for (const file of inventory.settingsFiles) lines.push(`${file.scope}: ${compactPath(file.path)}${file.exists ? "" : " (not created yet)"}`);
+	lines.push("", theme.fg("accent", "Package manifests"));
+	if (inventory.auditLines.length === 0) lines.push(theme.fg("dim", "No package manifests found in current Pi settings."));
 	for (const block of inventory.auditLines) {
 		const [head, ...rest] = block.split("\n");
 		lines.push(theme.fg("accent", head ?? "package"));
-		for (const line of rest) lines.push(theme.fg("dim", line));
-		lines.push("");
+		for (const line of rest.slice(0, 3)) lines.push(theme.fg("dim", line));
 	}
+	lines.push("", theme.fg("warning", "Runtime note"));
+	lines.push("Pi cannot unload already-loaded extension modules live. Package/module toggles apply after /reload or restart; tool toggles apply live.");
 	return lines.flatMap((line) => wrapLine(line, width));
 }
 
@@ -1076,14 +1277,15 @@ function renderExtensions(inventory: Inventory, ui: ManagerUiState, width: numbe
 	const left = renderList(list, ui, leftWidth, theme);
 	const right = renderInspector(inventory, selected, ui, rightWidth, theme);
 	const rows = Math.max(left.length, right.length);
+	const view = ui.topTab === TAB_ALL ? (ui.showResources ? "raw resources" : "packages") : "package";
 	const lines = [
 		truncateToWidth(
-			`${theme.fg("accent", "Search")}: ${ui.search || theme.fg("dim", "type to filter")}  ${theme.fg("accent", "kind")}:${ui.kindFilter} ${theme.fg("accent", "provider")}:${ui.providerFilter} ${theme.fg("accent", "state")}:${ui.stateFilter} ${theme.fg("accent", "scope")}:${ui.scopeFilter}`,
+			`${theme.fg("accent", "Search")}: ${ui.search || theme.fg("dim", "type to filter")}  ${theme.fg("accent", "View")}: ${view}  ${theme.fg("accent", "Filters")}: kind ${ui.kindFilter} · provider ${ui.providerFilter} · state ${ui.stateFilter} · scope ${ui.scopeFilter}`,
 			width,
 			"",
 		),
-		theme.fg("dim", "f kind · p provider · s state · S scope · P toggle provider · ←/→ pane · e edit text setting"),
-		"",
+		theme.fg("dim", "Alt+K/P/S/O filters · Alt+R raw resources · Alt+T toggle provider · ←/→ pane"),
+		divider(width, theme),
 	];
 	for (let i = 0; i < rows; i += 1) {
 		lines.push(`${pad(left[i] ?? "", leftWidth)} ${theme.fg("dim", "│")} ${truncateToWidth(right[i] ?? "", rightWidth, "")}`);
@@ -1091,23 +1293,53 @@ function renderExtensions(inventory: Inventory, ui: ManagerUiState, width: numbe
 	return lines;
 }
 
+function listDisplayName(item: InventoryItem, ui: ManagerUiState): string {
+	if (packageNameForTab(ui.topTab) && item.kind === "package") return "Overview";
+	if (item.kind === "extension module") return (item.entrypoint ?? item.displayName).replace(/^\.\//, "");
+	return item.displayName;
+}
+
 function renderList(items: InventoryItem[], ui: ManagerUiState, width: number, theme: Theme): string[] {
-	const lines = [`${theme.fg(ui.pane === "list" ? "accent" : "muted", theme.bold("Extensions"))} ${theme.fg("dim", `(${items.length})`)}`, ""];
+	const title = packageNameForTab(ui.topTab) ? "Package" : ui.showResources ? "Resources" : "Packages";
+	const lines = [`${theme.fg(ui.pane === "list" ? "accent" : "muted", theme.bold(title))} ${theme.fg("dim", `(${items.length})`)}`];
 	if (items.length === 0) {
 		lines.push(theme.fg("dim", "No matching items."));
 		return lines;
 	}
-	if (ui.scroll > 0) lines.push(theme.fg("dim", `↑ ${ui.scroll} more`));
+	if (ui.scroll > 0) lines.push(theme.fg("dim", `↑ ${ui.scroll} earlier`));
 	for (const [visibleIndex, item] of items.slice(ui.scroll, ui.scroll + LIST_ROWS).entries()) {
 		const index = ui.scroll + visibleIndex;
 		const marker = index === ui.selected ? theme.fg("accent", "›") : theme.fg("dim", " ");
 		const stateIcon = item.state === "active" ? theme.fg("success", "●") : item.state === "disabled" ? theme.fg("warning", "○") : item.state === "shadowed" ? theme.fg("dim", "◌") : theme.fg("error", "×");
-		const text = `${marker} ${stateIcon} ${item.displayName}`;
-		lines.push(truncateToWidth(text, width, "…"));
-		lines.push(truncateToWidth(`    ${theme.fg("dim", `${item.kind} · ${item.scope} · ${item.provider}`)}`, width, "…"));
+		const meta = theme.fg("dim", ` ${kindLabel(item.kind)} · ${item.scope}`);
+		const row = truncateToWidth(`${marker} ${stateIcon} ${listDisplayName(item, ui)}${meta}`, width, "…");
+		lines.push(index === ui.selected ? theme.bg("selectedBg", pad(row, width)) : row);
 	}
 	const hidden = Math.max(0, items.length - (ui.scroll + LIST_ROWS));
 	if (hidden > 0) lines.push(theme.fg("dim", `↓ ${hidden} more`));
+	return lines;
+}
+
+function shortResourceName(item: InventoryItem): string {
+	if (item.kind === "extension module") return (item.entrypoint ?? item.displayName).replace(/^\.\//, "");
+	return item.trigger ?? item.displayName;
+}
+
+function packageResourceLines(inventory: Inventory, item: InventoryItem, width: number, theme: Theme): string[] {
+	if (item.kind !== "package" || !item.packageName) return [];
+	const children = childItemsForPackage(inventory.items, item.packageName);
+	if (children.length === 0) return [];
+	const groups = new Map<string, InventoryItem[]>();
+	for (const child of children) {
+		const label = kindLabel(child.kind);
+		groups.set(label, [...(groups.get(label) ?? []), child]);
+	}
+	const lines = ["", theme.fg("accent", theme.bold(`Resources (${children.length})`))];
+	for (const [label, group] of [...groups.entries()].sort((a, b) => kindRank(a[0]) - kindRank(b[0]) || a[0].localeCompare(b[0]))) {
+		const names = group.slice(0, 4).map(shortResourceName).join(", ");
+		const suffix = group.length > 4 ? `, +${group.length - 4} more` : "";
+		lines.push(truncateToWidth(`${theme.fg("muted", label)} (${group.length}): ${names}${suffix}`, width, "…"));
+	}
 	return lines;
 }
 
@@ -1115,17 +1347,17 @@ function renderInspector(inventory: Inventory, item: InventoryItem | undefined, 
 	if (!item) return [theme.fg("dim", "Select an item to inspect it.")];
 	const lines = [
 		`${theme.fg("accent", theme.bold(item.displayName))} ${theme.fg(stateColor(item.state), item.state)}`,
-		item.description || theme.fg("dim", "No description."),
+		item.description ? truncateToWidth(item.description, width, "…") : theme.fg("dim", "No description."),
 		"",
-		`${theme.fg("muted", "Kind")}: ${item.kind}`,
+		`${theme.fg("muted", "Kind")}: ${kindLabel(item.kind)}    ${theme.fg("muted", "Scope")}: ${item.scope}`,
 		`${theme.fg("muted", "Provider")}: ${item.provider}`,
-		`${theme.fg("muted", "Scope")}: ${item.scope}`,
-		`${theme.fg("muted", "Source")}: ${item.sourcePath}`,
+		`${theme.fg("muted", "Source")}: ${compactPath(item.sourcePath)}`,
 		`${theme.fg("muted", "State")}: ${item.stateReason}`,
 	];
 	if (item.trigger) lines.push(`${theme.fg("muted", "Trigger")}: ${item.trigger}`);
 	if (item.shadowedBy) lines.push(`${theme.fg("muted", "Shadowed by")}: ${item.shadowedBy}`);
 	if (item.brokenError) lines.push(`${theme.fg("error", "Error")}: ${item.brokenError}`);
+	lines.push(...packageResourceLines(inventory, item, width, theme));
 	lines.push("", `${theme.fg(ui.pane === "settings" ? "accent" : "muted", theme.bold("Settings"))}`);
 	const schemas = item.settingsSchema ?? [];
 	if (schemas.length === 0) {
@@ -1141,8 +1373,9 @@ function renderInspector(inventory: Inventory, item: InventoryItem | undefined, 
 		const apply = schema.apply ?? (schema.requiresReload ? "reload" : "live");
 		const value = formatSettingValue(schema, config.value);
 		const scope = config.explicit ? config.scope : "default";
-		lines.push(`${marker} ${schema.label ?? schema.key}: ${theme.fg("accent", value)} ${theme.fg("dim", `(${schema.type}, ${scope}, ${apply})`)}`);
-		if (schema.description) lines.push(`  ${theme.fg("dim", schema.description)}`);
+		const row = truncateToWidth(`${marker} ${schema.label ?? schema.key}: ${theme.fg("accent", value)} ${theme.fg("dim", `(${schema.type}, ${scope}, ${apply})`)}`, width, "…");
+		lines.push(index === ui.settingSelected ? theme.bg("selectedBg", pad(row, width)) : row);
+		if (index === ui.settingSelected && schema.description) lines.push(`  ${theme.fg("dim", schema.description)}`);
 	}
 	const hidden = Math.max(0, schemas.length - (ui.settingScroll + SETTINGS_ROWS));
 	if (hidden > 0) lines.push(theme.fg("dim", `↓ ${hidden} more setting(s)`));
@@ -1156,11 +1389,32 @@ function stateColor(state: ExtensionState): string {
 	return "dim";
 }
 
-function frame(lines: string[], width: number, theme: Theme): string[] {
+function frameContentWidth(width: number): number {
+	return Math.max(1, width - 2 - POPUP_PADDING_X * 2);
+}
+
+function divider(width: number, theme: Theme): string {
+	return theme.fg("dim", "─".repeat(Math.max(1, width)));
+}
+
+function frame(lines: string[], width: number, theme: Theme, fixedInnerRows?: number): string[] {
 	const inner = Math.max(1, width - 2);
+	const contentWidth = frameContentWidth(width);
 	const border = (s: string) => theme.fg("borderAccent", s);
+	let body = lines;
+	if (fixedInnerRows !== undefined) {
+		if (body.length > fixedInnerRows) {
+			const hidden = body.length - fixedInnerRows + 1;
+			body = [...body.slice(0, Math.max(0, fixedInnerRows - 1)), theme.fg("dim", `↓ ${hidden} more line(s)`)].slice(0, fixedInnerRows);
+		} else if (body.length < fixedInnerRows) {
+			body = [...body, ...Array.from({ length: fixedInnerRows - body.length }, () => "")];
+		}
+	}
+	const blank = `${border("│")}${" ".repeat(inner)}${border("│")}`;
 	const out = [`${border("╭")}${border("─".repeat(inner))}${border("╮")}`];
-	for (const line of lines) out.push(`${border("│")}${pad(line, inner)}${border("│")}`);
+	for (let i = 0; i < POPUP_PADDING_Y; i += 1) out.push(blank);
+	for (const line of body) out.push(`${border("│")}${" ".repeat(POPUP_PADDING_X)}${pad(line, contentWidth)}${" ".repeat(POPUP_PADDING_X)}${border("│")}`);
+	for (let i = 0; i < POPUP_PADDING_Y; i += 1) out.push(blank);
 	out.push(`${border("╰")}${border("─".repeat(inner))}${border("╯")}`);
 	return out.map((line) => truncateToWidth(line, width, ""));
 }
@@ -1196,6 +1450,7 @@ interface QuickSettingsUiState {
 	scroll: number;
 	search: string;
 	selected: number;
+	tab: TopTab;
 }
 
 type QuickSettingsAction = { type: "close" } | undefined;
@@ -1231,10 +1486,23 @@ function quickSettingRows(inventory: Inventory): QuickSettingRow[] {
 	return rows;
 }
 
-function filterQuickSettingRows(rows: QuickSettingRow[], search: string, inventory: Inventory): QuickSettingRow[] {
+function quickSettingsTabs(rows: QuickSettingRow[]): ManagerTab[] {
+	const tabs: ManagerTab[] = [{ id: TAB_ALL, label: "All" }];
+	const seen = new Set<string>();
+	for (const row of rows) {
+		if (seen.has(row.extensionId)) continue;
+		seen.add(row.extensionId);
+		tabs.push({ id: packageTabId(row.extensionId), label: row.packageName, packageName: row.extensionId });
+	}
+	return tabs;
+}
+
+function filterQuickSettingRows(rows: QuickSettingRow[], search: string, inventory: Inventory, tab: TopTab): QuickSettingRow[] {
+	const packageName = packageNameForTab(tab);
+	const scopedRows = packageName ? rows.filter((row) => row.extensionId === packageName) : rows;
 	const query = search.trim().toLowerCase();
-	if (!query) return rows;
-	return rows.filter((row) => {
+	if (!query) return scopedRows;
+	return scopedRows.filter((row) => {
 		const config = getConfigValue(inventory, row.extensionId, row.schema);
 		const hay = [
 			row.packageName,
@@ -1262,8 +1530,10 @@ function saveQuickSetting(pi: ExtensionAPI, ctx: ExtensionCommandContext | Exten
 
 function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, inventory: Inventory, ui: QuickSettingsUiState, theme: Theme, requestRender: () => void, done: (action: QuickSettingsAction) => void) {
 	const rows = quickSettingRows(inventory);
-	const filtered = () => filterQuickSettingRows(rows, ui.search, inventory);
+	const tabs = quickSettingsTabs(rows);
+	const filtered = () => filterQuickSettingRows(rows, ui.search, inventory, ui.tab);
 	const clamp = () => {
+		if (!tabs.some((tab) => tab.id === ui.tab)) ui.tab = TAB_ALL;
 		const count = filtered().length;
 		ui.selected = Math.max(0, Math.min(ui.selected, Math.max(0, count - 1)));
 		if (ui.selected < ui.scroll) ui.scroll = ui.selected;
@@ -1273,6 +1543,17 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 	const selectedRow = () => {
 		clamp();
 		return filtered()[ui.selected];
+	};
+	const cycle = <T extends string>(values: T[], current: string, delta: number): T => {
+		const idx = Math.max(0, values.indexOf(current as T));
+		return values[(idx + delta + values.length) % values.length]!;
+	};
+	const switchTab = (delta: number): void => {
+		ui.tab = cycle(tabs.map((tab) => tab.id), ui.tab, delta);
+		ui.selected = 0;
+		ui.scroll = 0;
+		clamp();
+		requestRender();
 	};
 	const editOrToggle = () => {
 		const row = selectedRow();
@@ -1324,13 +1605,21 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 				requestRender();
 				return;
 			}
-			if (data.length === 1 && data >= " " && data !== "\x7f") {
+			if (isPlainSearchInput(data)) {
 				ui.editing.buffer += data;
 				requestRender();
 			}
 			return;
 		}
 		if (data === "\u001b" || matchesKey(data, "ctrl+c")) return done({ type: "close" });
+		if (matchesKey(data, "tab")) {
+			switchTab(1);
+			return;
+		}
+		if (matchesKey(data, "shift+tab")) {
+			switchTab(-1);
+			return;
+		}
 		if (matchesKey(data, "up")) {
 			ui.selected -= 1;
 			clamp();
@@ -1369,8 +1658,8 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 			requestRender();
 			return;
 		}
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === " " || data === "e") return editOrToggle();
-		if (data.length === 1 && data >= " " && data !== "\x7f") {
+		if (matchesKey(data, "enter") || matchesKey(data, "return")) return editOrToggle();
+		if (isPlainSearchInput(data)) {
 			ui.search += data;
 			ui.selected = 0;
 			clamp();
@@ -1381,16 +1670,16 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 	function render(width: number): string[] {
 		clamp();
 		const safeWidth = Math.max(72, width);
-		const bodyWidth = safeWidth - 4;
+		const bodyWidth = frameContentWidth(safeWidth);
 		const visible = filtered().slice(ui.scroll, ui.scroll + QUICK_SETTINGS_ROWS);
 		const lines: string[] = [];
-		lines.push(theme.fg("accent", theme.bold("Extension Settings")));
-		lines.push(theme.fg("dim", ui.editing ? "editing value · enter save · esc cancel · backspace delete · ctrl+u clear" : "↑↓ navigate · enter/space edit/toggle · type search · backspace clear · esc close"));
+		lines.push(renderTabBar(tabs, ui.tab, bodyWidth, theme));
+		lines.push(theme.fg("dim", ui.editing ? "editing value · enter save · esc cancel · backspace delete · ctrl+u clear" : "tab switch extension tabs · ↑↓ navigate · enter edit/toggle · type search · backspace clear · esc close"));
 		lines.push(ui.editing ? theme.fg("dim", "Inline edit active") : ui.search ? `${theme.fg("muted", "Search:")} ${ui.search}` : theme.fg("dim", "Type to search settings"));
-		lines.push("");
+		lines.push(divider(bodyWidth, theme));
 		if (visible.length === 0) {
 			lines.push(theme.fg("muted", "No matching settings."));
-			return frame(lines, safeWidth, theme);
+			return frame(lines, safeWidth, theme, QUICK_SETTINGS_INNER_ROWS);
 		}
 		let lastPackage = "";
 		for (const [visibleIndex, row] of visible.entries()) {
@@ -1408,14 +1697,15 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 			const valueText = theme.fg(isEditing || config.explicit ? "accent" : "muted", value);
 			const mode = isEditing ? "editing" : row.schema.type === "boolean" || row.schema.type === "enum" ? "toggle" : "edit";
 			const meta = theme.fg("dim", `${row.schema.type} · ${mode} · ${config.scope}`);
-			lines.push(`${marker} ${label}${" ".repeat(Math.max(1, 36 - visibleWidth(label)))}${valueText} ${meta}`);
+			const rowText = truncateToWidth(`${marker} ${label}${" ".repeat(Math.max(1, 36 - visibleWidth(label)))}${valueText} ${meta}`, bodyWidth, "…");
+			lines.push(index === ui.selected ? theme.bg("selectedBg", pad(rowText, bodyWidth)) : rowText);
 			if (isEditing) lines.push(theme.fg("dim", "    Enter saves · Esc cancels · Backspace deletes · Ctrl+U clears"));
 			else if (index === ui.selected && row.schema.description) lines.push(theme.fg("dim", `    ${truncateToWidth(row.schema.description, bodyWidth - 4, "…")}`));
 		}
 		const moreBefore = ui.scroll > 0 ? `↑ ${ui.scroll}` : "";
 		const moreAfter = ui.scroll + QUICK_SETTINGS_ROWS < filtered().length ? `↓ ${filtered().length - ui.scroll - QUICK_SETTINGS_ROWS}` : "";
 		if (moreBefore || moreAfter) lines.push("", theme.fg("dim", [moreBefore, moreAfter].filter(Boolean).join(" · ")));
-		return frame(lines, safeWidth, theme);
+		return frame(lines, safeWidth, theme, QUICK_SETTINGS_INNER_ROWS);
 	}
 
 	return { handleInput, invalidate() {}, render };
@@ -1427,7 +1717,7 @@ async function openQuickSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext 
 		ctx.ui.notify("No vstack extension settings are declared by installed packages.", "info");
 		return;
 	}
-	const ui: QuickSettingsUiState = { scroll: 0, search: "", selected: 0 };
+	const ui: QuickSettingsUiState = { scroll: 0, search: "", selected: 0, tab: TAB_ALL };
 	await ctx.ui.custom<QuickSettingsAction>(
 		(tui, theme, _keybindings, done) => createQuickSettingsComponent(pi, ctx, inventory, ui, theme, () => tui.requestRender(), done),
 		{ overlay: true, overlayOptions: { anchor: "center", maxHeight: DEFAULT_MAX_HEIGHT, width: DEFAULT_WIDTH } },
@@ -1450,11 +1740,6 @@ export default function extensionManager(pi: ExtensionAPI): void {
 		{ baseDir: projectPiDir, exists: existsSync(join(projectPiDir, "settings.json")), json: readJsonObject(join(projectPiDir, "settings.json")).json, path: join(projectPiDir, "settings.json"), scope: "project" },
 	]);
 
-	pi.registerCommand("extension-settings", {
-		description: "Quick inline settings editor for vstack Pi extension settings.",
-		handler: async (_args, ctx) => openQuickSettings(pi, ctx),
-	});
-
 	if (loadConfig.config[MANAGER_ID]?.enabled === false) {
 		pi.registerCommand("extensions", {
 			description: "Extension manager is disabled. Use /extensions enable to re-enable it.",
@@ -1475,9 +1760,14 @@ export default function extensionManager(pi: ExtensionAPI): void {
 		return;
 	}
 
+	pi.registerCommand("extension-settings", {
+		description: "Quick inline settings editor for vstack Pi extension settings.",
+		handler: async (_args, ctx) => openQuickSettings(pi, ctx),
+	});
+
 	pi.registerCommand("extensions", {
 		description: "Browse, toggle, inspect, and configure Pi extension-like resources.",
-		handler: async (_args, ctx) => openManager(pi, ctx, "Extensions"),
+		handler: async (_args, ctx) => openManager(pi, ctx, TAB_ALL),
 	});
 
 	// Best-effort /settings integration. Pi's public extension API has no native
@@ -1487,9 +1777,8 @@ export default function extensionManager(pi: ExtensionAPI): void {
 	if (loadConfig.config[MANAGER_ID]?.allowSettingsCommandShadow === true) {
 		pi.registerCommand("settings", {
 			description: "vstack settings shell; use /settings extensions to jump to extension management.",
-			handler: async (args, ctx) => {
-				const initial = args.trim().toLowerCase().startsWith("extensions") ? "Extensions" : "General";
-				await openManager(pi, ctx, initial as TopTab);
+			handler: async (_args, ctx) => {
+				await openManager(pi, ctx, TAB_ALL);
 			},
 		});
 	}

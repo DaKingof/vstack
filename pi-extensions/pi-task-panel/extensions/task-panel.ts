@@ -9,6 +9,11 @@ import { Type } from "typebox";
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-task-panel.installed");
 const STATE_TYPE = "vstack-task-panel:state";
 const WIDGET_KEY = "vstack-task-panel";
+const PANEL_INDENT = "  ";
+const PANEL_BAR = "┃";
+const PANEL_BAR_COLOR = "borderAccent";
+const PANEL_TITLE_COLOR = "customMessageLabel";
+const PANEL_RULE_COLOR = "borderMuted";
 
 type Status = "pending" | "in_progress" | "completed" | "abandoned";
 type PanelState = "hidden" | "compact" | "expanded";
@@ -135,10 +140,10 @@ function taskText(task: TaskItem, active: boolean, theme: Theme): string {
 	return task.content;
 }
 
-function renderTaskLine(task: TaskItem, theme: Theme, active = false): string {
+function renderTaskLine(task: TaskItem, theme: Theme, active = false, prefix = " "): string {
 	const marker = theme.fg(markerColor(task.status, active), taskIcon(task.status, active));
 	const notes = task.notes.length ? theme.fg("dim", ` +${task.notes.length}`) : "";
-	return ` ${marker} ${taskText(task, active, theme)}${notes}`;
+	return `${prefix}${marker} ${taskText(task, active, theme)}${notes}`;
 }
 
 class SingleLineText {
@@ -317,12 +322,33 @@ function parseMarkdown(text: string, cwd?: string): TodoState {
 	return state;
 }
 
+function renderPanelWidgetLines(state: TodoState, theme: Theme, cwd: string, width: number): string[] {
+	const lines = renderPanelLines(state, theme, cwd);
+	if (lines.length === 0) return [];
+	const prefix = `${PANEL_INDENT}${theme.fg(PANEL_BAR_COLOR, PANEL_BAR)} `;
+	return lines.map((line) => truncateToWidth(`${prefix}${line}`, Math.max(1, width), ""));
+}
+
+function renderPanelHeader(state: TodoState, theme: Theme, active?: TaskItem): string {
+	const remaining = remainingCount(state);
+	const activePhase = active?.phaseId ? phaseTitle(state, active.phaseId) : "";
+	const phaseBadge = state.panel === "compact" && activePhase && activePhase !== "Tasks"
+		? ` ${theme.fg("dim", "›")} ${theme.fg("muted", activePhase)}`
+		: "";
+	return `${theme.fg(PANEL_TITLE_COLOR, theme.bold("Tasks"))}${phaseBadge} ${theme.fg("muted", `${completedCount(state)}/${state.tasks.length} done · ${remaining} remaining`)}`;
+}
+
+function pushTaskGroup(lines: string[], title: string, tasks: TaskItem[], theme: Theme, cwd: string): void {
+	if (lines.length > 1) lines.push(theme.fg(PANEL_RULE_COLOR, "│"));
+	lines.push(...renderTaskGroup(title, tasks, theme, cwd));
+}
+
 function renderPanelLines(state: TodoState, theme: Theme, cwd: string): string[] {
 	if (state.tasks.length === 0 || state.panel === "hidden") return [];
 	const remaining = remainingCount(state);
 	const active = activeTask(state);
 	const hint = panelToggleHint(cwd);
-	const header = `${theme.fg("accent", theme.bold("Tasks"))} ${theme.fg("muted", `${completedCount(state)}/${state.tasks.length} done · ${remaining} remaining`)}`;
+	const header = renderPanelHeader(state, theme, active);
 	if (state.panel === "compact") {
 		const limit = Math.max(1, Math.floor(settingNumber("maxCompactTasks", 4, cwd)));
 		const candidates = active?.phaseId ? sortTasks(state.tasks.filter((task) => task.phaseId === active.phaseId)) : sortTasks(state.tasks);
@@ -333,29 +359,37 @@ function renderPanelLines(state: TodoState, theme: Theme, cwd: string): string[]
 		for (const task of visible) lines.push(renderTaskLine(task, theme));
 		const shown = visible.length + (active ? 1 : 0);
 		const hidden = Math.max(0, remaining - shown);
-		if (hidden > 0) lines.push(theme.fg("dim", ` +${hidden} more${hint ? ` · ${hint}` : ""}`));
-		else if (hint) lines.push(theme.fg("dim", ` ${hint}`));
+		const tail = hint ? ` · ${hint}` : "";
+		if (hidden > 0) lines.push(theme.fg("dim", ` ╰ +${hidden} more${tail}`));
+		else if (hint) lines.push(theme.fg("dim", ` ╰ ${hint}`));
 		return lines;
 	}
 	const lines = [hint ? `${header} ${theme.fg("dim", `· ${hint}`)}` : header];
 	const phases = [...state.phases].sort((a, b) => a.order - b.order);
 	const unphased = sortTasks(state.tasks.filter((task) => !task.phaseId));
-	if (unphased.length) lines.push(...renderTaskGroup("Tasks", unphased, theme, cwd));
+	if (unphased.length) pushTaskGroup(lines, "Unphased", unphased, theme, cwd);
 	for (const phase of phases) {
 		const tasks = sortTasks(state.tasks.filter((task) => task.phaseId === phase.id));
-		if (tasks.length) lines.push(...renderTaskGroup(phase.title, tasks, theme, cwd));
+		if (tasks.length) pushTaskGroup(lines, phase.title, tasks, theme, cwd);
 	}
 	return lines;
 }
 
 function renderTaskGroup(title: string, tasks: TaskItem[], theme: Theme, cwd: string): string[] {
-	const lines = [theme.fg("muted", title)];
+	const rule = theme.fg(PANEL_RULE_COLOR, "╭─");
+	const titleText = theme.fg("mdHeading", theme.bold(title));
+	const count = theme.fg("dim", ` ${tasks.length}`);
+	const lines = [`${rule} ${titleText}${count}`];
 	const active = tasks.find((task) => task.status === "in_progress");
-	for (const task of tasks) {
+	for (let index = 0; index < tasks.length; index++) {
+		const task = tasks[index]!;
+		const isLast = index === tasks.length - 1;
 		const isActive = active?.id === task.id;
-		lines.push(renderTaskLine(task, theme, isActive));
+		const branch = theme.fg(PANEL_RULE_COLOR, isLast ? "╰─ " : "├─ ");
+		const stem = theme.fg(PANEL_RULE_COLOR, isLast ? "   " : "│  ");
+		lines.push(renderTaskLine(task, theme, isActive, branch));
 		if (isActive && settingBoolean("showNotesInExpanded", true, cwd)) {
-			for (const note of task.notes) lines.push(theme.fg("dim", `    note: ${note}`));
+			for (const note of task.notes) lines.push(`${stem}${theme.fg("dim", `note: ${note}`)}`);
 		}
 	}
 	return lines;
@@ -472,7 +506,7 @@ export default function taskPanel(pi: ExtensionAPI): void {
 		ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => ({
 			invalidate() {},
 			render(width: number): string[] {
-				return renderPanelLines(state, theme, ctx.cwd).map((line) => truncateToWidth(line, width, ""));
+				return renderPanelWidgetLines(state, theme, ctx.cwd, width);
 			},
 		}), { placement: "aboveEditor" });
 	};

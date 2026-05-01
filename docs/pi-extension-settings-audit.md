@@ -25,7 +25,7 @@ Settings persist under `vstack.extensionManager.config.<packageName>` in Pi `set
 ### `pi-questions`
 
 - Toggle: `enabled` registers/unregisters the `question` tool, `/question-demo`, popup UI, and bridge question service after reload.
-- Useful settings: popup width/max-height, visible option rows, default header, bridge reply enablement.
+- Useful settings: popup width/max-height, visible option rows, default header, bridge reply enablement. Large free-form answer results use Pi default tool-result truncation with temp-file preservation.
 - Apply semantics: popup and bridge settings are live.
 
 ### `pi-session-bridge`
@@ -37,8 +37,8 @@ Settings persist under `vstack.extensionManager.config.<packageName>` in Pi `set
 ### `pi-subagents-tmux`
 
 - Toggle: `enabled` registers/unregisters the `subagent` tool, `/agents` command, and persistent pane polling after reload.
-- Useful settings: max parallel tasks, max one-shot concurrency, collapsed result size, parent/child poll intervals.
-- Apply semantics: execution/render limits are live; polling interval changes need reload/session restart.
+- Useful settings: max parallel tasks, max one-shot concurrency, collapsed result size, result truncation/full-output preservation, parent/child poll intervals.
+- Apply semantics: execution/render/output limits are live; polling interval changes need reload/session restart.
 
 ### `pi-statusline`
 
@@ -54,9 +54,9 @@ Settings persist under `vstack.extensionManager.config.<packageName>` in Pi `set
 
 ### `pi-qol`
 
-- Toggle: `enabled` installs/removes QOL editor helpers and `/qol` after reload.
-- Useful settings: Shift+Enter newline, fallback newline key, image chip rendering, chip style, attachment count badge, hidden-thinking placeholder preference.
-- Apply semantics: image/status settings are live; editor binding needs reload. Hidden-thinking is a settings contract only until Pi exposes an assistant-message renderer hook.
+- Toggle: `enabled` installs/removes QOL editor helpers, `/qol`, and QOL compaction hooks after reload.
+- Useful settings: Shift+Enter newline, fallback newline key, image chip rendering, attachment count badge, session commands, terminal/tmux notification triggers/channels (including active-window bell suppression and tmux client-TTY native notifications for Ghostty), custom compaction model/profile/remote endpoint, branch summary override, idle compaction thresholds, hidden-thinking placeholder preference.
+- Apply semantics: image/status, notification, and compaction behavior settings are live; editor and command registration need reload. Hidden-thinking is a settings contract only until Pi exposes an assistant-message renderer hook.
 
 ### `pi-output-policy`
 
@@ -67,8 +67,8 @@ Settings persist under `vstack.extensionManager.config.<packageName>` in Pi `set
 ### `pi-tool-renderer`
 
 - Toggle: `enabled` registers/unregisters compact built-in tool renderers after reload.
-- Useful settings: command preview chars, bash/read/search/edit/write preview lines, max render line width.
-- Apply semantics: preview settings are live; renderer registration needs reload.
+- Useful settings: command preview chars, bash/read/search/edit/write preview lines, optional `tool_batch` composite tool and max batch calls, max render line width.
+- Apply semantics: preview and batch-limit settings are live; renderer/batch-tool registration needs reload.
 
 ### `pi-task-panel`
 

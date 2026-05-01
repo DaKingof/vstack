@@ -9,6 +9,7 @@ Structured inline questions for Pi, with multi-tab categories and `pi-bridge` re
 - Interactive UI that takes over the editor input area by default, matching opencode/Claude-style prompts.
 - Optional legacy floating overlay mode via settings.
 - Session-bridge integration: external controllers can list, answer, reject, and stream question events.
+- Notifies `pi-qol` before prompts open (and emits `vstack:pi-questions:opened`) so terminal/tmux bell notifications work for both `question` tool and `ctx.askQuestions(...)` requests.
 
 ## Payload
 
@@ -46,7 +47,7 @@ Cancellation/reject:
 
 ## Free-form answers
 
-Set `allowCustom: true` on a tab to add a free-type row. Selecting that row opens an inline text editor; the submitted text is returned in that tab's answer array. Bridge callers may provide the same custom answer by passing any non-empty string for that tab when `allowCustom` is true.
+Set `allowCustom: true` on a tab to add a free-type row. Selecting that row opens an inline text editor; the submitted text is returned in that tab's answer array. Bridge callers may provide the same custom answer by passing any non-empty string for that tab when `allowCustom` is true. Extremely large result JSON is truncated to Pi's default 50KB/2000-line tool limit and saved to a temp file with the path included in the result.
 
 Optional custom fields:
 

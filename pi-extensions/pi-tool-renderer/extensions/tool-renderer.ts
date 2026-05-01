@@ -354,11 +354,13 @@ function stackItemPreview(item: StackItem, cwd?: string): string {
 }
 
 function renderStackItemText(item: StackItem, theme: any, expanded: boolean, cwd?: string, branch = "├"): string {
+	const isLast = branch === "└";
+	const stem = theme.fg("muted", isLast ? "     " : "  │  ");
 	let text = `${theme.fg("muted", `  ${branch} `)}${stackItemCallText(item, theme, cwd)}${theme.fg("dim", " · ")}${stackItemSummary(item, theme)}`;
 	if (expanded) {
 		const previewText = stackItemPreview(item, cwd);
 		if (previewText) {
-			const lines = previewText.split(/\r?\n/).map((line) => `${theme.fg("muted", "  │ ")}${theme.fg("dim", line)}`);
+			const lines = previewText.split(/\r?\n/).map((line) => `${stem}${theme.fg("dim", line)}`);
 			text += `\n${lines.join("\n")}`;
 		}
 	}
@@ -398,7 +400,7 @@ function renderStackBatch(batch: StackBatch, theme: any, expanded: boolean, cwd?
 	if (childDisplay === "anchor-list" || (childDisplay === "headline" && expanded)) {
 		const items = batch.items.map((id) => stackItems.get(id)).filter(Boolean) as StackItem[];
 		items.forEach((item, index) => {
-			text += `\n${renderStackItemText(item, theme, false, cwd, index === items.length - 1 ? "└" : "├")}`;
+			text += `\n${renderStackItemText(item, theme, expanded, cwd, index === items.length - 1 ? "└" : "├")}`;
 		});
 	}
 	return makeTruncatedLines(text);
@@ -454,6 +456,25 @@ function registerStackEvents(pi: ExtensionAPI): void {
 type BuiltInToolName = StackableToolName | "edit" | "write";
 type BuiltInToolSet = Partial<Record<BuiltInToolName, any>>;
 
+type BatchToolCall = { args: Record<string, any>; tool: StackableToolName };
+
+interface BatchToolItem {
+	args: Record<string, any>;
+	details?: unknown;
+	index: number;
+	isError: boolean;
+	resultText: string;
+	toolName: StackableToolName;
+	truncated: boolean;
+}
+
+interface BatchToolDetails {
+	items: BatchToolItem[];
+	failed: number;
+	succeeded: number;
+	total: number;
+}
+
 const builtInToolCache = new Map<string, BuiltInToolSet>();
 
 function normalizedCwd(cwd?: string): string {
@@ -484,6 +505,169 @@ function getBuiltInTool(agent: any, cwd: string, toolName: BuiltInToolName): any
 
 function contextCwd(context: any, fallback: string): string {
 	return context?.cwd ?? fallback;
+}
+
+const ToolBatchParams = {
+	type: "object",
+	additionalProperties: false,
+	properties: {
+		calls: {
+			type: "array",
+			minItems: 1,
+			items: {
+				type: "object",
+				additionalProperties: false,
+				properties: {
+					tool: { type: "string", enum: ["read", "grep", "find", "ls", "bash"], description: "Tool to run inside the batch." },
+					args: { type: "object", additionalProperties: true, description: "Arguments for the selected tool." },
+				},
+				required: ["tool", "args"],
+			},
+		},
+		concurrency: { type: "number", description: "Maximum calls to run at once. Defaults to all calls, capped by settings." },
+	},
+	required: ["calls"],
+} as const;
+
+function normalizeBatchCalls(value: unknown): BatchToolCall[] {
+	if (!Array.isArray(value)) return [];
+	const calls: BatchToolCall[] = [];
+	for (const raw of value) {
+		if (!raw || typeof raw !== "object") continue;
+		const tool = (raw as any).tool;
+		if (!isStackableToolName(tool)) continue;
+		const args = (raw as any).args && typeof (raw as any).args === "object" ? (raw as any).args : {};
+		calls.push({ args, tool });
+	}
+	return calls;
+}
+
+async function mapBatchWithConcurrency<TIn, TOut>(items: TIn[], concurrency: number, fn: (item: TIn, index: number) => Promise<TOut>): Promise<TOut[]> {
+	const results = new Array<TOut>(items.length);
+	let next = 0;
+	const workers = new Array(Math.max(1, Math.min(concurrency, items.length || 1))).fill(null).map(async () => {
+		while (true) {
+			const index = next++;
+			if (index >= items.length) return;
+			results[index] = await fn(items[index], index);
+		}
+	});
+	await Promise.all(workers);
+	return results;
+}
+
+function batchStackItem(item: BatchToolItem): StackItem {
+	return {
+		args: item.args,
+		batchId: "tool-batch",
+		id: `tool-batch:${item.index}`,
+		isError: item.isError,
+		resultText: item.resultText,
+		status: item.isError ? "error" : "done",
+		toolName: item.toolName,
+		truncated: item.truncated,
+	};
+}
+
+function renderToolBatchText(items: BatchToolItem[], theme: any, expanded: boolean, cwd?: string): string {
+	const failed = items.filter((item) => item.isError).length;
+	const succeeded = items.length - failed;
+	const header =
+		stackPrefix(theme) +
+		theme.fg("toolTitle", theme.bold(`Batch ran ${plural(items.length, "tool")}`)) +
+		theme.fg(failed > 0 ? "warning" : "success", ` · ${succeeded}/${items.length} succeeded`) +
+		(expanded ? "" : theme.fg("dim", " · Ctrl+O to inspect"));
+	const lines = [header];
+	items.forEach((item, index) => {
+		const stackItem = batchStackItem(item);
+		lines.push(renderStackItemText(stackItem, theme, expanded, cwd, index === items.length - 1 ? "└" : "├"));
+	});
+	return lines.join("\n");
+}
+
+function toolBatchOutput(items: BatchToolItem[]): string {
+	const failed = items.filter((item) => item.isError).length;
+	const lines = [`Batch: ${items.length - failed}/${items.length} succeeded`];
+	for (const item of items) {
+		const label = `${item.index + 1}. ${item.toolName}`;
+		lines.push("", `## ${label}`, item.isError ? "Status: failed" : "Status: completed", item.resultText || "(no output)");
+	}
+	return lines.join("\n");
+}
+
+function registerToolBatch(pi: ExtensionAPI, agent: any, cwd: string): void {
+	pi.registerTool({
+		renderShell: "self",
+		name: "tool_batch",
+		label: "Tool Batch",
+		description:
+			"Run multiple independent read/grep/find/ls/bash calls as one composite tool with a single stacked renderer. Use bash only for diagnostic commands whose side effects and ordering do not matter.",
+		promptSnippet: "Run multiple independent read/search/list/bash calls as one compact batch.",
+		promptGuidelines: [
+			"Use tool_batch when you need 2+ independent read, grep, find, ls, or diagnostic bash calls and want one compact stacked result.",
+			"Do not use tool_batch for edit/write or for bash commands that mutate files, depend on ordering, need streaming output, or should be inspected as separate commands.",
+		],
+		parameters: ToolBatchParams as never,
+		async execute(toolCallId: string, params: any, signal: AbortSignal | undefined, _onUpdate: unknown, context: any) {
+			const effectiveCwd = contextCwd(context, cwd);
+			const calls = normalizeBatchCalls(params?.calls);
+			const maxCalls = Math.max(1, Math.floor(settingNumber("batchMaxCalls", 8, effectiveCwd)));
+			if (calls.length === 0) return { content: [{ type: "text", text: "No valid calls provided." }], details: { failed: 0, items: [], succeeded: 0, total: 0 } };
+			if (calls.length > maxCalls) {
+				return {
+					content: [{ type: "text", text: `Too many calls (${calls.length}). Max is ${maxCalls}.` }],
+					details: { failed: calls.length, items: [], succeeded: 0, total: calls.length },
+					isError: true,
+				};
+			}
+			const concurrency = Math.max(1, Math.min(calls.length, Math.floor(Number(params?.concurrency) || calls.length), maxCalls));
+			const items = await mapBatchWithConcurrency(calls, concurrency, async (call, index): Promise<BatchToolItem> => {
+				try {
+					const original = getBuiltInTool(agent, effectiveCwd, call.tool);
+					if (!original?.execute) throw new Error(`Built-in tool unavailable: ${call.tool}`);
+					const result = await original.execute(`${toolCallId}:${index}`, call.args, signal, undefined);
+					return {
+						args: call.args,
+						details: result?.details,
+						index,
+						isError: Boolean(result?.isError),
+						resultText: textContent(result),
+						toolName: call.tool,
+						truncated: resultTruncated(result),
+					};
+				} catch (error) {
+					return {
+						args: call.args,
+						index,
+						isError: true,
+						resultText: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+						toolName: call.tool,
+						truncated: false,
+					};
+				}
+			});
+			const failed = items.filter((item) => item.isError).length;
+			const details: BatchToolDetails = { failed, items, succeeded: items.length - failed, total: items.length };
+			return { content: [{ type: "text", text: toolBatchOutput(items) }], details, isError: failed > 0 };
+		},
+		renderCall(args: any, theme: any, context: any) {
+			const calls = normalizeBatchCalls(args?.calls);
+			const effectiveCwd = context?.cwd ?? cwd;
+			const lines = [stackPrefix(theme) + theme.fg("toolTitle", theme.bold(`${calls.length || 0} batched tool${calls.length === 1 ? "" : "s"} launching`))];
+			calls.slice(0, 12).forEach((call, index) => {
+				const item: StackItem = { args: call.args, batchId: "call", id: String(index), isError: false, resultText: "", status: "running", toolName: call.tool, truncated: false };
+				lines.push(`${theme.fg("muted", `  ${index === calls.length - 1 ? "└" : "├"} `)}${stackItemCallText(item, theme, effectiveCwd)}`);
+			});
+			if (calls.length > 12) lines.push(theme.fg("muted", `  └ … +${calls.length - 12} more`));
+			return makeTruncatedLines(lines.join("\n"));
+		},
+		renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
+			if (isPartial) return makeTruncatedLines(stackPrefix(theme) + theme.fg("warning", "Running batched tools…"));
+			const details = result.details as BatchToolDetails | undefined;
+			if (!details?.items) return makeTruncatedLines(textContent(result) || "(no output)");
+			return makeTruncatedLines(renderToolBatchText(details.items, theme, expanded, context?.cwd ?? cwd));
+		},
+	});
 }
 
 function registerRead(pi: ExtensionAPI, agent: any, cwd: string): void {
@@ -668,4 +852,5 @@ export default async function toolRenderer(pi: ExtensionAPI): Promise<void> {
 	registerReadOnly(pi, agent, cwd, "grep");
 	registerReadOnly(pi, agent, cwd, "find");
 	registerReadOnly(pi, agent, cwd, "ls");
+	if (settingBoolean("registerBatchTool", true, cwd)) registerToolBatch(pi, agent, cwd);
 }

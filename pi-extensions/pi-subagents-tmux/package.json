@@ -68,6 +68,42 @@
           "apply": "live"
         },
         {
+          "key": "truncateResults",
+          "label": "Truncate subagent results",
+          "description": "Apply Pi-sized inline caps to subagent tool output and details, with full-output preservation when enabled.",
+          "type": "boolean",
+          "default": true,
+          "category": "Output",
+          "apply": "live"
+        },
+        {
+          "key": "resultMaxBytes",
+          "label": "Result max bytes",
+          "description": "Maximum inline bytes kept for each subagent result before truncation.",
+          "type": "number",
+          "default": 102400,
+          "category": "Output",
+          "apply": "live"
+        },
+        {
+          "key": "resultMaxLines",
+          "label": "Result max lines",
+          "description": "Maximum inline lines kept for each subagent result before truncation.",
+          "type": "number",
+          "default": 4000,
+          "category": "Output",
+          "apply": "live"
+        },
+        {
+          "key": "preserveFullOutput",
+          "label": "Preserve full subagent output",
+          "description": "Write oversized full subagent output to the session runtime and include the artifact path in tool results.",
+          "type": "boolean",
+          "default": true,
+          "category": "Output",
+          "apply": "live"
+        },
+        {
           "key": "completionPollMs",
           "label": "Completion poll interval",
           "description": "Parent-session polling interval for persistent pane completion files.",

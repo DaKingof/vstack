@@ -1,11 +1,25 @@
-import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import {
+	DEFAULT_MAX_BYTES,
+	DEFAULT_MAX_LINES,
+	formatSize,
+	type AgentToolResult,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type Theme,
+	truncateHead,
+	type TruncationResult,
+	withFileMutationQueue,
+} from "@mariozechner/pi-coding-agent";
 import { Editor, type EditorTheme, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-questions.installed");
 const SERVICE_SYMBOL = Symbol.for("vstack.pi-questions.service");
+const QOL_NOTIFICATION_SERVICE_SYMBOL = Symbol.for("vstack.pi-qol.notification-service");
+const QUESTION_OPENED_EVENT = "vstack:pi-questions:opened";
 const POPUP_WIDTH = 96;
 const POPUP_MAX_HEIGHT = "80%";
 const DEFAULT_RENDER_MODE = "editor";
@@ -17,6 +31,7 @@ type VstackConfig = Record<string, unknown>;
 type QuestionRenderMode = "editor" | "overlay";
 
 type QuestionResult = QuestionAnswerResult | QuestionCancelResult;
+type QuestionToolDetails = QuestionResult & { fullOutputError?: string; fullOutputPath?: string; truncation?: TruncationResult };
 type QuestionSource = "ui" | "bridge" | "tool" | "api" | "shutdown" | "ui_error";
 
 interface QuestionAnswerResult {
@@ -65,6 +80,10 @@ interface QuestionEvent {
 	source?: QuestionSource;
 	request?: QuestionRequest;
 	result?: QuestionResult;
+}
+
+interface QolNotificationService {
+	notifyQuestionOpened(ctx: ExtensionContext | undefined, event: { requestId?: string; request?: QuestionRequest; source?: string }): boolean;
 }
 
 interface QuestionService {
@@ -140,6 +159,70 @@ function settingString(key: string, fallback: string, cwd?: string): string {
 function questionRenderMode(cwd?: string): QuestionRenderMode {
 	const mode = settingString("renderMode", DEFAULT_RENDER_MODE, cwd);
 	return mode === "overlay" ? "overlay" : "editor";
+}
+
+function safeFileName(value: string): string {
+	return value.replace(/[^a-z0-9_.-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "question";
+}
+
+function formatQuestionTruncationNotice(truncation: TruncationResult, fullOutputPath?: string, fullOutputError?: string): string {
+	const omittedLines = Math.max(0, truncation.totalLines - truncation.outputLines);
+	const omittedBytes = Math.max(0, truncation.totalBytes - truncation.outputBytes);
+	const artifact = fullOutputPath
+		? ` Full output saved to: ${fullOutputPath}`
+		: fullOutputError
+			? ` Full output preservation failed: ${fullOutputError}`
+			: "";
+	return `[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(
+		truncation.outputBytes,
+	)} of ${formatSize(truncation.totalBytes)}). ${omittedLines} lines (${formatSize(omittedBytes)}) omitted.${artifact}]`;
+}
+
+function sanitizeDetailValue(value: unknown, depth = 0): unknown {
+	if (depth > 4) return "[Max detail depth reached]";
+	if (value == null || typeof value === "number" || typeof value === "boolean") return value;
+	if (typeof value === "string") return value.length > 8 * 1024 ? `${value.slice(0, 8 * 1024)}… [detail string truncated]` : value;
+	if (Array.isArray(value)) return value.slice(0, 50).map((item) => sanitizeDetailValue(item, depth + 1));
+	if (typeof value === "object") {
+		const out: Record<string, unknown> = {};
+		for (const [index, [key, nested]] of Object.entries(value as Record<string, unknown>).entries()) {
+			if (index >= 80) {
+				out["[truncated]"] = "detail object field cap reached";
+				break;
+			}
+			out[key] = sanitizeDetailValue(nested, depth + 1);
+		}
+		return out;
+	}
+	return String(value);
+}
+
+async function writeFullQuestionResult(result: QuestionResult, toolCallId: string, text: string): Promise<{ error?: string; path?: string }> {
+	try {
+		const dir = await mkdtemp(join(tmpdir(), "pi-question-"));
+		const filePath = join(dir, `${safeFileName(result.requestId || toolCallId || "result")}.json`);
+		await withFileMutationQueue(filePath, async () => {
+			await writeFile(filePath, text, { encoding: "utf-8", mode: 0o600 });
+		});
+		return { path: filePath };
+	} catch (error) {
+		return { error: stringifyError(error) };
+	}
+}
+
+async function makeQuestionToolResult(toolCallId: string, result: QuestionResult): Promise<AgentToolResult<QuestionResult>> {
+	const text = JSON.stringify(result);
+	const truncation = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
+	if (!truncation.truncated) return { content: [{ type: "text", text }], details: result };
+	const artifact = await writeFullQuestionResult(result, toolCallId, text);
+	const details = sanitizeDetailValue(result) as QuestionToolDetails;
+	details.fullOutputError = artifact.error;
+	details.fullOutputPath = artifact.path;
+	details.truncation = truncation;
+	return {
+		content: [{ type: "text", text: `${truncation.content}\n\n${formatQuestionTruncationNotice(truncation, artifact.path, artifact.error)}` }],
+		details,
+	};
 }
 
 const QUESTION_TOOL_PARAMETERS = {
@@ -353,6 +436,20 @@ function toPendingView(pending: PendingQuestion): PendingQuestionView {
 	};
 }
 
+let emitQuestionOpenedEvent: ((event: QuestionEvent) => void) | undefined;
+
+function notifyQuestionOpened(ctx: ExtensionContext, event: QuestionEvent): void {
+	const service = (globalThis as unknown as Record<PropertyKey, unknown>)[QOL_NOTIFICATION_SERVICE_SYMBOL] as QolNotificationService | undefined;
+	if (service && typeof service.notifyQuestionOpened === "function") {
+		try {
+			service.notifyQuestionOpened(ctx, { requestId: event.requestId, request: event.request, source: event.source });
+		} catch {
+			// Notifications are best-effort; still emit the shared event below.
+		}
+	}
+	emitQuestionOpenedEvent?.(event);
+}
+
 class QuestionServiceImpl implements QuestionService {
 	private readonly listeners = new Set<(event: QuestionEvent) => void>();
 	private readonly pending = new Map<string, PendingQuestion>();
@@ -391,7 +488,9 @@ class QuestionServiceImpl implements QuestionService {
 		};
 
 		this.pending.set(request.id, pending);
-		this.publish({ action: "opened", openedAt, request, requestId: request.id, source });
+		const openedEvent: QuestionEvent = { action: "opened", openedAt, request, requestId: request.id, source };
+		notifyQuestionOpened(ctx, openedEvent);
+		this.publish(openedEvent);
 
 		if (ctx.hasUI) {
 			void openQuestionUi(ctx, pending).catch((error) => {
@@ -762,6 +861,7 @@ export default function questions(pi: ExtensionAPI): void {
 	if (!settingBoolean("enabled", true)) return;
 
 	const service = getService();
+	emitQuestionOpenedEvent = (event) => pi.events.emit(QUESTION_OPENED_EVENT, { requestId: event.requestId, request: event.request, source: event.source });
 	let activeCtx: ExtensionContext | undefined;
 
 	pi.on("session_start", (_event, ctx) => {
@@ -771,13 +871,14 @@ export default function questions(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", () => {
 		service.shutdown();
+		emitQuestionOpenedEvent = undefined;
 	});
 
 	pi.registerTool({
 		renderShell: "self",
 		name: "question",
 		label: "Question",
-		description: "Ask the user one or more structured multiple-choice questions, optionally with free-form custom answers. Returns selected labels/text per tab.",
+		description: `Ask the user one or more structured multiple-choice questions, optionally with free-form custom answers. Returns selected labels/text per tab. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)} if a free-form answer is very large, with the full JSON saved to a temp file.`,
 		promptSnippet: "Ask the user structured multiple-choice questions and return selected labels or allowed custom text.",
 		promptGuidelines: [
 			"Use question when you need explicit user clarification before proceeding; keep options concise and mutually exclusive unless multiple=true.",
@@ -785,20 +886,20 @@ export default function questions(pi: ExtensionAPI): void {
 			"Set question allowCustom=true only when an option list may not cover the user's answer; custom text is returned in that tab's answers array.",
 		],
 		parameters: QUESTION_TOOL_PARAMETERS as never,
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<QuestionResult>> {
+		async execute(toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<QuestionResult>> {
 			const runCtx = ctx ?? activeCtx;
 			if (!runCtx) {
 				const result: QuestionCancelResult = { cancelled: true, error: "No active Pi context", requestId: "que_unavailable" };
-				return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+				return makeQuestionToolResult(toolCallId, result);
 			}
 			if (!runCtx.hasUI) {
 				const result: QuestionCancelResult = { cancelled: true, error: "No interactive UI available for question prompt", requestId: typeof params.id === "string" ? params.id : "que_unavailable" };
-				return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+				return makeQuestionToolResult(toolCallId, result);
 			}
 			activeCtx = runCtx;
 			attachContext(runCtx, service);
 			const result = await service.ask(runCtx, params, "tool");
-			return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+			return makeQuestionToolResult(toolCallId, result);
 		},
 		renderCall() {
 			return compactLines(() => []);
@@ -824,6 +925,8 @@ export default function questions(pi: ExtensionAPI): void {
 					const label = `  ${theme.fg("muted", "•")} ${theme.fg("accent", `${labelText}: `)}`;
 					lines.push(...wrapStyled(label, theme.fg("text", answerText), width));
 				}
+				const fullOutputPath = (details as QuestionToolDetails).fullOutputPath;
+				if (fullOutputPath) lines.push(theme.fg("dim", `  Full output: ${fullOutputPath}`));
 				return lines;
 			});
 		},

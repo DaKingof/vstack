@@ -374,7 +374,7 @@ All vstack Pi packages declare `vstack.extensionManager.settings` metadata, incl
 
 - **Purpose:** Structured multi-tab popup questions for the model and bridge-driven replies.
 - **Tools/commands:** `question`, `/question-demo`.
-- **Settings:** popup dimensions, visible option rows, default header, bridge reply enablement.
+- **Settings:** popup dimensions, visible option rows, default header, bridge reply enablement; large free-form answers are truncated with temp-file preservation.
 - **More:** [pi-extensions/pi-questions/README.md](pi-extensions/pi-questions/README.md).
 
 #### `pi-session-bridge`
@@ -389,7 +389,7 @@ All vstack Pi packages declare `vstack.extensionManager.settings` metadata, incl
 
 - **Purpose:** Delegates work to `.pi/agents`, `.claude/agents`, and user agents with isolated Pi context; supports persistent tmux panes.
 - **Tools/commands:** `subagent`, `/agents`.
-- **Settings:** parallel task limit, concurrency, collapsed result size, pane polling intervals.
+- **Settings:** parallel task limit, concurrency, collapsed result size, result truncation/full-output preservation, pane polling intervals.
 - **More:** [pi-extensions/pi-subagents-tmux/README.md](pi-extensions/pi-subagents-tmux/README.md).
 
 #### `pi-statusline`
@@ -408,9 +408,9 @@ All vstack Pi packages declare `vstack.extensionManager.settings` metadata, incl
 
 #### `pi-qol`
 
-- **Purpose:** Reliable multiline input, styled image placeholder chips, and hidden-thinking placeholder settings contract.
-- **Commands:** `/qol status`, `/qol attachments`, `/qol reset`.
-- **Settings:** Shift+Enter handling, fallback newline key, image chip style, attachment count badge, hidden-thinking placeholder preference.
+- **Purpose:** Reliable multiline input, styled image placeholder chips, session handoff/name helpers, terminal/tmux notifications, custom compaction, and hidden-thinking placeholder settings contract.
+- **Commands:** `/qol status`, `/qol notify-test`, `/qol attachments`, `/qol reset`, `/session-name`, `/handoff`.
+- **Settings:** Shift+Enter handling, fallback newline key, image chips/status, session commands, notification triggers/channels, custom/remote/idle compaction, branch summary override, hidden-thinking placeholder preference.
 - **More:** [pi-extensions/pi-qol/README.md](pi-extensions/pi-qol/README.md).
 
 #### `pi-output-policy`
@@ -422,8 +422,8 @@ All vstack Pi packages declare `vstack.extensionManager.settings` metadata, incl
 #### `pi-tool-renderer`
 
 - **Purpose:** Compact Claude/opencode-style built-in tool renderers while preserving original tool execution.
-- **Behavior:** `read`/`bash` collapse to concise summaries; mutation tools show stats and bounded expanded previews via Pi's normal `Ctrl+O` model.
-- **Settings:** preview line counts, command preview width, renderer line width.
+- **Behavior:** `read`/`bash` collapse to concise summaries; mutation tools show stats and bounded expanded previews via Pi's normal `Ctrl+O` model; optional `tool_batch` runs independent read/search/list/diagnostic bash calls as one compact renderable unit.
+- **Settings:** preview line counts, command preview width, batch tool toggle/limit, renderer line width.
 - **More:** [pi-extensions/pi-tool-renderer/README.md](pi-extensions/pi-tool-renderer/README.md).
 
 #### `pi-task-panel`
