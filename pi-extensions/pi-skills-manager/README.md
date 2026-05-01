@@ -16,7 +16,7 @@ Dedicated Pi skills manager for vstack packages.
 - Hides Pi's default startup `[Skills]` block so skill discovery lives in the dedicated manager.
 - Shows project/global skills separately from package/library skills.
 - Searches by name, description, source, scope, and path.
-- Inserts selected enabled skills into the editor as `[skill] <name>` markers; the marker expands into full `<skill>` content before the prompt is sent.
+- Inserts selected enabled skills into the editor as `[skill] <name>` markers; before the prompt is sent, the marker is replaced with a compact `● skills ... loaded` chat row while the full `<skill>` content is injected into model context.
 - Previews full metadata/frontmatter and rendered skill content.
 - Toggles skills on/off through Pi settings filters. Run `/reload` after toggles to fully apply prompt/resource changes.
 - Creates new project/global skills with the current model and thinking level, falling back to a deterministic template if model auth is unavailable.
