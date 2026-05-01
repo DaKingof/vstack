@@ -617,6 +617,10 @@ export default function statusline(pi: ExtensionAPI) {
 		void refresh(ctx);
 		requestRender();
 	});
+	pi.on("thinking_level_select", (_event, ctx) => {
+		if (!ctx.hasUI) return;
+		requestRender();
+	});
 	pi.on("agent_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
 		void refresh(ctx);

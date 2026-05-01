@@ -911,7 +911,7 @@ function resolveCompactionModel(ctx: ExtensionContext): any | undefined {
 	const withoutThinking = configured.replace(/:(off|minimal|low|medium|high|xhigh)$/i, "");
 	const slash = withoutThinking.indexOf("/");
 	if (slash > 0) return ctx.modelRegistry.find(withoutThinking.slice(0, slash), withoutThinking.slice(slash + 1));
-	const providers = [ctx.model?.provider, "google", "openai", "anthropic"].filter((value): value is string => typeof value === "string");
+	const providers = [ctx.model?.provider, "google", "openai", "anthropic", "mistral", "moonshot", "cloudflare-ai-gateway", "cloudflare-workers-ai"].filter((value): value is string => typeof value === "string");
 	for (const provider of providers) {
 		const model = ctx.modelRegistry.find(provider, withoutThinking);
 		if (model) return model;

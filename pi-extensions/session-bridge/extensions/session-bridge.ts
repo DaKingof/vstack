@@ -504,12 +504,13 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		"tool_execution_update",
 		"tool_execution_end",
 		"model_select",
+		"thinking_level_select",
 		"session_compact",
 		"session_tree",
 	] as const) {
 		pi.on(eventName as never, async (event: unknown, ctx: ExtensionContext) => {
 			currentCtx = ctx;
-			if (eventName === "agent_start" || eventName === "agent_end" || eventName === "model_select") {
+			if (eventName === "agent_start" || eventName === "agent_end" || eventName === "model_select" || eventName === "thinking_level_select") {
 				writeRegistrySoon(eventName);
 			}
 			publish(eventName, event);
