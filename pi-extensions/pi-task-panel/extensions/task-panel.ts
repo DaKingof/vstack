@@ -1,6 +1,6 @@
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { AgentToolResult, ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme, ToolExecutionMode } from "@mariozechner/pi-coding-agent";
-import { Text, truncateToWidth } from "@mariozechner/pi-tui";
+import { Text, matchesKey, truncateToWidth, visibleWidth, type AutocompleteItem } from "@mariozechner/pi-tui";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -11,11 +11,15 @@ const STATE_TYPE = "vstack-task-panel:state";
 const TASK_CONTEXT_TYPE = "vstack-task-panel:context";
 const TASK_COMPLETE_MESSAGE_TYPE = "vstack-task-panel:complete";
 const WIDGET_KEY = "vstack-task-panel";
+const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 const PANEL_INDENT = "  ";
 const PANEL_BAR = "┃";
 const PANEL_BAR_COLOR = "borderAccent";
 const PANEL_TITLE_COLOR = "customMessageLabel";
 const PANEL_RULE_COLOR = "borderMuted";
+const POPUP_PADDING_X = 2;
+const POPUP_PADDING_Y = 1;
+const MANAGE_TASK_ROWS = 12;
 
 type Status = "pending" | "in_progress" | "completed" | "abandoned";
 type PanelState = "hidden" | "compact" | "expanded";
@@ -36,12 +40,16 @@ interface PhaseItem {
 	order: number;
 }
 
-interface TodoState {
+interface TaskPanelState {
 	version: 1;
 	panel: PanelState;
 	phases: PhaseItem[];
 	tasks: TaskItem[];
 	updatedAt: string;
+}
+
+interface VstackModalLock {
+	depth: number;
 }
 
 function expandHome(input: string): string {
@@ -98,22 +106,56 @@ function settingString(key: string, fallback: string, cwd?: string): string {
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
 }
 
+function acquireVstackModalLock(): () => void {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const existing = host[VSTACK_MODAL_LOCK_SYMBOL] as VstackModalLock | undefined;
+	const lock = existing && typeof existing.depth === "number" ? existing : { depth: 0 };
+	host[VSTACK_MODAL_LOCK_SYMBOL] = lock;
+	lock.depth += 1;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		lock.depth = Math.max(0, lock.depth - 1);
+	};
+}
+
+function padAnsi(text: string, width: number): string {
+	const truncated = truncateToWidth(text, width, "");
+	return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated)))}`;
+}
+
+function framePopup(lines: string[], width: number, theme: Theme): string[] {
+	if (width < 8) return lines.map((line) => truncateToWidth(line, width, ""));
+	const border = (text: string) => theme.fg("borderAccent", text);
+	const contentWidth = Math.max(1, width - 2 - POPUP_PADDING_X * 2);
+	const blank = `${border("┃")}${" ".repeat(width - 2)}${border("┃")}`;
+	const framed = [`${border("┏")}${border("━".repeat(width - 2))}${border("┓")}`];
+	for (let i = 0; i < POPUP_PADDING_Y; i += 1) framed.push(blank);
+	for (const line of lines) {
+		framed.push(`${border("┃")}${" ".repeat(POPUP_PADDING_X)}${padAnsi(line, contentWidth)}${" ".repeat(POPUP_PADDING_X)}${border("┃")}`);
+	}
+	for (let i = 0; i < POPUP_PADDING_Y; i += 1) framed.push(blank);
+	framed.push(`${border("┗")}${border("━".repeat(width - 2))}${border("┛")}`);
+	return framed.map((line) => truncateToWidth(line, width, ""));
+}
+
 function newId(prefix: string): string {
 	return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function emptyState(cwd?: string): TodoState {
+function emptyState(cwd?: string): TaskPanelState {
 	const panel = settingString("panelDefaultState", "compact", cwd) as PanelState;
 	return { panel: panel === "hidden" || panel === "expanded" ? panel : "compact", phases: [], tasks: [], updatedAt: new Date().toISOString(), version: 1 };
 }
 
-function cloneState(state: TodoState): TodoState {
-	return JSON.parse(JSON.stringify(state)) as TodoState;
+function cloneState(state: TaskPanelState): TaskPanelState {
+	return JSON.parse(JSON.stringify(state)) as TaskPanelState;
 }
 
-function normalizeState(value: unknown, cwd?: string): TodoState {
+function normalizeState(value: unknown, cwd?: string): TaskPanelState {
 	if (!value || typeof value !== "object") return emptyState(cwd);
-	const candidate = value as Partial<TodoState>;
+	const candidate = value as Partial<TaskPanelState>;
 	return {
 		version: 1,
 		panel: candidate.panel === "hidden" || candidate.panel === "expanded" ? candidate.panel : "compact",
@@ -173,11 +215,11 @@ function panelToggleHint(cwd: string): string {
 	return shortcut === "none" ? "" : `${formatShortcutHint(shortcut)} toggle`;
 }
 
-function activeTask(state: TodoState): TaskItem | undefined {
+function activeTask(state: TaskPanelState): TaskItem | undefined {
 	return state.tasks.find((task) => task.status === "in_progress") ?? sortTasks(state.tasks).find((task) => task.status === "pending");
 }
 
-function ensureActiveTask(state: TodoState): TaskItem | undefined {
+function ensureActiveTask(state: TaskPanelState): TaskItem | undefined {
 	const current = state.tasks.find((task) => task.status === "in_progress");
 	if (current) return current;
 	const next = sortTasks(state.tasks).find((task) => task.status === "pending");
@@ -185,15 +227,15 @@ function ensureActiveTask(state: TodoState): TaskItem | undefined {
 	return next;
 }
 
-function remainingCount(state: TodoState): number {
+function remainingCount(state: TaskPanelState): number {
 	return state.tasks.filter((task) => task.status === "pending" || task.status === "in_progress").length;
 }
 
-function completedCount(state: TodoState): number {
+function completedCount(state: TaskPanelState): number {
 	return state.tasks.filter((task) => task.status === "completed").length;
 }
 
-function phaseTitle(state: TodoState, phaseId?: string): string {
+function phaseTitle(state: TaskPanelState, phaseId?: string): string {
 	return state.phases.find((phase) => phase.id === phaseId)?.title ?? "Tasks";
 }
 
@@ -201,7 +243,7 @@ function sortTasks(tasks: TaskItem[]): TaskItem[] {
 	return [...tasks].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 }
 
-function ensurePhase(state: TodoState, title: string): string {
+function ensurePhase(state: TaskPanelState, title: string): string {
 	const trimmed = title.trim();
 	const existing = state.phases.find((phase) => phase.title.toLowerCase() === trimmed.toLowerCase());
 	if (existing) return existing.id;
@@ -210,7 +252,7 @@ function ensurePhase(state: TodoState, title: string): string {
 	return phase.id;
 }
 
-function updatePanelAfterTaskChange(state: TodoState, cwd?: string): void {
+function updatePanelAfterTaskChange(state: TaskPanelState, cwd?: string): void {
 	const active = sortTasks(state.tasks.filter((task) => task.status === "in_progress"));
 	for (const task of active.slice(1)) task.status = "pending";
 	const remaining = remainingCount(state);
@@ -224,7 +266,7 @@ function updatePanelAfterTaskChange(state: TodoState, cwd?: string): void {
 	}
 }
 
-function addTask(state: TodoState, content: string, phaseTitleText?: string, cwd?: string): TaskItem {
+function addTask(state: TaskPanelState, content: string, phaseTitleText?: string, cwd?: string): TaskItem {
 	const task: TaskItem = {
 		content: content.trim(),
 		id: newId("task"),
@@ -238,18 +280,18 @@ function addTask(state: TodoState, content: string, phaseTitleText?: string, cwd
 	return task;
 }
 
-function findTask(state: TodoState, token: string): TaskItem | undefined {
+function findTask(state: TaskPanelState, token: string): TaskItem | undefined {
 	const trimmed = token.trim();
 	if (!trimmed) return undefined;
 	const needle = trimmed.toLowerCase();
 	return state.tasks.find((task) => task.id === trimmed) ?? state.tasks.find((task) => task.content.toLowerCase().includes(needle));
 }
 
-function findTaskOrActive(state: TodoState, token: string): TaskItem | undefined {
+function findTaskOrActive(state: TaskPanelState, token: string): TaskItem | undefined {
 	return findTask(state, token) ?? (!token.trim() ? activeTask(state) : undefined);
 }
 
-function startTask(state: TodoState, token: string, cwd?: string): TaskItem | undefined {
+function startTask(state: TaskPanelState, token: string, cwd?: string): TaskItem | undefined {
 	const task = findTaskOrActive(state, token);
 	if (!task) return undefined;
 	for (const candidate of state.tasks) if (candidate.status === "in_progress") candidate.status = "pending";
@@ -262,7 +304,7 @@ function isStatus(value: unknown): value is Status {
 	return value === "pending" || value === "in_progress" || value === "completed" || value === "abandoned";
 }
 
-function markStatus(state: TodoState, token: string, status: Status, cwd?: string): TaskItem | undefined {
+function markStatus(state: TaskPanelState, token: string, status: Status, cwd?: string): TaskItem | undefined {
 	const task = findTaskOrActive(state, token);
 	if (!task) return undefined;
 	task.status = status;
@@ -270,7 +312,7 @@ function markStatus(state: TodoState, token: string, status: Status, cwd?: strin
 	return task;
 }
 
-function removeTask(state: TodoState, token: string, cwd?: string): boolean {
+function removeTask(state: TaskPanelState, token: string, cwd?: string): boolean {
 	const task = findTask(state, token);
 	if (!task) return false;
 	state.tasks = state.tasks.filter((candidate) => candidate.id !== task.id);
@@ -278,15 +320,24 @@ function removeTask(state: TodoState, token: string, cwd?: string): boolean {
 	return true;
 }
 
-function toMarkdown(state: TodoState): string {
+function editableStatusLabel(status: Status): string {
+	switch (status) {
+		case "in_progress": return "active";
+		case "completed": return "done";
+		case "abandoned": return "dropped";
+		case "pending": return "pending";
+	}
+}
+
+function toEditableText(state: TaskPanelState): string {
 	const lines = ["# Tasks", ""];
 	const phaseIds = new Set(state.tasks.map((task) => task.phaseId).filter(Boolean) as string[]);
 	const phases = state.phases.filter((phase) => phaseIds.has(phase.id)).sort((a, b) => a.order - b.order);
 	const unphased = sortTasks(state.tasks.filter((task) => !task.phaseId));
 	const renderTask = (task: TaskItem) => {
-		const box = task.status === "completed" ? "[x]" : task.status === "abandoned" ? "[-]" : task.status === "in_progress" ? "[>]" : "[ ]";
-		lines.push(`- ${box} ${task.content} <!-- ${task.id} -->`);
-		for (const note of task.notes) lines.push(`  - note: ${note}`);
+		const status = task.status === "pending" ? "" : ` (${editableStatusLabel(task.status)})`;
+		lines.push(`- ${task.content}${status}`);
+		for (const note of task.notes) lines.push(`  note: ${note}`);
 	};
 	if (unphased.length > 0) unphased.forEach(renderTask);
 	for (const phase of phases) {
@@ -296,42 +347,69 @@ function toMarkdown(state: TodoState): string {
 	return `${lines.join("\n").trim()}\n`;
 }
 
-function parseMarkdown(text: string, cwd?: string): TodoState {
+function statusFromEditableLabel(label: string | undefined): Status | undefined {
+	const normalized = label?.trim().toLowerCase().replace(/[\s_-]+/g, " ");
+	if (!normalized) return undefined;
+	if (normalized === "active" || normalized === "in progress" || normalized === "current") return "in_progress";
+	if (normalized === "done" || normalized === "complete" || normalized === "completed") return "completed";
+	if (normalized === "drop" || normalized === "dropped" || normalized === "abandoned" || normalized === "cancelled" || normalized === "canceled") return "abandoned";
+	if (normalized === "pending" || normalized === "open") return "pending";
+	return undefined;
+}
+
+function stripEditableStatus(content: string): { content: string; status?: Status } {
+	const match = content.match(/\s+\((active|current|in[\s_-]*progress|pending|open|done|complete|completed|drop|dropped|abandoned|cancelled|canceled)\)\s*$/i);
+	if (!match) return { content: content.trim() };
+	return { content: content.slice(0, match.index).trim(), status: statusFromEditableLabel(match[1]) };
+}
+
+function statusFromLegacyBox(box: string | undefined): Status | undefined {
+	if (!box) return undefined;
+	if (box === "x" || box === "X") return "completed";
+	if (box === "-") return "abandoned";
+	if (box === ">") return "in_progress";
+	return "pending";
+}
+
+function parseEditableText(text: string, cwd?: string): TaskPanelState {
 	const state = emptyState(cwd);
 	let currentPhase: string | undefined;
 	let lastTask: TaskItem | undefined;
 	for (const line of text.split(/\r?\n/)) {
+		if (/^#\s+tasks\s*$/i.test(line.trim())) continue;
 		const phase = line.match(/^##\s+(.+)$/);
 		if (phase) {
 			currentPhase = ensurePhase(state, phase[1] ?? "General");
 			lastTask = undefined;
 			continue;
 		}
-		const note = line.match(/^\s+[-*]\s+note:\s*(.+)$/i);
+		const note = line.match(/^\s+(?:[-*]\s+)?note:\s*(.+)$/i);
 		if (note && lastTask) {
 			lastTask.notes.push(note[1] ?? "");
 			continue;
 		}
-		const task = line.match(/^[-*]\s+\[( |x|-|>)\]\s+(.+?)(?:\s+<!--\s*([^>]+)\s*-->)?\s*$/i);
+		const task = line.match(/^[-*]\s+(?:\[( |x|-|>)\]\s+)?(.+?)(?:\s+<!--\s*([^>]+)\s*-->)?\s*$/i);
 		if (!task) continue;
-		const item = addTask(state, task[2] ?? "Task", undefined, cwd);
+		const parsed = stripEditableStatus(task[2] ?? "Task");
+		if (!parsed.content) continue;
+		const item = addTask(state, parsed.content, undefined, cwd);
 		item.phaseId = currentPhase;
 		item.id = task[3]?.trim() || item.id;
-		item.status = task[1] === "x" || task[1] === "X" ? "completed" : task[1] === "-" ? "abandoned" : task[1] === ">" ? "in_progress" : "pending";
+		item.status = parsed.status ?? statusFromLegacyBox(task[1]) ?? "pending";
 		lastTask = item;
 	}
 	updatePanelAfterTaskChange(state, cwd);
 	return state;
 }
 
-function renderPanelWidgetLines(state: TodoState, theme: Theme, cwd: string, width: number): string[] {
+function renderPanelWidgetLines(state: TaskPanelState, theme: Theme, cwd: string, width: number): string[] {
 	const lines = renderPanelLines(state, theme, cwd);
 	if (lines.length === 0) return [];
 	const prefix = `${PANEL_INDENT}${theme.fg(PANEL_BAR_COLOR, PANEL_BAR)} `;
 	return lines.map((line) => truncateToWidth(`${prefix}${line}`, Math.max(1, width), ""));
 }
 
-function renderPanelHeader(state: TodoState, theme: Theme, active?: TaskItem, hint = ""): string {
+function renderPanelHeader(state: TaskPanelState, theme: Theme, active?: TaskItem, hint = ""): string {
 	const remaining = remainingCount(state);
 	const activePhase = active?.phaseId ? phaseTitle(state, active.phaseId) : "";
 	const phaseBadge = state.panel === "compact" && activePhase && activePhase !== "Tasks"
@@ -346,7 +424,7 @@ function pushTaskGroup(lines: string[], title: string, tasks: TaskItem[], theme:
 	lines.push(...renderTaskGroup(title, tasks, theme, cwd));
 }
 
-function renderPanelLines(state: TodoState, theme: Theme, cwd: string): string[] {
+function renderPanelLines(state: TaskPanelState, theme: Theme, cwd: string): string[] {
 	if (state.tasks.length === 0 || state.panel === "hidden") return [];
 	const remaining = remainingCount(state);
 	const active = activeTask(state);
@@ -401,7 +479,7 @@ function writeFileSafe(path: string, text: string): void {
 	writeFileSync(path, text, "utf8");
 }
 
-function summarize(state: TodoState): string {
+function summarize(state: TaskPanelState): string {
 	return `${state.tasks.length} task(s), ${remainingCount(state)} remaining, panel=${state.panel}`;
 }
 
@@ -409,12 +487,12 @@ function quoteTask(content: string): string {
 	return `"${content.replace(/\s+/g, " ").trim().replace(/"/g, "'")}"`;
 }
 
-function taskSuffix(state: TodoState): string {
+function taskSuffix(state: TaskPanelState): string {
 	const remaining = remainingCount(state);
 	return remaining === 0 ? "all complete" : `${remaining} remaining`;
 }
 
-function toolResultSummary(action: string, message: string, state: TodoState): string {
+function toolResultSummary(action: string, message: string, state: TaskPanelState): string {
 	if (message.startsWith("No task")) return message;
 	const suffix = taskSuffix(state);
 	switch (action) {
@@ -439,7 +517,7 @@ function resultColor(action: string, summary: string): string {
 	return "muted";
 }
 
-function renderTodoToolSummary(summary: string, action: string, theme: Theme): string {
+function renderTaskToolSummary(summary: string, action: string, theme: Theme): string {
 	const color = resultColor(action, summary);
 	const bullet = theme.fg(color, "● ");
 	const taskMatch = summary.match(/^(Task )("[^"]+")( .+)$/);
@@ -449,26 +527,26 @@ function renderTodoToolSummary(summary: string, action: string, theme: Theme): s
 	return `${bullet}${theme.fg("text", summary)}`;
 }
 
-function workflowReminder(state: TodoState): string {
+function workflowReminder(state: TaskPanelState): string {
 	const active = activeTask(state);
 	const activeText = active ? ` Current active task: ${quoteTask(active.content)}.` : "";
 	return `Task workflow reminder:${activeText} Before focused work, ensure the active task matches the work. Before final replies or when status changes, reconcile the task panel: mark_done completed tasks, drop_task obsolete tasks, and add_task discovered follow-ups. mark_done auto-advances to the next pending task.`;
 }
 
-function taskContextMessage(state: TodoState): string {
+function taskContextMessage(state: TaskPanelState): string {
 	const remaining = sortTasks(state.tasks.filter((task) => task.status === "pending" || task.status === "in_progress"));
 	const active = activeTask(state);
 	const preview = remaining.slice(0, 8).map((task) => `${task.id === active?.id ? "*" : "-"} ${task.content} [${task.status}]`).join("\n");
 	const hidden = Math.max(0, remaining.length - 8);
-	return `<task_panel_state>\nActive task: ${active ? active.content : "(none)"}\nProgress: ${completedCount(state)}/${state.tasks.length} done; ${remaining.length} remaining\n${preview}${hidden ? `\n... ${hidden} more remaining` : ""}\n\nTask workflow requirements:\n- If you are about to say work is done/fixed/committed/verified, first call todo_write mark_done for the matching task.\n- If the active task is stale or no longer relevant, call todo_write drop_task or start_task for the correct task before continuing.\n- If new work is discovered, call todo_write add_task.\n- Prefer one todo_write transition at a time; mark_done automatically advances to the next pending task.\n</task_panel_state>`;
+	return `<task_panel_state>\nActive task: ${active ? active.content : "(none)"}\nProgress: ${completedCount(state)}/${state.tasks.length} done; ${remaining.length} remaining\n${preview}${hidden ? `\n... ${hidden} more remaining` : ""}\n\nTask workflow requirements:\n- If you are about to say work is done/fixed/committed/verified, first call tasks_write mark_done for the matching task.\n- If the active task is stale or no longer relevant, call tasks_write drop_task or start_task for the correct task before continuing.\n- If new work is discovered, call tasks_write add_task.\n- Prefer one tasks_write transition at a time; mark_done automatically advances to the next pending task.\n</task_panel_state>`;
 }
 
-function toolResultContent(summary: string, state: TodoState, cwd: string): string {
+function toolResultContent(summary: string, state: TaskPanelState, cwd: string): string {
 	if (!settingBoolean("showWorkflowReminder", true, cwd) || remainingCount(state) === 0) return `• ${summary}`;
 	return `• ${summary}\n${workflowReminder(state)}`;
 }
 
-const TodoToolParams = Type.Object({
+const TaskToolParams = Type.Object({
 	action: StringEnum(["replace", "add_phase", "add_task", "start_task", "mark_done", "drop_task", "remove_task", "append_note", "set_panel"] as const),
 	tasks: Type.Optional(Type.Array(Type.Object({ content: Type.String(), status: Type.Optional(Type.String()), phase: Type.Optional(Type.String()), notes: Type.Optional(Type.Array(Type.String())) }))),
 	phase: Type.Optional(Type.String()),
@@ -477,20 +555,54 @@ const TodoToolParams = Type.Object({
 	panel: Type.Optional(StringEnum(["hidden", "compact", "expanded"] as const)),
 });
 
+const TASK_COMMAND_COMPLETIONS: AutocompleteItem[] = [
+	{ value: "add ", label: "add <task>", description: "Add a task. Use Phase :: task to assign a phase." },
+	{ value: "edit", label: "edit", description: "Bulk edit tasks as plain text." },
+	{ value: "manage", label: "manage", description: "Open the interactive task manager." },
+	{ value: "hide", label: "hide", description: "Hide the task panel." },
+	{ value: "show", label: "show", description: "Show the task panel." },
+];
+
+function commandArgumentCompletions(prefix: string, state: TaskPanelState): AutocompleteItem[] | null {
+	const raw = prefix.replace(/^\s+/, "");
+	const firstSpace = raw.search(/\s/);
+	const command = firstSpace === -1 ? raw : raw.slice(0, firstSpace);
+	const rest = firstSpace === -1 ? "" : raw.slice(firstSpace + 1).trim().toLowerCase();
+	const taskCommands = new Set(["start", "done", "drop", "rm"]);
+	if (firstSpace !== -1 && taskCommands.has(command)) {
+		const items = sortTasks(state.tasks)
+			.filter((task) => !rest || task.content.toLowerCase().includes(rest))
+			.slice(0, 20)
+			.map((task) => ({
+				value: `${command} ${task.content}`,
+				label: task.content,
+				description: `${command} · ${editableStatusLabel(task.status)}`,
+			}));
+		return items.length > 0 ? items : null;
+	}
+	const query = command.toLowerCase();
+	const items = TASK_COMMAND_COMPLETIONS.filter((item) => {
+		const value = item.value.toLowerCase();
+		const label = (item.label ?? item.value).toLowerCase();
+		return value.startsWith(query) || label.startsWith(query);
+	});
+	return items.length > 0 ? items : null;
+}
+
 export default function taskPanel(pi: ExtensionAPI): void {
 	const guard = pi as unknown as Record<PropertyKey, unknown>;
 	if (guard[INSTALL_SYMBOL]) return;
 	guard[INSTALL_SYMBOL] = true;
 	if (!settingBoolean("enabled", true)) return;
 
-	let state: TodoState = emptyState();
+	let state: TaskPanelState = emptyState();
 	let activeCtx: ExtensionContext | undefined;
 	let lastReminderAt = 0;
 	let pendingCompletionMessage: { action: string; summary: string } | undefined;
 
 	const persist = () => {
 		state.updatedAt = new Date().toISOString();
-		pi.appendEntry<TodoState>(STATE_TYPE, cloneState(state));
+		pi.appendEntry<TaskPanelState>(STATE_TYPE, cloneState(state));
 	};
 
 	const restore = (ctx: ExtensionContext) => {
@@ -498,7 +610,7 @@ export default function taskPanel(pi: ExtensionAPI): void {
 		state = emptyState(ctx.cwd);
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === STATE_TYPE) state = normalizeState(entry.data, ctx.cwd);
-			if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "todo_write") {
+			if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "tasks_write") {
 				const restored = normalizeState(entry.message.details?.state, ctx.cwd);
 				if (restored.tasks.length > 0 || restored.phases.length > 0) state = restored;
 			}
@@ -528,24 +640,135 @@ export default function taskPanel(pi: ExtensionAPI): void {
 		return message;
 	};
 
-	async function manage(ctx: ExtensionCommandContext | ExtensionContext): Promise<void> {
-		if (!ctx.hasUI) {
-			ctx.ui.notify(toMarkdown(state), "info");
-			return;
-		}
-		await ctx.ui.custom((_tui, theme, _kb, done) => ({
-			handleInput(data: string) {
-				if (data === "\u001b" || data === "\u0003") done(undefined);
-			},
-			invalidate() {},
-			render(width: number) {
-				const lines = [theme.fg("accent", theme.bold("Tasks manager")), theme.fg("dim", "esc close · use /todo edit for bulk editing"), "", ...renderPanelLines({ ...state, panel: "expanded" }, theme, (ctx as ExtensionContext).cwd)];
-				return lines.map((line) => truncateToWidth(line, width, ""));
-			},
-		}), { overlay: true, overlayOptions: { anchor: "center", width: 100, maxHeight: "85%" } });
+	async function editTasks(ctx: ExtensionCommandContext | ExtensionContext): Promise<void> {
+		const text = await ctx.ui.editor("Edit tasks — one '- task' per line; optional: (active), (done), (dropped)", toEditableText(state));
+		if (text === undefined) return;
+		state = parseEditableText(text, ctx.cwd);
+		ctx.ui.notify(mutate(ctx, () => `Saved ${state.tasks.length} task(s)`), "info");
 	}
 
-	function handleTodoCommand(args: string, ctx: ExtensionCommandContext): Promise<void> | void {
+	async function manage(ctx: ExtensionCommandContext | ExtensionContext): Promise<void> {
+		if (!ctx.hasUI) {
+			ctx.ui.notify(toEditableText(state), "info");
+			return;
+		}
+		let postManageAction: "edit" | undefined;
+		const releaseModalLock = acquireVstackModalLock();
+		try {
+			await ctx.ui.custom((tui, theme, _kb, done) => {
+				let selectedId: string | null = activeTask(state)?.id ?? sortTasks(state.tasks)[0]?.id ?? null;
+				let scroll = 0;
+
+				const taskList = () => sortTasks(state.tasks);
+				const syncSelection = () => {
+					const tasks = taskList();
+					if (tasks.length === 0) {
+						selectedId = null;
+						scroll = 0;
+						return;
+					}
+					if (!selectedId || !tasks.some((task) => task.id === selectedId)) selectedId = activeTask(state)?.id ?? tasks[0]?.id ?? null;
+					const index = Math.max(0, tasks.findIndex((task) => task.id === selectedId));
+					if (index < scroll) scroll = index;
+					if (index >= scroll + MANAGE_TASK_ROWS) scroll = index - MANAGE_TASK_ROWS + 1;
+					scroll = Math.max(0, Math.min(scroll, Math.max(0, tasks.length - MANAGE_TASK_ROWS)));
+				};
+				const selectedTask = () => {
+					syncSelection();
+					return selectedId ? state.tasks.find((task) => task.id === selectedId) : undefined;
+				};
+				const move = (delta: number) => {
+					const tasks = taskList();
+					if (tasks.length === 0) return;
+					const current = Math.max(0, tasks.findIndex((task) => task.id === selectedId));
+					selectedId = tasks[Math.max(0, Math.min(tasks.length - 1, current + delta))]?.id ?? null;
+					syncSelection();
+					tui.requestRender();
+				};
+				const applyTaskAction = (action: string, fn: () => string) => {
+					const message = mutate(ctx, fn);
+					const summary = toolResultSummary(action, message, state);
+					ctx.ui.notify(summary, summary.startsWith("No task") ? "warning" : "info");
+					syncSelection();
+					tui.requestRender();
+				};
+
+				return {
+					handleInput(data: string) {
+						if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) { done(undefined); return; }
+						if (matchesKey(data, "up") || data === "k") { move(-1); return; }
+						if (matchesKey(data, "down") || data === "j") { move(1); return; }
+						if (matchesKey(data, "pageup")) { move(-MANAGE_TASK_ROWS); return; }
+						if (matchesKey(data, "pagedown")) { move(MANAGE_TASK_ROWS); return; }
+						if (matchesKey(data, "home") || data === "g") { move(-Number.MAX_SAFE_INTEGER); return; }
+						if (matchesKey(data, "end") || data === "G") { move(Number.MAX_SAFE_INTEGER); return; }
+						if (matchesKey(data, "return") || matchesKey(data, "enter") || data === "s") {
+							const task = selectedTask();
+							applyTaskAction("start_task", () => task ? (startTask(state, task.id, ctx.cwd)?.content ?? "No task matched") : "No task selected");
+							return;
+						}
+						if (data === "d") {
+							const task = selectedTask();
+							applyTaskAction("mark_done", () => task ? (markStatus(state, task.id, "completed", ctx.cwd)?.content ?? "No task matched") : "No task selected");
+							return;
+						}
+						if (data === "x") {
+							const task = selectedTask();
+							applyTaskAction("drop_task", () => task ? (markStatus(state, task.id, "abandoned", ctx.cwd)?.content ?? "No task matched") : "No task selected");
+							return;
+						}
+						if (data === "r" || matchesKey(data, "delete") || matchesKey(data, "backspace")) {
+							const task = selectedTask();
+							applyTaskAction("remove_task", () => task ? (removeTask(state, task.id, ctx.cwd) ? task.content : "No task matched") : "No task selected");
+							return;
+						}
+						if (data === "c") {
+							applyTaskAction("clear_completed", () => { const before = state.tasks.length; state.tasks = state.tasks.filter((task) => task.status !== "completed"); updatePanelAfterTaskChange(state, ctx.cwd); return `Removed ${before - state.tasks.length} completed task(s)`; });
+							return;
+						}
+						if (data === "e") {
+							postManageAction = "edit";
+							done(undefined);
+						}
+					},
+					invalidate() {},
+					render(width: number) {
+						const contentWidth = Math.max(1, width - 2 - POPUP_PADDING_X * 2);
+						syncSelection();
+						const tasks = taskList();
+						const lines = [
+							theme.fg("text", theme.bold("Tasks manager")),
+							theme.fg("dim", "↑↓ select · enter/s start · d done · x drop · r remove · c clear done · e edit · esc close"),
+							"",
+						];
+						if (tasks.length === 0) {
+							lines.push(theme.fg("dim", "No tasks. Use /tasks add <task> or /tasks edit."));
+						} else {
+							if (scroll > 0) lines.push(theme.fg("dim", `↑ ${scroll} earlier task(s)`));
+							for (const task of tasks.slice(scroll, scroll + MANAGE_TASK_ROWS)) {
+								const selected = task.id === selectedId;
+								const active = task.status === "in_progress";
+								const cursor = selected ? theme.fg("accent", "›") : theme.fg("dim", "·");
+								const marker = theme.fg(markerColor(task.status, active), taskIcon(task.status, active));
+								const content = selected ? theme.fg("text", active ? theme.bold(task.content) : task.status === "completed" || task.status === "abandoned" ? theme.strikethrough(task.content) : task.content) : taskText(task, active, theme);
+								const phase = task.phaseId ? ` · ${phaseTitle(state, task.phaseId)}` : "";
+								const row = `${cursor} ${marker} ${content}${theme.fg("dim", `${phase} · ${editableStatusLabel(task.status)}`)}`;
+								lines.push(selected ? theme.bg("selectedBg", padAnsi(row, contentWidth)) : row);
+							}
+							const below = Math.max(0, tasks.length - (scroll + MANAGE_TASK_ROWS));
+							if (below > 0) lines.push(theme.fg("dim", `↓ ${below} more task(s)`));
+						}
+						return framePopup(lines.map((line) => truncateToWidth(line, contentWidth, "")), width, theme);
+					},
+				};
+			}, { overlay: true, overlayOptions: { anchor: "center", width: 100, maxHeight: "85%" } });
+		} finally {
+			releaseModalLock();
+		}
+		if (postManageAction === "edit") await editTasks(ctx);
+	}
+
+	function handleTasksCommand(args: string, ctx: ExtensionCommandContext): Promise<void> | void {
 		const trimmed = args.trim();
 		if (!trimmed || trimmed === "manage") return manage(ctx);
 		const [cmd, ...restParts] = trimmed.split(/\s+/);
@@ -570,20 +793,24 @@ export default function taskPanel(pi: ExtensionAPI): void {
 			case "all":
 			case "show-all":
 			case "expand": message = mutate(ctx, () => { state.panel = "expanded"; return "Task panel showing all tasks"; }); break;
-			case "export": { const out = rest || join(ctx.cwd, ".pi", "tasks.md"); writeFileSafe(resolve(ctx.cwd, out), toMarkdown(state)); message = `Exported tasks to ${out}`; break; }
-			case "import": { const input = resolve(ctx.cwd, rest || join(".pi", "tasks.md")); state = parseMarkdown(readFileSync(input, "utf8"), ctx.cwd); message = mutate(ctx, () => `Imported ${state.tasks.length} task(s)`); break; }
-			case "edit": return ctx.ui.editor("Edit tasks markdown", toMarkdown(state)).then((text) => { if (text !== undefined) { state = parseMarkdown(text, ctx.cwd); ctx.ui.notify(mutate(ctx, () => `Saved ${state.tasks.length} task(s)`), "info"); } });
-			default: message = "Unknown /todo action. Try add/start/done/drop/rm/clear-completed/hide/show/show-all/compact/expand/edit/export/import/manage.";
+			case "export": { const out = rest || join(ctx.cwd, ".pi", "tasks.md"); writeFileSafe(resolve(ctx.cwd, out), toEditableText(state)); message = `Exported tasks to ${out}`; break; }
+			case "import": { const input = resolve(ctx.cwd, rest || join(".pi", "tasks.md")); state = parseEditableText(readFileSync(input, "utf8"), ctx.cwd); message = mutate(ctx, () => `Imported ${state.tasks.length} task(s)`); break; }
+			case "edit": return editTasks(ctx);
+			default: message = "Unknown /tasks action. Try add, edit, manage, hide, or show.";
 		}
 		ctx.ui.notify(message, message.startsWith("No task") || message.startsWith("Unknown") ? "warning" : "info");
 	}
 
-	pi.registerCommand("todo", { description: "Manage the persistent task panel", handler: async (args, ctx) => handleTodoCommand(args, ctx) });
+	pi.registerCommand("tasks", {
+		description: "Manage tasks: add <task> · edit · manage · hide/show",
+		getArgumentCompletions: (prefix: string) => commandArgumentCompletions(prefix, state),
+		handler: async (args, ctx) => handleTasksCommand(args, ctx),
+	});
 
 	pi.registerMessageRenderer(TASK_COMPLETE_MESSAGE_TYPE, (message: any, _options: any, theme: Theme) => {
 		const summary = typeof message?.details?.summary === "string" ? message.details.summary : typeof message?.content === "string" ? message.content : "Tasks complete";
 		const action = typeof message?.details?.action === "string" ? message.details.action : "mark_done";
-		return singleLine(renderTodoToolSummary(summary, action, theme));
+		return singleLine(renderTaskToolSummary(summary, action, theme));
 	});
 
 	const compactToolOutput = settingBoolean("compactToolOutput", true);
@@ -591,21 +818,21 @@ export default function taskPanel(pi: ExtensionAPI): void {
 	pi.registerTool({
 		...(compactToolOutput ? { renderShell: "self" as const } : {}),
 		executionMode: "sequential" as ToolExecutionMode,
-		name: "todo_write",
-		label: "Todo Write",
+		name: "tasks_write",
+		label: "Tasks Write",
 		description: "Structured task panel updates: replace/add/start/done/drop/remove/note/panel.",
 		promptSnippet: "Create and update the persistent task panel for multi-step work.",
 		promptGuidelines: [
-			"Use todo_write to keep a visible task list when the user asks for multi-step work or when you need to track progress across tool calls.",
-			"Use todo_write replace for a fresh plan, add_task for discovered follow-ups, start_task before working a task, and mark_done/drop_task immediately when status changes.",
-			"Before final replies that claim work is done, fixed, committed, verified, or no longer relevant, call todo_write to reconcile the active task first.",
-			"todo_write runs sequentially and automatically advances to the next pending task after mark_done/drop_task; do not issue a separate start_task unless switching to a non-next task.",
-			"todo_write hides the panel when all tasks are complete and shows it again when pending work appears.",
+			"Use tasks_write to keep a visible task list when the user asks for multi-step work or when you need to track progress across tool calls.",
+			"Use tasks_write replace for a fresh plan, add_task for discovered follow-ups, start_task before working a task, and mark_done/drop_task immediately when status changes.",
+			"Before final replies that claim work is done, fixed, committed, verified, or no longer relevant, call tasks_write to reconcile the active task first.",
+			"tasks_write runs sequentially and automatically advances to the next pending task after mark_done/drop_task; do not issue a separate start_task unless switching to a non-next task.",
+			"tasks_write hides the panel when all tasks are complete and shows it again when pending work appears.",
 		],
-		parameters: TodoToolParams,
+		parameters: TaskToolParams,
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
 			const runCtx = ctx ?? activeCtx;
-			if (!runCtx) throw new Error("No active Pi context for todo_write");
+			if (!runCtx) throw new Error("No active Pi context for tasks_write");
 			const message = mutate(runCtx, () => {
 				switch (params.action) {
 					case "replace": state = emptyState(runCtx.cwd); for (const input of params.tasks ?? []) { const task = addTask(state, input.content, input.phase, runCtx.cwd); task.status = isStatus(input.status) ? input.status : "pending"; task.notes = input.notes ?? []; } updatePanelAfterTaskChange(state, runCtx.cwd); return `Replaced tasks (${state.tasks.length})`;
@@ -617,7 +844,7 @@ export default function taskPanel(pi: ExtensionAPI): void {
 					case "remove_task": { const task = findTask(state, params.task ?? ""); if (!task) return "No task matched"; state.tasks = state.tasks.filter((candidate) => candidate.id !== task.id); updatePanelAfterTaskChange(state, runCtx.cwd); return task.content; }
 					case "append_note": { const task = findTaskOrActive(state, params.task ?? ""); if (!task) return "No task matched"; task.notes.push(params.note ?? ""); return task.content; }
 					case "set_panel": state.panel = params.panel ?? "compact"; return `Panel ${state.panel}`;
-					default: return "No todo action matched";
+					default: return "No task action matched";
 				}
 			});
 			const summary = toolResultSummary(params.action, message, state);
@@ -626,13 +853,13 @@ export default function taskPanel(pi: ExtensionAPI): void {
 			return { content: [{ type: "text", text: toolResultContent(summary, state, runCtx.cwd) }], details: { action: params.action, deferDisplay: deferAllCompleteDisplay, message, summary, state: cloneState(state) } };
 		},
 		renderCall(_args, theme) {
-			return compactToolOutput ? singleLine("") : new Text(theme.fg("toolTitle", "todo_write"), 0, 0);
+			return compactToolOutput ? singleLine("") : new Text(theme.fg("toolTitle", "tasks_write"), 0, 0);
 		},
 		renderResult(result, _options, theme) {
 			if (result.details?.deferDisplay) return singleLine("");
 			const summary = result.details?.summary ?? result.content?.find((part: any) => part?.type === "text")?.text?.replace(/^•\s*/, "") ?? "tasks updated";
 			const action = result.details?.action ?? "";
-			if (compactToolOutput) return singleLine(renderTodoToolSummary(summary, action, theme));
+			if (compactToolOutput) return singleLine(renderTaskToolSummary(summary, action, theme));
 			return new Text(theme.fg("text", `• ${summary}`), 0, 0);
 		},
 	});

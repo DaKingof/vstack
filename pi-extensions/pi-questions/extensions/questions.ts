@@ -19,6 +19,7 @@ import { dirname, join, resolve } from "node:path";
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-questions.installed");
 const SERVICE_SYMBOL = Symbol.for("vstack.pi-questions.service");
 const QOL_NOTIFICATION_SERVICE_SYMBOL = Symbol.for("vstack.pi-qol.notification-service");
+const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 const QUESTION_OPENED_EVENT = "vstack:pi-questions:opened";
 const POPUP_WIDTH = 96;
 const POPUP_MAX_HEIGHT = "80%";
@@ -84,6 +85,10 @@ interface QuestionEvent {
 
 interface QolNotificationService {
 	notifyQuestionOpened(ctx: ExtensionContext | undefined, event: { requestId?: string; request?: QuestionRequest; source?: string }): boolean;
+}
+
+interface VstackModalLock {
+	depth: number;
 }
 
 interface QuestionService {
@@ -270,6 +275,34 @@ function padAnsi(text: string, width: number): string {
 	return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated)))}`;
 }
 
+function vstackModalLock(): VstackModalLock {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const existing = host[VSTACK_MODAL_LOCK_SYMBOL] as VstackModalLock | undefined;
+	if (existing && typeof existing.depth === "number") return existing;
+	const lock = { depth: 0 };
+	host[VSTACK_MODAL_LOCK_SYMBOL] = lock;
+	return lock;
+}
+
+function isVstackModalActive(): boolean {
+	return vstackModalLock().depth > 0;
+}
+
+function acquireVstackModalLock(): () => void {
+	const lock = vstackModalLock();
+	lock.depth += 1;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		lock.depth = Math.max(0, lock.depth - 1);
+	};
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function popupContentWidth(width: number): number {
 	return Math.max(1, width - 2 - PADDING_X * 2);
 }
@@ -279,20 +312,20 @@ function framePopup(lines: string[], width: number, theme: Theme): string[] {
 
 	const border = (text: string) => theme.fg("borderAccent", text);
 	const contentWidth = popupContentWidth(width);
-	const blank = `${border("│")}${" ".repeat(width - 2)}${border("│")}`;
-	const framed = [`${border("╭")}${border("─".repeat(width - 2))}${border("╮")}`];
+	const blank = `${border("┃")}${" ".repeat(width - 2)}${border("┃")}`;
+	const framed = [`${border("┏")}${border("━".repeat(width - 2))}${border("┓")}`];
 
 	for (let i = 0; i < PADDING_Y; i += 1) framed.push(blank);
 	for (const line of lines) {
-		framed.push(`${border("│")}${" ".repeat(PADDING_X)}${padAnsi(line, contentWidth)}${" ".repeat(PADDING_X)}${border("│")}`);
+		framed.push(`${border("┃")}${" ".repeat(PADDING_X)}${padAnsi(line, contentWidth)}${" ".repeat(PADDING_X)}${border("┃")}`);
 	}
 	for (let i = 0; i < PADDING_Y; i += 1) framed.push(blank);
-	framed.push(`${border("╰")}${border("─".repeat(width - 2))}${border("╯")}`);
+	framed.push(`${border("┗")}${border("━".repeat(width - 2))}${border("┛")}`);
 	return framed.map((line) => truncateToWidth(line, width, ""));
 }
 
 function selectedLine(theme: Theme, content: string, width: number): string {
-	return theme.bg("toolSuccessBg", padAnsi(theme.fg("text", content), width));
+	return theme.bg("selectedBg", padAnsi(theme.fg("text", content), width));
 }
 
 function panelLine(content: string, width: number): string {
@@ -565,6 +598,15 @@ function attachContext(ctx: ExtensionContext | undefined, service: QuestionServi
 }
 
 async function openQuestionUi(ctx: ExtensionContext, pending: PendingQuestion): Promise<void> {
+	if (isVstackModalActive()) {
+		ctx.ui.notify("Question queued until the current popup closes.", "info");
+		while (isVstackModalActive()) {
+			const completed = await Promise.race([pending.promise.then(() => true), sleep(100).then(() => false)]);
+			if (completed) return;
+		}
+	}
+	const releaseModalLock = acquireVstackModalLock();
+	try {
 	const request = pending.request;
 	const optionRows = Math.max(1, Math.floor(settingNumber("optionRows", OPTION_ROWS, ctx.cwd)));
 	const selections = request.questions.map(() => new Set<string>());
@@ -647,7 +689,7 @@ async function openQuestionUi(ctx: ExtensionContext, pending: PendingQuestion): 
 				borderColor: (s) => theme.fg("accent", s),
 				selectList: {
 					selectedPrefix: (t) => theme.fg("accent", t),
-					selectedText: (t) => theme.fg("accent", t),
+					selectedText: (t) => theme.bg("selectedBg", theme.fg("text", t)),
 					description: (t) => theme.fg("muted", t),
 					scrollInfo: (t) => theme.fg("dim", t),
 					noMatch: (t) => theme.fg("warning", t),
@@ -688,7 +730,7 @@ async function openQuestionUi(ctx: ExtensionContext, pending: PendingQuestion): 
 					const doneMark = currentAnswers[index].length > 0 ? "✓ " : "";
 					const label = ` ${doneMark}${index + 1}. ${question.header} `;
 					if (index === activeTab) return theme.fg("accent", theme.inverse(theme.bold(label)));
-					const color = currentAnswers[index].length > 0 ? "success" : "muted";
+					const color = currentAnswers[index].length > 0 ? "success" : "accent";
 					return theme.bg("selectedBg", theme.fg(color, label));
 				});
 				return truncateToWidth(parts.join(" "), width, "");
@@ -723,7 +765,7 @@ async function openQuestionUi(ctx: ExtensionContext, pending: PendingQuestion): 
 				const question = request.questions[activeTab];
 				const lines: string[] = [];
 
-				const title = theme.fg("accent", theme.bold(request.header));
+				const title = theme.fg("text", theme.bold(request.header));
 				const esc = theme.fg("dim", inputMode ? "esc back" : "esc");
 				const titleGap = Math.max(1, innerWidth - visibleWidth(request.header) - visibleWidth(inputMode ? "esc back" : "esc"));
 				lines.push(panelLine(`${title}${" ".repeat(titleGap)}${esc}`, innerWidth));
@@ -847,6 +889,9 @@ async function openQuestionUi(ctx: ExtensionContext, pending: PendingQuestion): 
 			}
 			: undefined,
 	);
+	} finally {
+		releaseModalLock();
+	}
 }
 
 function stringifyError(error: unknown): string {

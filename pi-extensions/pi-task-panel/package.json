@@ -1,13 +1,12 @@
 {
   "name": "pi-task-panel",
   "version": "0.1.0",
-  "description": "Persistent Claude-style task/todo panel for Pi with slash commands and a structured todo_write tool.",
+  "description": "Persistent Claude-style tasks panel for Pi with slash commands and a structured tasks_write tool.",
   "license": "MIT",
   "keywords": [
     "pi-package",
     "pi",
     "coding-agent",
-    "todo",
     "tasks"
   ],
   "pi": {
@@ -22,7 +21,7 @@
         {
           "key": "enabled",
           "label": "Enable task panel",
-          "description": "Register todo_write, /todo, task panel widgets, reminders, and shortcuts.",
+          "description": "Register tasks_write, /tasks, task panel widgets, reminders, and shortcuts.",
           "type": "boolean",
           "default": true,
           "category": "General",
@@ -92,8 +91,8 @@
         },
         {
           "key": "compactToolOutput",
-          "label": "Compact todo_write output",
-          "description": "Render todo_write results as a single inline status row instead of Pi's padded tool box.",
+          "label": "Compact tasks_write output",
+          "description": "Render tasks_write results as a single inline status row instead of Pi's padded tool box.",
           "type": "boolean",
           "default": true,
           "category": "Tool Output",

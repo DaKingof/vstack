@@ -272,7 +272,7 @@
         {
           "key": "notification.onTaskComplete",
           "label": "Notify when all tasks complete",
-          "description": "Notify after the agent turn ends when todo_write completes the task panel.",
+          "description": "Notify after the agent turn ends when tasks_write completes the task panel.",
           "type": "boolean",
           "default": true,
           "category": "Notifications Triggers",

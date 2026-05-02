@@ -1756,7 +1756,7 @@ function registerToolBatch(pi: ExtensionAPI, agent: any, cwd: string): void {
 	});
 }
 
-const CORE_TOOL_RENDERERS = new Set(["read", "bash", "grep", "find", "ls", "edit", "write", "tool_batch", "todo_write", "bg_task", "bg_status", "question", "subagent"]);
+const CORE_TOOL_RENDERERS = new Set(["read", "bash", "grep", "find", "ls", "edit", "write", "tool_batch", "tasks_write", "bg_task", "bg_status", "question", "subagent"]);
 const OPENAI_STYLE_TOOL_NAMES = new Set([
 	"webfetch",
 	"web_fetch",

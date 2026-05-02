@@ -53,6 +53,7 @@ const DEFAULT_LIST_ROWS = 14;
 const SKILL_CONTEXT_MESSAGE_TYPE = "pi-skills-manager:loaded-skills";
 const SKILL_MARKER_PREFIX = "[skill] ";
 const SKILL_MARKER_FRAGMENTS = ["[skill]", "[skill", "[skil", "[ski", "[sk"];
+const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 
 const GENERATE_SKILL_SYSTEM_PROMPT = `You create production-ready Pi Agent skills.
 
@@ -76,6 +77,10 @@ type SkillOrigin = "package" | "top-level";
 type SkillLocation = "project" | "global";
 type MessageTone = "dim" | "success" | "error";
 type Mode = "browse" | "create" | "preview" | "edit" | "rename" | "delete-confirm" | "generating";
+
+interface VstackModalLock {
+	depth: number;
+}
 type CreateTextStepId = "name" | "description";
 type CreateChoiceStepId = "location";
 type CreateStepId = CreateTextStepId | CreateChoiceStepId;
@@ -847,9 +852,27 @@ function skillLocation(skill: SkillEntry): string {
 	return skill.origin === "package" ? skill.source : skill.path;
 }
 
+function inlineLine(text: string): string {
+	return text.replace(/[\r\n]+/g, " ").replace(/\t/g, " ");
+}
+
+function acquireVstackModalLock(): () => void {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const existing = host[VSTACK_MODAL_LOCK_SYMBOL] as VstackModalLock | undefined;
+	const lock = existing && typeof existing.depth === "number" ? existing : { depth: 0 };
+	host[VSTACK_MODAL_LOCK_SYMBOL] = lock;
+	lock.depth += 1;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		lock.depth = Math.max(0, lock.depth - 1);
+	};
+}
+
 function padAnsi(text: string, width: number): string {
 	const safeWidth = Math.max(0, width);
-	const truncated = truncateToWidth(text, safeWidth, "");
+	const truncated = truncateToWidth(inlineLine(text), safeWidth, "");
 	return `${truncated}${" ".repeat(Math.max(0, safeWidth - visibleWidth(truncated)))}`;
 }
 
@@ -859,19 +882,43 @@ function toneText(theme: Theme, tone: MessageTone, text: string): string {
 	return theme.fg("dim", text);
 }
 
-function frameLine(theme: Theme, line: string, innerWidth: number): string {
-	const clipped = truncateToWidth(line, innerWidth, theme.fg("dim", "..."));
-	return `${theme.fg("accent", "│ ")}${padAnsi(clipped, innerWidth)}${theme.fg("accent", " │")}`;
+function skillEntityTitle(theme: Theme, label: string): string {
+	return theme.fg("text", theme.bold(label));
 }
 
-function renderFrame(theme: Theme, width: number, lines: string[]): string[] {
-	if (width < 6) return lines.map((line) => truncateToWidth(line, width, ""));
+function skillSectionTitle(theme: Theme, label: string): string {
+	return theme.fg("muted", theme.bold(label));
+}
+
+function skillSelectedLine(theme: Theme, line: string, width: number): string {
+	return theme.bg("selectedBg", padAnsi(line, width));
+}
+
+function frameLine(theme: Theme, line: string, innerWidth: number): string {
+	const clipped = truncateToWidth(inlineLine(line), innerWidth, theme.fg("dim", "..."));
+	return `${theme.fg("borderAccent", "┃ ")}${padAnsi(clipped, innerWidth)}${theme.fg("borderAccent", " ┃")}`;
+}
+
+function fitFrameBody(theme: Theme, lines: string[], fixedInnerRows?: number): string[] {
+	if (fixedInnerRows === undefined) return lines;
+	const rowCount = Math.max(1, Math.floor(fixedInnerRows));
+	if (lines.length > rowCount) {
+		const hidden = lines.length - rowCount + 1;
+		return [...lines.slice(0, Math.max(0, rowCount - 1)), theme.fg("dim", `↓ ${hidden} more line(s)`)].slice(0, rowCount);
+	}
+	if (lines.length < rowCount) return [...lines, ...Array.from({ length: rowCount - lines.length }, () => "")];
+	return lines;
+}
+
+function renderFrame(theme: Theme, width: number, lines: string[], fixedInnerRows?: number): string[] {
+	const body = fitFrameBody(theme, lines, fixedInnerRows);
+	if (width < 6) return body.map((line) => truncateToWidth(inlineLine(line), width, ""));
 	const innerWidth = Math.max(1, width - 4);
 	return [
-		theme.fg("accent", `┌${"─".repeat(innerWidth + 2)}┐`),
-		...lines.map((line) => frameLine(theme, line, innerWidth)),
-		theme.fg("accent", `└${"─".repeat(innerWidth + 2)}┘`),
-	];
+		theme.fg("borderAccent", `┏${"━".repeat(innerWidth + 2)}┓`),
+		...body.map((line) => frameLine(theme, line, innerWidth)),
+		theme.fg("borderAccent", `┗${"━".repeat(innerWidth + 2)}┛`),
+	].map((line) => truncateToWidth(inlineLine(line), width, ""));
 }
 
 function centerLines(lines: string[], width: number): string[] {
@@ -884,9 +931,9 @@ function renderCenteredDialog(theme: Theme, width: number, lines: string[], maxI
 	if (width < 8) return lines.map((line) => truncateToWidth(line, width, ""));
 	const innerWidth = Math.max(1, Math.min(width - 4, maxInnerWidth));
 	const framed = [
-		theme.fg("accent", `┌${"─".repeat(innerWidth + 2)}┐`),
+		theme.fg("borderAccent", `┏${"━".repeat(innerWidth + 2)}┓`),
 		...lines.map((line) => frameLine(theme, line, innerWidth)),
-		theme.fg("accent", `└${"─".repeat(innerWidth + 2)}┘`),
+		theme.fg("borderAccent", `┗${"━".repeat(innerWidth + 2)}┛`),
 	];
 	return centerLines(framed, width);
 }
@@ -906,7 +953,16 @@ function getEditorTheme(theme: Theme) {
 
 class SingleLineText implements Component {
 	constructor(private readonly text: string, private readonly ellipsis = "...") {}
-	render(width: number): string[] { return [truncateToWidth(this.text, width, this.ellipsis)]; }
+	render(width: number): string[] { return [truncateToWidth(inlineLine(this.text), width, this.ellipsis)]; }
+	invalidate(): void {}
+}
+
+class ListLineText implements Component {
+	constructor(private readonly text: string, private readonly selected: boolean, private readonly theme: Theme, private readonly ellipsis = "...") {}
+	render(width: number): string[] {
+		const line = truncateToWidth(inlineLine(this.text), width, this.ellipsis);
+		return [this.selected ? skillSelectedLine(this.theme, line, width) : line];
+	}
 	invalidate(): void {}
 }
 
@@ -942,7 +998,7 @@ class ScrollableSkillPreview implements Component {
 		const content = new Container();
 		const status = this.skill.enabled ? this.theme.fg("success", "enabled") : this.theme.fg("warning", "disabled");
 		const source = packageLabel(this.skill) ? `${packageLabel(this.skill)}` : this.skill.path;
-		content.addChild(new Text(this.theme.fg("accent", this.theme.bold(this.skill.name)), 0, 0));
+		content.addChild(new Text(skillEntityTitle(this.theme, this.skill.name), 0, 0));
 		content.addChild(new Text(`${this.theme.fg("muted", scopeLabel(this.skill))}${this.theme.fg("dim", " • ")}${this.theme.fg("muted", source)}${this.theme.fg("dim", " • ")}${status}`, 0, 0));
 		content.addChild(new Spacer(1));
 		content.addChild(new Text(this.theme.fg("muted", this.theme.bold("Description")), 0, 0));
@@ -1025,7 +1081,7 @@ class SkillEditorView implements Component, Focusable {
 	render(width: number): string[] {
 		const innerWidth = Math.max(1, width - 4);
 		const lines: string[] = [
-			this.theme.fg("accent", this.theme.bold(`Edit ${this.skill.name}`)),
+			skillEntityTitle(this.theme, `Edit ${this.skill.name}`),
 			this.theme.fg("muted", skillLocation(this.skill)),
 			this.theme.fg("dim", `Name is immutable here: ${this.skill.name}`),
 		];
@@ -1300,7 +1356,7 @@ class SkillsManagerDialog implements Focusable {
 		const root = new Container();
 		const enabledCount = this.registry.allSkills.filter((skill) => skill.enabled).length;
 		const totalCount = this.registry.allSkills.length;
-		root.addChild(new Text(`${this.theme.fg("accent", this.theme.bold("Skills Manager"))} ${this.theme.fg("dim", `${enabledCount}/${totalCount} enabled`)}`, 1, 0));
+		root.addChild(new Text(`${skillEntityTitle(this.theme, "Skills Manager")} ${this.theme.fg("dim", `${enabledCount}/${totalCount} enabled`)}`, 1, 0));
 		root.addChild(new Spacer(1));
 		root.addChild(this.browseInput);
 		root.addChild(new Spacer(1));
@@ -1330,20 +1386,20 @@ class SkillsManagerDialog implements Focusable {
 			if (i >= startIndex) {
 				if (entry.kind === "header") {
 					list.addChild(new Spacer(1));
-					list.addChild(new SingleLineText(this.theme.fg("muted", this.theme.bold(entry.label)), ellipsis));
+					list.addChild(new SingleLineText(skillSectionTitle(this.theme, entry.label), ellipsis));
 				} else if (entry.kind === "create") {
-					const prefix = isSelected ? this.theme.fg("accent", "→ ") : "  ";
-					const label = isSelected ? this.theme.fg("accent", "Create new skill") : "Create new skill";
-					list.addChild(new SingleLineText(`${prefix}${label}${this.theme.fg("dim", " — generate and save a new skill")}`, ellipsis));
+					const prefix = isSelected ? this.theme.fg("accent", "› ") : "  ";
+					const label = "Create new skill";
+					list.addChild(new ListLineText(`${prefix}${label}${this.theme.fg("dim", " — generate and save a new skill")}`, isSelected, this.theme, ellipsis));
 				} else {
 					const skill = entry.skill;
-					const prefix = isSelected ? this.theme.fg("accent", "→ ") : "  ";
-					const name = isSelected ? this.theme.fg("accent", skill.name) : skill.enabled ? skill.name : this.theme.fg("muted", skill.name);
+					const prefix = isSelected ? this.theme.fg("accent", "› ") : "  ";
+					const name = skill.enabled ? skill.name : this.theme.fg("muted", skill.name);
 					const status = skill.enabled ? "" : this.theme.fg("warning", " [disabled]");
 					const scope = this.theme.fg("muted", ` [${scopeLabel(skill)}]`);
 					const source = packageLabel(skill) ? this.theme.fg("muted", ` [${packageLabel(skill)}]`) : "";
 					const description = this.theme.fg("dim", ` — ${skill.description}`);
-					list.addChild(new SingleLineText(`${prefix}${name}${status}${scope}${source}${description}`, ellipsis));
+					list.addChild(new ListLineText(`${prefix}${name}${status}${scope}${source}${description}`, isSelected, this.theme, ellipsis));
 				}
 			}
 			if (isSelectable) selectableIndex += 1;
@@ -1363,14 +1419,14 @@ class SkillsManagerDialog implements Focusable {
 		const innerWidth = Math.max(1, width - 4);
 		const step = this.currentCreateStep;
 		const root = new Container();
-		root.addChild(new Text(this.theme.fg("accent", this.theme.bold(`${step.title} (${this.createStepIndex + 1}/${CREATE_STEPS.length})`)), 1, 0));
+		root.addChild(new Text(skillEntityTitle(this.theme, `${step.title} (${this.createStepIndex + 1}/${CREATE_STEPS.length})`), 1, 0));
 		root.addChild(new Spacer(1));
 		if (step.id === "name") { root.addChild(this.browseInput); root.addChild(new Spacer(1)); root.addChild(new Text(this.theme.fg("dim", step.hint), 1, 0)); }
 		else if (step.id === "description") { root.addChild(new PrefixedEditor(this.descriptionEditor)); root.addChild(new Spacer(1)); root.addChild(new Text(this.theme.fg("dim", step.hint), 1, 0)); }
 		else {
 			for (const option of step.options) {
 				const selected = option.value === this.createLocation;
-				root.addChild(new SingleLineText(`${selected ? this.theme.fg("accent", "→ ") : "  "}${selected ? this.theme.fg("accent", option.label) : option.label}${this.theme.fg("dim", ` — ${option.description}`)}`));
+				root.addChild(new ListLineText(`${selected ? this.theme.fg("accent", "› ") : "  "}${option.label}${this.theme.fg("dim", ` — ${option.description}`)}`, selected, this.theme));
 			}
 			root.addChild(new Spacer(1)); root.addChild(new Text(this.theme.fg("dim", step.hint), 1, 0));
 		}
@@ -1381,7 +1437,7 @@ class SkillsManagerDialog implements Focusable {
 		return renderFrame(this.theme, width, root.render(innerWidth));
 	}
 	private renderRenameDialog(width: number): string[] {
-		const lines = [this.theme.fg("accent", this.theme.bold("Rename skill")), "", this.theme.fg("dim", "Enter new skill name (lowercase letters, numbers, hyphens)"), "", ...this.renameInput.render(Math.max(1, Math.min(width - 4, 64)))];
+		const lines = [skillEntityTitle(this.theme, "Rename skill"), "", this.theme.fg("dim", "Enter new skill name (lowercase letters, numbers, hyphens)"), "", ...this.renameInput.render(Math.max(1, Math.min(width - 4, 64)))];
 		if (this.renameError) lines.push("", toneText(this.theme, "error", this.renameError));
 		lines.push("", this.theme.fg("dim", "enter save • esc cancel"));
 		return renderCenteredDialog(this.theme, width, lines);
@@ -1390,11 +1446,11 @@ class SkillsManagerDialog implements Focusable {
 		const skill = this.deleteSkillPath ? this.registry.allSkills.find((entry) => entry.path === this.deleteSkillPath) : undefined;
 		const innerWidth = Math.max(1, Math.min(width - 4, 64));
 		const message = skill ? `Delete ${skill.name}? This removes ${skillStorageTarget(skill)} and cannot be undone.` : "Delete this skill?";
-		return renderCenteredDialog(this.theme, width, [this.theme.fg("accent", this.theme.bold("Delete skill")), "", ...wrapTextWithAnsi(message, innerWidth), "", this.theme.fg("dim", "enter/y delete • esc/n cancel")]);
+		return renderCenteredDialog(this.theme, width, [skillEntityTitle(this.theme, "Delete skill"), "", ...wrapTextWithAnsi(message, innerWidth), "", this.theme.fg("dim", "enter/y delete • esc/n cancel")]);
 	}
 	private renderGeneratingDialog(width: number): string[] {
 		const modelLabel = this.ctx.model?.id ?? "fallback template";
-		return renderCenteredDialog(this.theme, width, [this.theme.fg("accent", this.theme.bold("Generating skill")), "", this.theme.fg("dim", `Using ${modelLabel} to draft SKILL.md.`), this.theme.fg("dim", "The preview opens when generation finishes."), "", this.theme.fg("dim", "esc cancel")]);
+		return renderCenteredDialog(this.theme, width, [skillEntityTitle(this.theme, "Generating skill"), "", this.theme.fg("dim", `Using ${modelLabel} to draft SKILL.md.`), this.theme.fg("dim", "The preview opens when generation finishes."), "", this.theme.fg("dim", "esc cancel")]);
 	}
 
 	handleInput(data: string): void {
@@ -1440,23 +1496,28 @@ class SkillsManagerDialog implements Focusable {
 }
 
 async function showSkillsManager(ctx: ExtensionContext, registry: SkillRegistry, options: SkillsManagerOptions): Promise<SkillEntry | null> {
-	return await ctx.ui.custom<SkillEntry | null>((tui, theme, _kb, done) => {
-		const dialog = new SkillsManagerDialog(ctx, registry, theme, tui, done, options, () => tui.requestRender());
-		return {
-			get focused() { return dialog.focused; },
-			set focused(value: boolean) { dialog.focused = value; },
-			render(width: number) { return dialog.render(width); },
-			invalidate() { dialog.invalidate(); },
-			handleInput(data: string) { dialog.handleInput(data); tui.requestRender(); },
-		};
-	}, {
-		overlay: true,
-		overlayOptions: {
-			anchor: "center",
-			width: settingOverlaySize("popupWidth", DEFAULT_POPUP_WIDTH, ctx.cwd),
-			maxHeight: settingOverlaySize("popupMaxHeight", DEFAULT_POPUP_MAX_HEIGHT, ctx.cwd),
-		},
-	});
+	const releaseModalLock = acquireVstackModalLock();
+	try {
+		return await ctx.ui.custom<SkillEntry | null>((tui, theme, _kb, done) => {
+			const dialog = new SkillsManagerDialog(ctx, registry, theme, tui, done, options, () => tui.requestRender());
+			return {
+				get focused() { return dialog.focused; },
+				set focused(value: boolean) { dialog.focused = value; },
+				render(width: number) { return dialog.render(width); },
+				invalidate() { dialog.invalidate(); },
+				handleInput(data: string) { dialog.handleInput(data); tui.requestRender(); },
+			};
+		}, {
+			overlay: true,
+			overlayOptions: {
+				anchor: "center",
+				width: settingOverlaySize("popupWidth", DEFAULT_POPUP_WIDTH, ctx.cwd),
+				maxHeight: settingOverlaySize("popupMaxHeight", DEFAULT_POPUP_MAX_HEIGHT, ctx.cwd),
+			},
+		});
+	} finally {
+		releaseModalLock();
+	}
 }
 
 export default function skillsManager(pi: ExtensionAPI): void {

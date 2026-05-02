@@ -21,12 +21,17 @@ const PADDING_Y = 2;
 // Keep the legacy symbol so stale prompt-stash installs and the renamed
 // pi-prompt-stash package do not double-register the same command/shortcut.
 const INSTALL_SYMBOL = Symbol.for("vstack.prompt-stash.installed");
+const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 const DEFAULT_SHORTCUT = "alt+s";
 
 interface StashItem {
 	id: string;
 	text: string;
 	createdAt: string;
+}
+
+interface VstackModalLock {
+	depth: number;
 }
 
 interface StashStore {
@@ -221,6 +226,20 @@ function padAnsi(text: string, width: number): string {
 	return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated)))}`;
 }
 
+function acquireVstackModalLock(): () => void {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const existing = host[VSTACK_MODAL_LOCK_SYMBOL] as VstackModalLock | undefined;
+	const lock = existing && typeof existing.depth === "number" ? existing : { depth: 0 };
+	host[VSTACK_MODAL_LOCK_SYMBOL] = lock;
+	lock.depth += 1;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		lock.depth = Math.max(0, lock.depth - 1);
+	};
+}
+
 function searchable(text: string): string {
 	return text.toLowerCase();
 }
@@ -234,7 +253,7 @@ function panelLine(content: string, width: number): string {
 }
 
 function selectedLine(theme: Theme, content: string, width: number): string {
-	return theme.bg("toolSuccessBg", padAnsi(theme.fg("text", content), width));
+	return theme.bg("selectedBg", padAnsi(theme.fg("text", content), width));
 }
 
 function popupContentWidth(width: number): number {
@@ -246,15 +265,15 @@ function framePopup(lines: string[], width: number, theme: Theme): string[] {
 
 	const border = (text: string) => theme.fg("borderAccent", text);
 	const contentWidth = popupContentWidth(width);
-	const blank = `${border("│")}${" ".repeat(width - 2)}${border("│")}`;
-	const framed = [`${border("╭")}${border("─".repeat(width - 2))}${border("╮")}`];
+	const blank = `${border("┃")}${" ".repeat(width - 2)}${border("┃")}`;
+	const framed = [`${border("┏")}${border("━".repeat(width - 2))}${border("┓")}`];
 
 	for (let i = 0; i < PADDING_Y; i += 1) framed.push(blank);
 	for (const line of lines) {
-		framed.push(`${border("│")}${" ".repeat(PADDING_X)}${padAnsi(line, contentWidth)}${" ".repeat(PADDING_X)}${border("│")}`);
+		framed.push(`${border("┃")}${" ".repeat(PADDING_X)}${padAnsi(line, contentWidth)}${" ".repeat(PADDING_X)}${border("┃")}`);
 	}
 	for (let i = 0; i < PADDING_Y; i += 1) framed.push(blank);
-	framed.push(`${border("╰")}${border("─".repeat(width - 2))}${border("╯")}`);
+	framed.push(`${border("┗")}${border("━".repeat(width - 2))}${border("┛")}`);
 	return framed.map((line) => truncateToWidth(line, width, ""));
 }
 
@@ -288,7 +307,10 @@ async function openStashPopup(ctx: ExtensionContext): Promise<void> {
 		return;
 	}
 
-	const popped = await ctx.ui.custom<string | null>(
+	const releaseModalLock = acquireVstackModalLock();
+	let popped: string | null = null;
+	try {
+	popped = await ctx.ui.custom<string | null>(
 		(tui, theme, _keybindings, done) => {
 			let query = "";
 			let searchCursor = 0;
@@ -341,7 +363,7 @@ async function openStashPopup(ctx: ExtensionContext): Promise<void> {
 				clampSelection();
 
 				const lines: string[] = [];
-				const title = `${theme.fg("accent", theme.bold("⚑ Prompt stash"))} ${theme.fg("muted", `${items.length} saved`)}`;
+				const title = `${theme.fg("text", theme.bold("⚑ Prompt stash"))} ${theme.fg("muted", `${items.length} saved`)}`;
 				const esc = theme.fg("dim", "esc");
 				const titleGap = Math.max(1, innerWidth - visibleWidth(`⚑ Prompt stash ${items.length} saved`) - visibleWidth("esc"));
 				lines.push(panelLine(`${title}${" ".repeat(titleGap)}${esc}`, innerWidth));
@@ -496,6 +518,9 @@ async function openStashPopup(ctx: ExtensionContext): Promise<void> {
 			},
 		},
 	);
+	} finally {
+		releaseModalLock();
+	}
 
 	if (popped != null) {
 		ctx.ui.setEditorText(popped);

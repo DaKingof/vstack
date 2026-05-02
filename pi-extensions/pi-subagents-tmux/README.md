@@ -50,6 +50,23 @@ Useful options:
 - `cwd`: override working directory for a single task.
 - `confirmProjectAgents`: prompt before using project-local agents.
 
+## `/agents` browser
+
+Run `/agents` to open an overlay browser instead of dumping the agent list into chat.
+
+Keys:
+
+- Type to search by name, description, source, path, model, tools, or pane status.
+- `Tab` / `Shift+Tab` switches scope tabs: project, user, both.
+- `↑/↓`, `PageUp/PageDown`, `Home/End` navigate the list; `←/→` switches focus between list and inspector.
+- In the inspector pane, `↑/↓`, `PageUp/PageDown`, `Home/End` scroll the system prompt preview.
+- `Enter` or `i` inserts `Use subagent <name> to: ` into the editor.
+- For `pane: true` agents, `s` starts/reuses a pane, `a` attaches, and `x` stops it.
+- Status legend: `●` live pane, `○` pane-ready/startable, `×` stale pane, `·` one-shot.
+- `Esc` clears search or closes.
+
+Non-interactive mode still emits the legacy inline list/show output. Management commands remain available: `/agents start <name>`, `/agents send <name> <task>`, `/agents attach <name>`, `/agents stop <name>`, `/agents status`, and `/agents collect`.
+
 ## Persistent pane agents
 
 Agents with frontmatter like this use a persistent tmux pane instead of one-shot JSON mode:

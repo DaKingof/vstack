@@ -8,6 +8,7 @@ import { SessionManager, type ExtensionAPI, type ExtensionCommandContext, type E
 import { Input, matchesKey, truncateToWidth, visibleWidth, type Focusable } from "@mariozechner/pi-tui";
 
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-session-manager.installed");
+const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 const PACKAGE_ID = "pi-session-manager";
 const STATUS_KEY = "session-manager";
 const DEFAULT_SHORTCUT = "ctrl+shift+r";
@@ -25,6 +26,10 @@ type NameFilter = "all" | "named";
 type Mode = "browse" | "loading" | "rename" | "confirm-delete" | "deleting";
 
 type SessionAction = { type: "resume"; path: string; title: string } | { type: "cancel" };
+
+interface VstackModalLock {
+	depth: number;
+}
 
 interface SearchToken {
 	kind: "fuzzy" | "phrase";
@@ -173,6 +178,20 @@ function samePath(a: string | undefined, b: string | undefined): boolean {
 
 function stripAnsi(text: string): string {
 	return text.replace(ANSI_PATTERN, "");
+}
+
+function acquireVstackModalLock(): () => void {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const existing = host[VSTACK_MODAL_LOCK_SYMBOL] as VstackModalLock | undefined;
+	const lock = existing && typeof existing.depth === "number" ? existing : { depth: 0 };
+	host[VSTACK_MODAL_LOCK_SYMBOL] = lock;
+	lock.depth += 1;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		lock.depth = Math.max(0, lock.depth - 1);
+	};
 }
 
 function oneLine(value: unknown, fallback = ""): string {
@@ -849,12 +868,12 @@ class SessionManagerOverlay implements Focusable {
 			const clipped = truncateToWidth(safe, rowWidth, "");
 			return clipped + " ".repeat(Math.max(0, rowWidth - visibleWidth(clipped)));
 		};
-		const blank = () => border("│") + " ".repeat(frameInner) + border("│");
-		const row = (content = "") => border("│") + " ".repeat(POPUP_PADDING_X) + fixed(content) + " ".repeat(POPUP_PADDING_X) + border("│");
-		const divider = () => row(muted("─".repeat(bodyWidth)));
+		const blank = () => border("┃") + " ".repeat(frameInner) + border("┃");
+		const row = (content = "") => border("┃") + " ".repeat(POPUP_PADDING_X) + fixed(content) + " ".repeat(POPUP_PADDING_X) + border("┃");
+		const divider = () => row(muted("━".repeat(bodyWidth)));
 		const lines: string[] = [];
 
-		lines.push(border(`╭${"─".repeat(frameInner)}╮`));
+		lines.push(border(`┏${"━".repeat(frameInner)}┓`));
 		for (let i = 0; i < POPUP_PADDING_Y; i++) lines.push(blank());
 		lines.push(row(this.renderHeader(bodyWidth, accent, muted, dim)));
 		lines.push(row(this.renderSubheader(bodyWidth, accent, muted, dim, warning, error)));
@@ -874,7 +893,7 @@ class SessionManagerOverlay implements Focusable {
 		lines.push(row(""));
 		for (const footerLine of this.renderFooter(bodyWidth, dim, warning, error)) lines.push(row(footerLine));
 		for (let i = 0; i < POPUP_PADDING_Y; i++) lines.push(blank());
-		lines.push(border(`╰${"─".repeat(frameInner)}╯`));
+		lines.push(border(`┗${"━".repeat(frameInner)}┛`));
 		return lines.map((line) => truncateToWidth(line, renderWidth, ""));
 	}
 
@@ -1060,19 +1079,24 @@ class SessionManagerOverlay implements Focusable {
 }
 
 async function openManager(ctx: ExtensionCommandContext, pi: ExtensionAPI, initialScope?: Scope): Promise<SessionAction> {
-	const result = await ctx.ui.custom<SessionAction | undefined>(
-		(tui, theme, keybindings, done) => new SessionManagerOverlay(ctx, pi, theme, keybindings, (action) => done(action), () => tui.requestRender(), initialScope),
-		{
-			overlay: true,
-			overlayOptions: {
-				anchor: "center",
-				width: Math.max(72, Math.floor(settingNumber("overlayWidth", DEFAULT_WIDTH, ctx.cwd))),
-				maxHeight: "90%",
-				margin: 1,
+	const releaseModalLock = acquireVstackModalLock();
+	try {
+		const result = await ctx.ui.custom<SessionAction | undefined>(
+			(tui, theme, keybindings, done) => new SessionManagerOverlay(ctx, pi, theme, keybindings, (action) => done(action), () => tui.requestRender(), initialScope),
+			{
+				overlay: true,
+				overlayOptions: {
+					anchor: "center",
+					width: Math.max(72, Math.floor(settingNumber("overlayWidth", DEFAULT_WIDTH, ctx.cwd))),
+					maxHeight: "90%",
+					margin: 1,
+				},
 			},
-		},
-	);
-	return result ?? { type: "cancel" };
+		);
+		return result ?? { type: "cancel" };
+	} finally {
+		releaseModalLock();
+	}
 }
 
 function initialScopeFromArgs(args: string, cwd: string): Scope | undefined {

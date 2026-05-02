@@ -17,15 +17,20 @@ const INSTALL_SYMBOL = Symbol.for("vstack.pi-extension-manager.installed");
 const MANAGER_ID = "pi-extension-manager";
 const SETTINGS_EVENT = "vstack:extension-settings-changed";
 const DEFAULT_WIDTH = 124;
-const DEFAULT_MAX_HEIGHT = "90%";
+const DEFAULT_WIDTH_PERCENT = "92%";
+const DEFAULT_MAX_HEIGHT = "85%";
+const POPUP_HEIGHT_RATIO = 0.85;
 const POPUP_PADDING_X = 2;
 const POPUP_PADDING_Y = 1;
+const POPUP_FRAME_ROWS = 2 + POPUP_PADDING_Y * 2;
 const LEFT_MIN_WIDTH = 34;
 const LEFT_MAX_WIDTH = 48;
 const LIST_ROWS = 18;
 const SETTINGS_ROWS = 10;
-const MANAGER_INNER_ROWS = 30;
-const QUICK_SETTINGS_INNER_ROWS = 28;
+const MANAGER_INNER_ROWS = 32;
+const QUICK_SETTINGS_INNER_ROWS = 30;
+const QUICK_SETTINGS_ROWS = 18;
+const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 
 type Scope = "user" | "project" | "temporary" | "builtin" | "unknown";
 type ExtensionState = "active" | "disabled" | "shadowed" | "broken";
@@ -100,6 +105,17 @@ interface ConfigValue {
 	explicit: boolean;
 }
 
+interface PopupLayout {
+	bodyRows: number;
+	innerRows: number;
+	listRows: number;
+	settingsRows: number;
+}
+
+interface VstackModalLock {
+	depth: number;
+}
+
 interface InventoryItem {
 	id: string;
 	displayName: string;
@@ -158,7 +174,18 @@ interface ManagerActionToggleProvider {
 	provider: string;
 }
 
-type ManagerAction = ManagerActionEdit | ManagerActionSet | ManagerActionToggleItem | ManagerActionToggleProvider | { type: "close" } | undefined;
+interface ManagerActionResetSetting {
+	type: "reset-setting";
+	itemId: string;
+	settingKey: string;
+}
+
+interface ManagerActionResetSettings {
+	type: "reset-settings";
+	itemId: string;
+}
+
+type ManagerAction = ManagerActionEdit | ManagerActionSet | ManagerActionToggleItem | ManagerActionToggleProvider | ManagerActionResetSetting | ManagerActionResetSettings | { type: "close" } | undefined;
 
 function expandHome(input: string): string {
 	if (input === "~") return homedir();
@@ -275,6 +302,47 @@ function updateManagerState(file: SettingsFile, updater: (state: ManagerState) =
 
 function findSettingsFile(files: SettingsFile[], scope: Scope): SettingsFile {
 	return files.find((file) => file.scope === scope) ?? files[0]!;
+}
+
+function acquireVstackModalLock(): () => void {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const existing = host[VSTACK_MODAL_LOCK_SYMBOL] as VstackModalLock | undefined;
+	const lock = existing && typeof existing.depth === "number" ? existing : { depth: 0 };
+	host[VSTACK_MODAL_LOCK_SYMBOL] = lock;
+	lock.depth += 1;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		lock.depth = Math.max(0, lock.depth - 1);
+	};
+}
+
+function responsiveInnerRows(terminalRows: number, preferred: number, minimum = 12): number {
+	const available = Math.max(minimum + POPUP_FRAME_ROWS, Math.floor(Math.max(1, terminalRows) * POPUP_HEIGHT_RATIO));
+	return Math.max(minimum, Math.min(preferred, available - POPUP_FRAME_ROWS));
+}
+
+function managerLayout(terminalRows: number): PopupLayout {
+	const innerRows = responsiveInnerRows(terminalRows, MANAGER_INNER_ROWS, 14);
+	const bodyRows = Math.max(4, innerRows - 10);
+	return {
+		bodyRows,
+		innerRows,
+		listRows: Math.max(3, Math.min(LIST_ROWS, bodyRows - 3)),
+		settingsRows: Math.max(3, Math.min(SETTINGS_ROWS, bodyRows - 10)),
+	};
+}
+
+function quickSettingsLayout(terminalRows: number): PopupLayout {
+	const innerRows = responsiveInnerRows(terminalRows, QUICK_SETTINGS_INNER_ROWS, 12);
+	const bodyRows = Math.max(4, innerRows - 8);
+	return {
+		bodyRows,
+		innerRows,
+		listRows: Math.max(3, Math.min(QUICK_SETTINGS_ROWS, bodyRows)),
+		settingsRows: 0,
+	};
 }
 
 function defaultWriteScope(item: InventoryItem | undefined, files: SettingsFile[], managerState: ManagerState): Scope {
@@ -638,6 +706,46 @@ function setConfigValue(inventory: Inventory, item: InventoryItem, schema: Setti
 	});
 }
 
+function deleteConfigKeysFromFile(file: SettingsFile, extensionId: string, keys: Set<string>): number {
+	const vstack = asRecord(file.json.vstack);
+	const manager = asRecord(vstack?.extensionManager);
+	const config = asRecord(manager?.config);
+	const record = asRecord(config?.[extensionId]);
+	if (!manager || !config || !record) return 0;
+	let deleted = 0;
+	for (const key of keys) {
+		if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
+		delete record[key];
+		deleted += 1;
+	}
+	if (deleted === 0) return 0;
+	if (Object.keys(record).length === 0) delete config[extensionId];
+	if (Object.keys(config).length === 0) delete manager.config;
+	writeSettingsFile(file);
+	return deleted;
+}
+
+function resetConfigKeys(inventory: Inventory, extensionId: string, keys: Iterable<string>): number {
+	const keySet = new Set(keys);
+	if (keySet.size === 0) return 0;
+	let deleted = 0;
+	for (const file of inventory.settingsFiles.filter((candidate) => candidate.scope === "user" || candidate.scope === "project")) {
+		deleted += deleteConfigKeysFromFile(file, extensionId, keySet);
+	}
+	return deleted;
+}
+
+function hasDeferredApply(schemas: SettingsSchema[]): boolean {
+	return schemas.some((schema) => {
+		const apply = schema.apply ?? (schema.requiresReload ? "reload" : "live");
+		return apply !== "live";
+	});
+}
+
+function notifyReset(ctx: ExtensionCommandContext | ExtensionContext, label: string, schemas: SettingsSchema[]): void {
+	ctx.ui.notify(`${label} reset to default${schemas.length === 1 ? "" : "s"}.${hasDeferredApply(schemas) ? " Reload/restart may be required for deferred settings." : ""}`, hasDeferredApply(schemas) ? "warning" : "info");
+}
+
 function parseSettingInput(schema: SettingsSchema, input: string): unknown {
 	switch (schema.type) {
 		case "boolean": {
@@ -801,12 +909,14 @@ function makeInitialUiState(initialTab: TopTab): ManagerUiState {
 }
 
 async function openManager(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, initialTab: TopTab = TAB_ALL): Promise<void> {
+	const releaseModalLock = acquireVstackModalLock();
+	try {
 	let ui = makeInitialUiState(initialTab);
 	while (true) {
 		const inventory = buildInventory(pi, ctx as ExtensionContext);
 		const action = await ctx.ui.custom<ManagerAction>(
-			(tui, theme, _keybindings, done) => createManagerComponent(pi, inventory, ui, theme, () => tui.requestRender(), done),
-			{ overlay: true, overlayOptions: { anchor: "center", maxHeight: DEFAULT_MAX_HEIGHT, width: DEFAULT_WIDTH } },
+			(tui, theme, _keybindings, done) => createManagerComponent(pi, inventory, ui, theme, () => tui.requestRender(), () => managerLayout(tui.terminal.rows), done),
+			{ overlay: true, overlayOptions: { anchor: "center", maxHeight: DEFAULT_MAX_HEIGHT, width: DEFAULT_WIDTH_PERCENT } },
 		);
 
 		if (!action || action.type === "close") return;
@@ -838,6 +948,35 @@ async function openManager(pi: ExtensionAPI, ctx: ExtensionCommandContext | Exte
 			ctx.ui.notify(applyMessage(schema), schema.apply === "restart" || schema.requiresReload ? "warning" : "info");
 			continue;
 		}
+		if (action.type === "reset-setting") {
+			const item = inventory.items.find((candidate) => candidate.id === action.itemId);
+			const schema = item?.settingsSchema?.find((candidate) => candidate.key === action.settingKey);
+			if (!item || !schema) continue;
+			const extensionId = selectedPackageForSetting(item) ?? item.displayName;
+			if (!getConfigValue(inventory, extensionId, schema).explicit) {
+				ctx.ui.notify(`${schema.label ?? schema.key} is already using its default.`, "info");
+				continue;
+			}
+			resetConfigKeys(inventory, extensionId, [schema.key]);
+			pi.events.emit(SETTINGS_EVENT, { extensionId, key: schema.key, value: schema.default });
+			notifyReset(ctx, schema.label ?? schema.key, [schema]);
+			continue;
+		}
+		if (action.type === "reset-settings") {
+			const item = inventory.items.find((candidate) => candidate.id === action.itemId);
+			const schemas = item?.settingsSchema?.filter((schema) => schema.type !== "secret") ?? [];
+			if (!item || schemas.length === 0) continue;
+			const extensionId = selectedPackageForSetting(item) ?? item.displayName;
+			const explicitSchemas = schemas.filter((schema) => getConfigValue(inventory, extensionId, schema).explicit);
+			if (explicitSchemas.length === 0) {
+				ctx.ui.notify(`${item.displayName} settings are already using defaults.`, "info");
+				continue;
+			}
+			resetConfigKeys(inventory, extensionId, explicitSchemas.map((schema) => schema.key));
+			for (const schema of explicitSchemas) pi.events.emit(SETTINGS_EVENT, { extensionId, key: schema.key, value: schema.default });
+			notifyReset(ctx, `${item.displayName} settings`, explicitSchemas);
+			continue;
+		}
 		if (action.type === "toggle-item") {
 			const item = inventory.items.find((candidate) => candidate.id === action.itemId);
 			if (item) toggleItem(pi, ctx, inventory, item);
@@ -847,6 +986,9 @@ async function openManager(pi: ExtensionAPI, ctx: ExtensionCommandContext | Exte
 			toggleProvider(pi, ctx, inventory, action.provider);
 			continue;
 		}
+	}
+	} finally {
+		releaseModalLock();
 	}
 }
 
@@ -980,6 +1122,7 @@ function createManagerComponent(
 	ui: ManagerUiState,
 	theme: Theme,
 	requestRender: () => void,
+	getLayout: () => PopupLayout,
 	done: (value: ManagerAction) => void,
 ) {
 	const topTabs = managerTabs(inventory);
@@ -989,18 +1132,20 @@ function createManagerComponent(
 	const scopes = ["all", "project", "user", "temporary", "builtin", "unknown"];
 
 	function clamp(): void {
+		const layout = getLayout();
 		if (!topTabs.some((tab) => tab.id === ui.topTab)) ui.topTab = TAB_ALL;
 		if (!isInventoryTab(ui.topTab)) return;
 		const list = filteredItems(inventory.items, ui);
 		ui.selected = Math.max(0, Math.min(ui.selected, Math.max(0, list.length - 1)));
-		ui.scroll = Math.max(0, Math.min(ui.scroll, Math.max(0, list.length - LIST_ROWS)));
+		ui.scroll = Math.max(0, Math.min(ui.scroll, Math.max(0, list.length - layout.listRows)));
 		if (ui.selected < ui.scroll) ui.scroll = ui.selected;
-		if (ui.selected >= ui.scroll + LIST_ROWS) ui.scroll = ui.selected - LIST_ROWS + 1;
+		if (ui.selected >= ui.scroll + layout.listRows) ui.scroll = ui.selected - layout.listRows + 1;
 		const selected = list[ui.selected];
 		const settingCount = selected?.settingsSchema?.length ?? 0;
 		ui.settingSelected = Math.max(0, Math.min(ui.settingSelected, Math.max(0, settingCount - 1)));
 		if (ui.settingSelected < ui.settingScroll) ui.settingScroll = ui.settingSelected;
-		if (ui.settingSelected >= ui.settingScroll + SETTINGS_ROWS) ui.settingScroll = ui.settingSelected - SETTINGS_ROWS + 1;
+		if (ui.settingSelected >= ui.settingScroll + layout.settingsRows) ui.settingScroll = ui.settingSelected - layout.settingsRows + 1;
+		ui.settingScroll = Math.max(0, Math.min(ui.settingScroll, Math.max(0, settingCount - layout.settingsRows)));
 	}
 
 	function cycle<T extends string>(values: T[], current: string, delta: number): T {
@@ -1021,7 +1166,7 @@ function createManagerComponent(
 
 	function diagnosticsMaxScroll(): number {
 		const width = frameContentWidth(DEFAULT_WIDTH);
-		const visibleRows = Math.max(1, MANAGER_INNER_ROWS - 4);
+		const visibleRows = Math.max(1, getLayout().innerRows - 5);
 		return Math.max(0, renderDiagnostics(inventory, width, theme).length - visibleRows);
 	}
 
@@ -1092,13 +1237,13 @@ function createManagerComponent(
 			return;
 		}
 		if (matchesKey(data, "pageup")) {
-			ui.selected -= LIST_ROWS;
+			ui.selected -= getLayout().listRows;
 			clamp();
 			requestRender();
 			return;
 		}
 		if (matchesKey(data, "pagedown")) {
-			ui.selected += LIST_ROWS;
+			ui.selected += getLayout().listRows;
 			clamp();
 			requestRender();
 			return;
@@ -1116,6 +1261,13 @@ function createManagerComponent(
 			clamp();
 			requestRender();
 			return;
+		}
+		if ((data === "d" || data === "D") && selected) {
+			if (data === "D") return done({ type: "reset-settings", itemId: selected.id });
+			if (ui.pane === "settings" && settings.length > 0) {
+				const schema = settings[ui.settingSelected];
+				if (schema) return done({ type: "reset-setting", itemId: selected.id, settingKey: schema.key });
+			}
 		}
 		if (isPlainSearchInput(data)) {
 			ui.search += data;
@@ -1178,26 +1330,58 @@ function createManagerComponent(
 
 	function render(width: number): string[] {
 		clamp();
-		const safeWidth = Math.max(60, width);
+		const layout = getLayout();
+		const safeWidth = Math.max(1, width);
 		const bodyWidth = frameContentWidth(safeWidth);
 		let lines: string[] = [];
 		lines.push(renderTabBar(topTabs, ui.topTab, bodyWidth, theme));
-		lines.push(theme.fg("dim", ui.showAudit ? "diagnostics · ↑↓ scroll · PgUp/PgDn · Alt+A back · esc close" : "tab switch tabs · ↑↓ navigate · enter toggle/edit · type search · Alt+A diagnostics · esc close"));
+		lines.push("");
+		lines.push(theme.fg("dim", ui.showAudit ? "diagnostics · ↑↓ scroll · PgUp/PgDn · Alt+A back · esc close" : "tab switch tabs · ↑↓ navigate · enter toggle/edit · d reset setting · D reset extension · type search · Alt+A diagnostics · esc close"));
+		lines.push("");
 		lines.push(divider(bodyWidth, theme));
-		if (ui.showAudit) lines.push(...renderDiagnosticsViewport(inventory, ui, bodyWidth, theme));
-		else lines.push(...renderExtensions(inventory, ui, bodyWidth, theme));
-		return frame(lines, safeWidth, theme, MANAGER_INNER_ROWS);
+		const availableRows = Math.max(1, layout.innerRows - lines.length);
+		if (ui.showAudit) lines.push(...renderDiagnosticsViewport(inventory, ui, bodyWidth, theme, availableRows));
+		else lines.push(...renderExtensions(inventory, ui, bodyWidth, theme, layout));
+		return frame(lines, safeWidth, theme, layout.innerRows);
 	}
 
 	return { handleInput, invalidate() {}, render };
+}
+
+function managerActivePill(theme: Theme, label: string): string {
+	return theme.fg("accent", theme.inverse(theme.bold(label)));
+}
+
+function managerInactivePill(theme: Theme, label: string): string {
+	return theme.bg("selectedBg", theme.fg("accent", label));
+}
+
+function managerPaneTitle(theme: Theme, label: string, active: boolean): string {
+	return active ? managerActivePill(theme, ` ${label} `) : theme.fg("muted", theme.bold(label));
+}
+
+function managerEntityTitle(theme: Theme, label: string): string {
+	return theme.fg("text", theme.bold(label));
+}
+
+function managerSectionTitle(theme: Theme, label: string): string {
+	return theme.fg("muted", theme.bold(label));
+}
+
+function managerSelectedLine(theme: Theme, line: string, width: number): string {
+	return theme.bg("selectedBg", pad(line, width));
+}
+
+function managerMutedForSelection(theme: Theme, text: string, selected: boolean): string {
+	return theme.fg(selected ? "text" : "dim", text);
 }
 
 function renderTabBar(tabs: ManagerTab[], active: TopTab, width: number, theme: Theme): string {
 	const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.id === active));
 	const partFor = (tab: ManagerTab): string => {
 		const label = ` ${truncateToWidth(tab.label, 18, "…")} `;
-		if (tab.id === active) return theme.fg("accent", theme.inverse(theme.bold(label)));
-		return theme.bg("selectedBg", theme.fg("muted", label));
+		if (tab.id === active) return managerActivePill(theme, label);
+		return managerInactivePill(theme, label);
 	};
 	const renderWindow = (start: number, end: number): string => {
 		const parts = tabs.slice(start, end).map(partFor);
@@ -1230,9 +1414,9 @@ function renderTabBar(tabs: ManagerTab[], active: TopTab, width: number, theme: 
 	return truncateToWidth(current, width, "");
 }
 
-function renderDiagnosticsViewport(inventory: Inventory, ui: ManagerUiState, width: number, theme: Theme): string[] {
+function renderDiagnosticsViewport(inventory: Inventory, ui: ManagerUiState, width: number, theme: Theme, viewportRows: number): string[] {
 	const all = renderDiagnostics(inventory, width, theme);
-	const viewportRows = Math.max(1, MANAGER_INNER_ROWS - 4);
+	viewportRows = Math.max(1, viewportRows);
 	if (all.length <= viewportRows) {
 		ui.diagnosticsScroll = 0;
 		return all;
@@ -1250,18 +1434,18 @@ function renderDiagnostics(inventory: Inventory, width: number, theme: Theme): s
 	const counts = countBy(inventory.items, (item) => item.state);
 	const kinds = countBy(inventory.items, (item) => item.kind);
 	const lines = [
-		theme.fg("accent", theme.bold("Diagnostics")),
+		managerEntityTitle(theme, "Diagnostics"),
 		`Inventory: ${inventory.items.length} resources · ${counts.active ?? 0} active · ${counts.disabled ?? 0} disabled · ${counts.shadowed ?? 0} shadowed · ${counts.broken ?? 0} broken`,
 		`Kinds: ${Object.entries(kinds).map(([kind, count]) => `${kind}=${count}`).join(", ")}`,
 		"",
-		theme.fg("accent", "Settings files"),
+		managerSectionTitle(theme, "Settings files"),
 	];
 	for (const file of inventory.settingsFiles) lines.push(`${file.scope}: ${compactPath(file.path)}${file.exists ? "" : " (not created yet)"}`);
-	lines.push("", theme.fg("accent", "Package manifests"));
+	lines.push("", managerSectionTitle(theme, "Package manifests"));
 	if (inventory.auditLines.length === 0) lines.push(theme.fg("dim", "No package manifests found in current Pi settings."));
 	for (const block of inventory.auditLines) {
 		const [head, ...rest] = block.split("\n");
-		lines.push(theme.fg("accent", head ?? "package"));
+		lines.push(managerSectionTitle(theme, head ?? "package"));
 		for (const line of rest.slice(0, 3)) lines.push(theme.fg("dim", line));
 	}
 	lines.push("", theme.fg("warning", "Runtime note"));
@@ -1269,22 +1453,24 @@ function renderDiagnostics(inventory: Inventory, width: number, theme: Theme): s
 	return lines.flatMap((line) => wrapLine(line, width));
 }
 
-function renderExtensions(inventory: Inventory, ui: ManagerUiState, width: number, theme: Theme): string[] {
+function renderExtensions(inventory: Inventory, ui: ManagerUiState, width: number, theme: Theme, layout: PopupLayout): string[] {
 	const list = filteredItems(inventory.items, ui);
 	const selected = list[ui.selected];
-	const leftWidth = Math.max(LEFT_MIN_WIDTH, Math.min(LEFT_MAX_WIDTH, Math.floor(width * 0.38)));
+	const leftWidth = Math.max(Math.min(LEFT_MIN_WIDTH, Math.floor(width * 0.45)), Math.min(LEFT_MAX_WIDTH, Math.floor(width * 0.38)));
 	const rightWidth = Math.max(20, width - leftWidth - 3);
-	const left = renderList(list, ui, leftWidth, theme);
-	const right = renderInspector(inventory, selected, ui, rightWidth, theme);
-	const rows = Math.max(left.length, right.length);
+	const left = renderList(list, ui, leftWidth, theme, layout.listRows);
+	const right = renderInspector(inventory, selected, ui, rightWidth, theme, layout.settingsRows);
+	const rows = layout.bodyRows;
 	const view = ui.topTab === TAB_ALL ? (ui.showResources ? "raw resources" : "packages") : "package";
 	const lines = [
+		"",
 		truncateToWidth(
 			`${theme.fg("accent", "Search")}: ${ui.search || theme.fg("dim", "type to filter")}  ${theme.fg("accent", "View")}: ${view}  ${theme.fg("accent", "Filters")}: kind ${ui.kindFilter} · provider ${ui.providerFilter} · state ${ui.stateFilter} · scope ${ui.scopeFilter}`,
 			width,
 			"",
 		),
-		theme.fg("dim", "Alt+K/P/S/O filters · Alt+R raw resources · Alt+T toggle provider · ←/→ pane"),
+		"",
+		theme.fg("dim", "Alt+K/P/S/O filters · Alt+R raw resources · Alt+T toggle provider · d reset setting · D reset extension · ←/→ pane"),
 		divider(width, theme),
 	];
 	for (let i = 0; i < rows; i += 1) {
@@ -1299,23 +1485,25 @@ function listDisplayName(item: InventoryItem, ui: ManagerUiState): string {
 	return item.displayName;
 }
 
-function renderList(items: InventoryItem[], ui: ManagerUiState, width: number, theme: Theme): string[] {
+function renderList(items: InventoryItem[], ui: ManagerUiState, width: number, theme: Theme, listRows: number): string[] {
 	const title = packageNameForTab(ui.topTab) ? "Package" : ui.showResources ? "Resources" : "Packages";
-	const lines = [`${theme.fg(ui.pane === "list" ? "accent" : "muted", theme.bold(title))} ${theme.fg("dim", `(${items.length})`)}`];
+	const lines = [`${managerPaneTitle(theme, title, ui.pane === "list")} ${theme.fg("dim", `(${items.length})`)}`];
 	if (items.length === 0) {
 		lines.push(theme.fg("dim", "No matching items."));
 		return lines;
 	}
 	if (ui.scroll > 0) lines.push(theme.fg("dim", `↑ ${ui.scroll} earlier`));
-	for (const [visibleIndex, item] of items.slice(ui.scroll, ui.scroll + LIST_ROWS).entries()) {
+	for (const [visibleIndex, item] of items.slice(ui.scroll, ui.scroll + listRows).entries()) {
 		const index = ui.scroll + visibleIndex;
-		const marker = index === ui.selected ? theme.fg("accent", "›") : theme.fg("dim", " ");
-		const stateIcon = item.state === "active" ? theme.fg("success", "●") : item.state === "disabled" ? theme.fg("warning", "○") : item.state === "shadowed" ? theme.fg("dim", "◌") : theme.fg("error", "×");
-		const meta = theme.fg("dim", ` ${kindLabel(item.kind)} · ${item.scope}`);
-		const row = truncateToWidth(`${marker} ${stateIcon} ${listDisplayName(item, ui)}${meta}`, width, "…");
-		lines.push(index === ui.selected ? theme.bg("selectedBg", pad(row, width)) : row);
+		const selected = index === ui.selected;
+		const marker = selected ? theme.fg("accent", "›") : theme.fg("dim", " ");
+		const stateIcon = item.state === "active" ? theme.fg("success", "●") : item.state === "disabled" ? theme.fg("warning", "○") : item.state === "shadowed" ? theme.fg(selected ? "text" : "dim", "◌") : theme.fg("error", "×");
+		const name = selected ? theme.fg("text", listDisplayName(item, ui)) : listDisplayName(item, ui);
+		const meta = managerMutedForSelection(theme, ` ${kindLabel(item.kind)} · ${item.scope}`, selected);
+		const row = truncateToWidth(`${marker} ${stateIcon} ${name}${meta}`, width, "…");
+		lines.push(selected ? managerSelectedLine(theme, row, width) : row);
 	}
-	const hidden = Math.max(0, items.length - (ui.scroll + LIST_ROWS));
+	const hidden = Math.max(0, items.length - (ui.scroll + listRows));
 	if (hidden > 0) lines.push(theme.fg("dim", `↓ ${hidden} more`));
 	return lines;
 }
@@ -1334,7 +1522,7 @@ function packageResourceLines(inventory: Inventory, item: InventoryItem, width: 
 		const label = kindLabel(child.kind);
 		groups.set(label, [...(groups.get(label) ?? []), child]);
 	}
-	const lines = ["", theme.fg("accent", theme.bold(`Resources (${children.length})`))];
+	const lines = ["", managerSectionTitle(theme, `Resources (${children.length})`)];
 	for (const [label, group] of [...groups.entries()].sort((a, b) => kindRank(a[0]) - kindRank(b[0]) || a[0].localeCompare(b[0]))) {
 		const names = group.slice(0, 4).map(shortResourceName).join(", ");
 		const suffix = group.length > 4 ? `, +${group.length - 4} more` : "";
@@ -1343,10 +1531,10 @@ function packageResourceLines(inventory: Inventory, item: InventoryItem, width: 
 	return lines;
 }
 
-function renderInspector(inventory: Inventory, item: InventoryItem | undefined, ui: ManagerUiState, width: number, theme: Theme): string[] {
+function renderInspector(inventory: Inventory, item: InventoryItem | undefined, ui: ManagerUiState, width: number, theme: Theme, settingsRows: number): string[] {
 	if (!item) return [theme.fg("dim", "Select an item to inspect it.")];
 	const lines = [
-		`${theme.fg("accent", theme.bold(item.displayName))} ${theme.fg(stateColor(item.state), item.state)}`,
+		`${managerEntityTitle(theme, item.displayName)} ${theme.fg(stateColor(item.state), item.state)}`,
 		item.description ? truncateToWidth(item.description, width, "…") : theme.fg("dim", "No description."),
 		"",
 		`${theme.fg("muted", "Kind")}: ${kindLabel(item.kind)}    ${theme.fg("muted", "Scope")}: ${item.scope}`,
@@ -1358,7 +1546,7 @@ function renderInspector(inventory: Inventory, item: InventoryItem | undefined, 
 	if (item.shadowedBy) lines.push(`${theme.fg("muted", "Shadowed by")}: ${item.shadowedBy}`);
 	if (item.brokenError) lines.push(`${theme.fg("error", "Error")}: ${item.brokenError}`);
 	lines.push(...packageResourceLines(inventory, item, width, theme));
-	lines.push("", `${theme.fg(ui.pane === "settings" ? "accent" : "muted", theme.bold("Settings"))}`);
+	lines.push("", managerPaneTitle(theme, "Settings", ui.pane === "settings"));
 	const schemas = item.settingsSchema ?? [];
 	if (schemas.length === 0) {
 		lines.push(theme.fg("dim", "No declared settings schema for this item."));
@@ -1366,18 +1554,22 @@ function renderInspector(inventory: Inventory, item: InventoryItem | undefined, 
 	}
 	const extensionId = selectedPackageForSetting(item) ?? item.displayName;
 	if (ui.settingScroll > 0) lines.push(theme.fg("dim", `↑ ${ui.settingScroll} earlier setting(s)`));
-	for (const [visibleIndex, schema] of schemas.slice(ui.settingScroll, ui.settingScroll + SETTINGS_ROWS).entries()) {
+	for (const [visibleIndex, schema] of schemas.slice(ui.settingScroll, ui.settingScroll + settingsRows).entries()) {
 		const index = ui.settingScroll + visibleIndex;
+		const selected = index === ui.settingSelected;
 		const config = getConfigValue(inventory, extensionId, schema);
-		const marker = index === ui.settingSelected ? theme.fg("accent", "›") : " ";
+		const marker = selected ? theme.fg("accent", "›") : " ";
 		const apply = schema.apply ?? (schema.requiresReload ? "reload" : "live");
 		const value = formatSettingValue(schema, config.value);
 		const scope = config.explicit ? config.scope : "default";
-		const row = truncateToWidth(`${marker} ${schema.label ?? schema.key}: ${theme.fg("accent", value)} ${theme.fg("dim", `(${schema.type}, ${scope}, ${apply})`)}`, width, "…");
-		lines.push(index === ui.settingSelected ? theme.bg("selectedBg", pad(row, width)) : row);
-		if (index === ui.settingSelected && schema.description) lines.push(`  ${theme.fg("dim", schema.description)}`);
+		const valueText = theme.fg(config.explicit ? "warning" : selected ? "text" : "muted", value);
+		const meta = managerMutedForSelection(theme, `(${schema.type}, ${scope}, ${apply})`, selected);
+		const label = selected ? theme.fg("text", schema.label ?? schema.key) : schema.label ?? schema.key;
+		const row = truncateToWidth(`${marker} ${label}: ${valueText} ${meta}`, width, "…");
+		lines.push(selected ? managerSelectedLine(theme, row, width) : row);
+		if (selected && schema.description) lines.push(`  ${theme.fg("muted", schema.description)}`);
 	}
-	const hidden = Math.max(0, schemas.length - (ui.settingScroll + SETTINGS_ROWS));
+	const hidden = Math.max(0, schemas.length - (ui.settingScroll + settingsRows));
 	if (hidden > 0) lines.push(theme.fg("dim", `↓ ${hidden} more setting(s)`));
 	return lines.flatMap((line) => wrapLine(line, width));
 }
@@ -1410,12 +1602,12 @@ function frame(lines: string[], width: number, theme: Theme, fixedInnerRows?: nu
 			body = [...body, ...Array.from({ length: fixedInnerRows - body.length }, () => "")];
 		}
 	}
-	const blank = `${border("│")}${" ".repeat(inner)}${border("│")}`;
-	const out = [`${border("╭")}${border("─".repeat(inner))}${border("╮")}`];
+	const blank = `${border("┃")}${" ".repeat(inner)}${border("┃")}`;
+	const out = [`${border("┏")}${border("━".repeat(inner))}${border("┓")}`];
 	for (let i = 0; i < POPUP_PADDING_Y; i += 1) out.push(blank);
-	for (const line of body) out.push(`${border("│")}${" ".repeat(POPUP_PADDING_X)}${pad(line, contentWidth)}${" ".repeat(POPUP_PADDING_X)}${border("│")}`);
+	for (const line of body) out.push(`${border("┃")}${" ".repeat(POPUP_PADDING_X)}${pad(line, contentWidth)}${" ".repeat(POPUP_PADDING_X)}${border("┃")}`);
 	for (let i = 0; i < POPUP_PADDING_Y; i += 1) out.push(blank);
-	out.push(`${border("╰")}${border("─".repeat(inner))}${border("╯")}`);
+	out.push(`${border("┗")}${border("━".repeat(inner))}${border("┛")}`);
 	return out.map((line) => truncateToWidth(line, width, ""));
 }
 
@@ -1454,8 +1646,6 @@ interface QuickSettingsUiState {
 }
 
 type QuickSettingsAction = { type: "close" } | undefined;
-
-const QUICK_SETTINGS_ROWS = 18;
 
 function settingPackages(inventory: Inventory): InventoryItem[] {
 	return inventory.packages.filter((item) => item.packageName && item.settingsSchema?.length && item.state !== "shadowed");
@@ -1528,17 +1718,40 @@ function saveQuickSetting(pi: ExtensionAPI, ctx: ExtensionCommandContext | Exten
 	if (apply !== "live") ctx.ui.notify(applyMessage(row.schema), apply === "restart" ? "warning" : "info");
 }
 
-function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, inventory: Inventory, ui: QuickSettingsUiState, theme: Theme, requestRender: () => void, done: (action: QuickSettingsAction) => void) {
+function resetQuickSetting(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, inventory: Inventory, row: QuickSettingRow): void {
+	if (!getConfigValue(inventory, row.extensionId, row.schema).explicit) {
+		ctx.ui.notify(`${row.schema.label ?? row.schema.key} is already using its default.`, "info");
+		return;
+	}
+	resetConfigKeys(inventory, row.extensionId, [row.schema.key]);
+	pi.events.emit(SETTINGS_EVENT, { extensionId: row.extensionId, key: row.schema.key, value: row.schema.default });
+	notifyReset(ctx, row.schema.label ?? row.schema.key, [row.schema]);
+}
+
+function resetQuickSettingsForExtension(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, inventory: Inventory, rows: QuickSettingRow[], extensionId: string, label: string): void {
+	const scoped = rows.filter((row) => row.extensionId === extensionId);
+	const explicit = scoped.filter((row) => getConfigValue(inventory, row.extensionId, row.schema).explicit);
+	if (explicit.length === 0) {
+		ctx.ui.notify(`${label} settings are already using defaults.`, "info");
+		return;
+	}
+	resetConfigKeys(inventory, extensionId, explicit.map((row) => row.schema.key));
+	for (const row of explicit) pi.events.emit(SETTINGS_EVENT, { extensionId, key: row.schema.key, value: row.schema.default });
+	notifyReset(ctx, `${label} settings`, explicit.map((row) => row.schema));
+}
+
+function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, inventory: Inventory, ui: QuickSettingsUiState, theme: Theme, requestRender: () => void, getLayout: () => PopupLayout, done: (action: QuickSettingsAction) => void) {
 	const rows = quickSettingRows(inventory);
 	const tabs = quickSettingsTabs(rows);
 	const filtered = () => filterQuickSettingRows(rows, ui.search, inventory, ui.tab);
 	const clamp = () => {
+		const layout = getLayout();
 		if (!tabs.some((tab) => tab.id === ui.tab)) ui.tab = TAB_ALL;
 		const count = filtered().length;
 		ui.selected = Math.max(0, Math.min(ui.selected, Math.max(0, count - 1)));
 		if (ui.selected < ui.scroll) ui.scroll = ui.selected;
-		if (ui.selected >= ui.scroll + QUICK_SETTINGS_ROWS) ui.scroll = ui.selected - QUICK_SETTINGS_ROWS + 1;
-		ui.scroll = Math.max(0, Math.min(ui.scroll, Math.max(0, count - QUICK_SETTINGS_ROWS)));
+		if (ui.selected >= ui.scroll + layout.listRows) ui.scroll = ui.selected - layout.listRows + 1;
+		ui.scroll = Math.max(0, Math.min(ui.scroll, Math.max(0, count - layout.listRows)));
 	};
 	const selectedRow = () => {
 		clamp();
@@ -1633,13 +1846,13 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 			return;
 		}
 		if (matchesKey(data, "pageup")) {
-			ui.selected -= QUICK_SETTINGS_ROWS;
+			ui.selected -= getLayout().listRows;
 			clamp();
 			requestRender();
 			return;
 		}
 		if (matchesKey(data, "pagedown")) {
-			ui.selected += QUICK_SETTINGS_ROWS;
+			ui.selected += getLayout().listRows;
 			clamp();
 			requestRender();
 			return;
@@ -1658,6 +1871,18 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 			requestRender();
 			return;
 		}
+		if (data === "d") {
+			const row = selectedRow();
+			if (row) resetQuickSetting(pi, ctx, inventory, row);
+			requestRender();
+			return;
+		}
+		if (data === "D") {
+			const row = selectedRow();
+			if (row) resetQuickSettingsForExtension(pi, ctx, inventory, rows, row.extensionId, row.packageName);
+			requestRender();
+			return;
+		}
 		if (matchesKey(data, "enter") || matchesKey(data, "return")) return editOrToggle();
 		if (isPlainSearchInput(data)) {
 			ui.search += data;
@@ -1669,43 +1894,52 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 
 	function render(width: number): string[] {
 		clamp();
-		const safeWidth = Math.max(72, width);
+		const layout = getLayout();
+		const safeWidth = Math.max(1, width);
 		const bodyWidth = frameContentWidth(safeWidth);
-		const visible = filtered().slice(ui.scroll, ui.scroll + QUICK_SETTINGS_ROWS);
+		const visible = filtered().slice(ui.scroll, ui.scroll + layout.listRows);
 		const lines: string[] = [];
+		const searchLine = ui.editing
+			? `${theme.fg("accent", "Editing")}: ${theme.fg("dim", "inline value active")}`
+			: `${theme.fg("accent", "Search")}: ${ui.search || theme.fg("dim", "type to filter settings")}`;
 		lines.push(renderTabBar(tabs, ui.tab, bodyWidth, theme));
-		lines.push(theme.fg("dim", ui.editing ? "editing value · enter save · esc cancel · backspace delete · ctrl+u clear" : "tab switch extension tabs · ↑↓ navigate · enter edit/toggle · type search · backspace clear · esc close"));
-		lines.push(ui.editing ? theme.fg("dim", "Inline edit active") : ui.search ? `${theme.fg("muted", "Search:")} ${ui.search}` : theme.fg("dim", "Type to search settings"));
+		lines.push("");
+		lines.push(theme.fg("dim", ui.editing ? "editing value · enter save · esc cancel · backspace delete · ctrl+u clear" : "tab switch extension tabs · ↑↓ navigate · enter edit/toggle · d reset setting · D reset extension · type search · backspace clear · esc close"));
+		lines.push("");
+		lines.push(searchLine);
+		lines.push("");
 		lines.push(divider(bodyWidth, theme));
 		if (visible.length === 0) {
 			lines.push(theme.fg("muted", "No matching settings."));
-			return frame(lines, safeWidth, theme, QUICK_SETTINGS_INNER_ROWS);
+			return frame(lines, safeWidth, theme, layout.innerRows);
 		}
 		let lastPackage = "";
 		for (const [visibleIndex, row] of visible.entries()) {
 			const index = ui.scroll + visibleIndex;
 			if (row.packageName !== lastPackage) {
 				if (lastPackage) lines.push("");
-				lines.push(theme.fg("accent", theme.bold(row.packageName)));
+				lines.push(managerSectionTitle(theme, row.packageName));
 				lastPackage = row.packageName;
 			}
+			const selected = index === ui.selected;
 			const config = getConfigValue(inventory, row.extensionId, row.schema);
-			const marker = index === ui.selected ? theme.fg("accent", "›") : " ";
-			const label = truncateToWidth(row.schema.label ?? row.schema.key, 34, "…");
+			const marker = selected ? theme.fg("accent", "›") : " ";
+			const labelText = truncateToWidth(row.schema.label ?? row.schema.key, 34, "…");
+			const label = selected ? theme.fg("text", labelText) : labelText;
 			const isEditing = ui.editing?.rowId === row.id;
 			const value = isEditing ? `${ui.editing?.buffer ?? ""}█` : formatSettingValue(row.schema, config.value);
-			const valueText = theme.fg(isEditing || config.explicit ? "accent" : "muted", value);
+			const valueText = theme.fg(isEditing ? "accent" : config.explicit ? "warning" : selected ? "text" : "muted", value);
 			const mode = isEditing ? "editing" : row.schema.type === "boolean" || row.schema.type === "enum" ? "toggle" : "edit";
-			const meta = theme.fg("dim", `${row.schema.type} · ${mode} · ${config.scope}`);
-			const rowText = truncateToWidth(`${marker} ${label}${" ".repeat(Math.max(1, 36 - visibleWidth(label)))}${valueText} ${meta}`, bodyWidth, "…");
-			lines.push(index === ui.selected ? theme.bg("selectedBg", pad(rowText, bodyWidth)) : rowText);
-			if (isEditing) lines.push(theme.fg("dim", "    Enter saves · Esc cancels · Backspace deletes · Ctrl+U clears"));
-			else if (index === ui.selected && row.schema.description) lines.push(theme.fg("dim", `    ${truncateToWidth(row.schema.description, bodyWidth - 4, "…")}`));
+			const meta = managerMutedForSelection(theme, `${row.schema.type} · ${mode} · ${config.scope}`, selected);
+			const rowText = truncateToWidth(`${marker} ${label}${" ".repeat(Math.max(1, 36 - visibleWidth(labelText)))}${valueText} ${meta}`, bodyWidth, "…");
+			lines.push(selected ? managerSelectedLine(theme, rowText, bodyWidth) : rowText);
+			if (isEditing) lines.push(theme.fg("muted", "    Enter saves · Esc cancels · Backspace deletes · Ctrl+U clears"));
+			else if (selected && row.schema.description) lines.push(theme.fg("muted", `    ${truncateToWidth(row.schema.description, bodyWidth - 4, "…")}`));
 		}
 		const moreBefore = ui.scroll > 0 ? `↑ ${ui.scroll}` : "";
-		const moreAfter = ui.scroll + QUICK_SETTINGS_ROWS < filtered().length ? `↓ ${filtered().length - ui.scroll - QUICK_SETTINGS_ROWS}` : "";
+		const moreAfter = ui.scroll + layout.listRows < filtered().length ? `↓ ${filtered().length - ui.scroll - layout.listRows}` : "";
 		if (moreBefore || moreAfter) lines.push("", theme.fg("dim", [moreBefore, moreAfter].filter(Boolean).join(" · ")));
-		return frame(lines, safeWidth, theme, QUICK_SETTINGS_INNER_ROWS);
+		return frame(lines, safeWidth, theme, layout.innerRows);
 	}
 
 	return { handleInput, invalidate() {}, render };
@@ -1718,10 +1952,15 @@ async function openQuickSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext 
 		return;
 	}
 	const ui: QuickSettingsUiState = { scroll: 0, search: "", selected: 0, tab: TAB_ALL };
-	await ctx.ui.custom<QuickSettingsAction>(
-		(tui, theme, _keybindings, done) => createQuickSettingsComponent(pi, ctx, inventory, ui, theme, () => tui.requestRender(), done),
-		{ overlay: true, overlayOptions: { anchor: "center", maxHeight: DEFAULT_MAX_HEIGHT, width: DEFAULT_WIDTH } },
-	);
+	const releaseModalLock = acquireVstackModalLock();
+	try {
+		await ctx.ui.custom<QuickSettingsAction>(
+			(tui, theme, _keybindings, done) => createQuickSettingsComponent(pi, ctx, inventory, ui, theme, () => tui.requestRender(), () => quickSettingsLayout(tui.terminal.rows), done),
+			{ overlay: true, overlayOptions: { anchor: "center", maxHeight: DEFAULT_MAX_HEIGHT, width: DEFAULT_WIDTH_PERCENT } },
+		);
+	} finally {
+		releaseModalLock();
+	}
 }
 
 function stringifyError(error: unknown): string {

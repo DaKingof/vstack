@@ -27,6 +27,7 @@ const DEFAULT_BG_SHORTCUT = "ctrl+shift+b";
 const BG_MESSAGE_TYPE = "vstack-background-tasks:event";
 const BG_WIDGET_KEY = "vstack-background-tasks";
 const BG_INSTALL_SYMBOL = Symbol.for("vstack.background-tasks.installed");
+const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 
 const DEFAULT_TIMEOUT_MS = 0;
 const DEFAULT_OUTPUT_SETTLE_MS = 1_500;
@@ -45,6 +46,10 @@ const TASK_PANE_MAX_WIDTH = 42;
 
 type BackgroundTaskStatus = "running" | "completed" | "failed" | "stopped" | "timed_out";
 type TaskEventType = "output" | "exit";
+
+interface VstackModalLock {
+	depth: number;
+}
 
 type ManagedTask = BackgroundTaskSnapshot & {
 	child: ChildProcess;
@@ -324,6 +329,20 @@ function splitOutputLines(output: string): string[] {
 	return text.length > 0 ? text.split(/\r?\n/) : ["(no output yet)"];
 }
 
+function acquireVstackModalLock(): () => void {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const existing = host[VSTACK_MODAL_LOCK_SYMBOL] as VstackModalLock | undefined;
+	const lock = existing && typeof existing.depth === "number" ? existing : { depth: 0 };
+	host[VSTACK_MODAL_LOCK_SYMBOL] = lock;
+	lock.depth += 1;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		lock.depth = Math.max(0, lock.depth - 1);
+	};
+}
+
 function dashboardContentWidth(width: number): number {
 	return Math.max(1, width - 2 - DASHBOARD_PADDING_X * 2);
 }
@@ -333,16 +352,16 @@ function frameDashboard(lines: string[], width: number, theme: Theme): string[] 
 
 	const border = (text: string) => theme.fg("borderAccent", text);
 	const contentWidth = dashboardContentWidth(width);
-	const blank = `${border("│")}${" ".repeat(width - 2)}${border("│")}`;
-	const framed = [`${border("╭")}${border("─".repeat(width - 2))}${border("╮")}`];
+	const blank = `${border("┃")}${" ".repeat(width - 2)}${border("┃")}`;
+	const framed = [`${border("┏")}${border("━".repeat(width - 2))}${border("┓")}`];
 
 	for (let i = 0; i < DASHBOARD_PADDING_Y; i += 1) framed.push(blank);
 	for (const line of lines) {
 		const content = padAnsi(line, contentWidth);
-		framed.push(`${border("│")}${" ".repeat(DASHBOARD_PADDING_X)}${content}${" ".repeat(DASHBOARD_PADDING_X)}${border("│")}`);
+		framed.push(`${border("┃")}${" ".repeat(DASHBOARD_PADDING_X)}${content}${" ".repeat(DASHBOARD_PADDING_X)}${border("┃")}`);
 	}
 	for (let i = 0; i < DASHBOARD_PADDING_Y; i += 1) framed.push(blank);
-	framed.push(`${border("╰")}${border("─".repeat(width - 2))}${border("╯")}`);
+	framed.push(`${border("┗")}${border("━".repeat(width - 2))}${border("┛")}`);
 	return framed.map((line) => truncateToWidth(line, width, ""));
 }
 
@@ -759,6 +778,8 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			return;
 		}
 
+		const releaseModalLock = acquireVstackModalLock();
+		try {
 		await ctx.ui.custom(
 			(tui, theme, _keybindings, done) => {
 				let selectedId: string | null = initialTask?.id ?? sortedTasks()[0]?.id ?? null;
@@ -829,7 +850,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 					syncOutputScroll();
 
 					const lines = [
-						`${theme.fg("accent", theme.bold("⚙ Background tasks"))} ${theme.fg(
+						`${theme.fg("text", theme.bold("⚙ Background tasks"))} ${theme.fg(
 							"muted",
 							`${running} running · ${sorted.length - running} finished`,
 						)}`,
@@ -847,13 +868,15 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 					const left: string[] = [];
 					const right: string[] = [];
 
-					left.push(`${theme.fg("accent", theme.bold("Tasks"))} ${theme.fg("dim", `(${sorted.length})`)}`);
+					left.push(`${theme.fg("text", theme.bold("Tasks"))} ${theme.fg("dim", `(${sorted.length})`)}`);
 					left.push("");
 					if (taskScroll > 0) left.push(theme.fg("dim", `↑ ${taskScroll} earlier task(s)`));
 					for (const task of sorted.slice(taskScroll, taskScroll + DASHBOARD_TASK_ROWS)) {
-						const selectedMarker = task.id === selected?.id ? theme.fg("accent", "→") : theme.fg("dim", "·");
+						const isSelected = task.id === selected?.id;
+						const selectedMarker = isSelected ? theme.fg("accent", "›") : theme.fg("dim", "·");
 						const statusColor = task.status === "running" ? "success" : task.status === "failed" ? "error" : "muted";
-						left.push(`${selectedMarker} ${theme.fg(statusColor, task.id)} ${theme.fg("dim", summarizeTaskStatus(task.status, task.exitCode))}`);
+						const row = `${selectedMarker} ${theme.fg(statusColor, task.id)} ${theme.fg("dim", summarizeTaskStatus(task.status, task.exitCode))}`;
+						left.push(isSelected ? theme.bg("selectedBg", padAnsi(row, taskPaneWidth)) : row);
 						left.push(`  ${taskDisplayName(task)}`);
 					}
 					const hiddenBelow = Math.max(0, sorted.length - (taskScroll + DASHBOARD_TASK_ROWS));
@@ -864,7 +887,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 					} else {
 						const outputLines = getOutputLines(selected);
 						const visibleOutput = outputLines.slice(outputScroll, outputScroll + DASHBOARD_OUTPUT_ROWS);
-						right.push(`${theme.fg("accent", theme.bold(`Watch ${selected.id}`))} ${theme.fg("dim", followOutput ? "follow" : `line ${outputScroll + 1}`)}`);
+						right.push(`${theme.fg("text", theme.bold(`Watch ${selected.id}`))} ${theme.fg("dim", followOutput ? "follow" : `line ${outputScroll + 1}`)}`);
 						right.push(`${theme.fg("muted", "Status")}: ${summarizeTaskStatus(selected.status, selected.exitCode)} · pid ${selected.pid}`);
 						right.push(`${theme.fg("muted", "Started")}: ${formatRelativeTime(selected.startedAt)} · ${formatDuration(Date.now() - selected.startedAt)} elapsed`);
 						if (selected.expiresAt != null) right.push(`${theme.fg("muted", "Expiry")}: ${formatRelativeTime(selected.expiresAt)}`);
@@ -876,7 +899,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 								selected.notifyOnOutput ? (selected.notifyPattern ?? "yes") : "no"
 							}`,
 						);
-						right.push("", theme.fg("accent", theme.bold("Output")));
+						right.push("", theme.fg("muted", theme.bold("Output")));
 						if (outputScroll > 0) right.push(theme.fg("dim", `↑ ${outputScroll} older line(s)`));
 						right.push(...visibleOutput);
 						const below = Math.max(0, outputLines.length - (outputScroll + DASHBOARD_OUTPUT_ROWS));
@@ -930,6 +953,9 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			},
 			{ overlay: true, overlayOptions: { anchor: "center", maxHeight: DASHBOARD_MAX_HEIGHT, width: DASHBOARD_WIDTH } },
 		);
+		} finally {
+			releaseModalLock();
+		}
 	};
 
 	pi.registerMessageRenderer(BG_MESSAGE_TYPE, (message, { expanded }, theme) => renderTaskEventMessage(message, expanded, theme));

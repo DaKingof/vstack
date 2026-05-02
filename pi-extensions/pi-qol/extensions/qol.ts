@@ -17,6 +17,7 @@ const IMAGE_PATH_PATTERN = /(^|[\s(\[{<"'`])(@?(?:~|\.\.?|\/)[^\s)\]}>"'`]+?\.(?
 const IMAGE_ALIAS_SYMBOL = Symbol.for("vstack.pi-qol.image-path-aliases");
 const QUESTION_SERVICE_SYMBOL = Symbol.for("vstack.pi-questions.service");
 const QOL_NOTIFICATION_SERVICE_SYMBOL = Symbol.for("vstack.pi-qol.notification-service");
+const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 const THINKING_TIMER_STORE_SYMBOL = Symbol.for("vstack.pi-qol.thinking-timer.store");
 const THINKING_TIMER_PATCH_SYMBOL = Symbol.for("vstack.pi-qol.thinking-timer.patch");
 const SESSION_SEARCH_PENDING_SYMBOL = Symbol.for("vstack.pi-qol.session-search.pending-context");
@@ -133,6 +134,20 @@ function stripAnsi(text: string): string {
 	return text.replace(ANSI_PATTERN, "");
 }
 
+function acquireVstackModalLock(): () => void {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const existing = host[VSTACK_MODAL_LOCK_SYMBOL] as VstackModalLock | undefined;
+	const lock = existing && typeof existing.depth === "number" ? existing : { depth: 0 };
+	host[VSTACK_MODAL_LOCK_SYMBOL] = lock;
+	lock.depth += 1;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		lock.depth = Math.max(0, lock.depth - 1);
+	};
+}
+
 function styleAutocompleteHintItem(item: AutocompleteItem, theme: Theme): AutocompleteItem {
 	const label = stripAnsi(item.label || item.value);
 	const styled: AutocompleteItem = { ...item, label: theme.fg("accent", label) };
@@ -183,6 +198,10 @@ interface QuestionServiceLike {
 
 interface QolNotificationService {
 	notifyQuestionOpened(ctx: ExtensionContext | undefined, event: QuestionOpenedEventLike): boolean;
+}
+
+interface VstackModalLock {
+	depth: number;
 }
 
 interface ThinkingTimerStore {
@@ -1210,7 +1229,10 @@ async function runHandoff(args: string, ctx: ExtensionCommandContext): Promise<v
 	const conversationText = serializeConversation(llmMessages);
 	const currentSessionFile = ctx.sessionManager.getSessionFile();
 
-	const result = await ctx.ui.custom<string | null>((tui: any, theme: any, _kb: any, done: (value: string | null) => void) => {
+	const releaseModalLock = acquireVstackModalLock();
+	let result: string | null = null;
+	try {
+	result = await ctx.ui.custom<string | null>((tui: any, theme: any, _kb: any, done: (value: string | null) => void) => {
 		const loader = new BorderedLoader(tui, theme, "Generating handoff prompt...");
 		loader.onAbort = () => done(null);
 
@@ -1253,6 +1275,9 @@ async function runHandoff(args: string, ctx: ExtensionCommandContext): Promise<v
 
 		return loader;
 	});
+	} finally {
+		releaseModalLock();
+	}
 
 	if (result === null) {
 		ctx.ui.notify("Cancelled", "info");
@@ -1788,19 +1813,19 @@ function boxParts(width: number, theme: Theme) {
 		const safeContent = content.replace(/[\r\n\t]+/g, " ");
 		const clipped = truncateToWidth(safeContent, inner - 1, "");
 		const pad = Math.max(0, inner - visibleWidth(clipped) - 1);
-		return `${border("│")} ${clipped}${" ".repeat(pad)}${border("│")}`;
+		return `${border("┃")} ${clipped}${" ".repeat(pad)}${border("┃")}`;
 	};
-	const empty = () => `${border("│")}${" ".repeat(inner)}${border("│")}`;
-	const divider = () => border(`├${"─".repeat(inner)}┤`);
+	const empty = () => `${border("┃")}${" ".repeat(inner)}${border("┃")}`;
+	const divider = () => border(`┣${"━".repeat(inner)}┫`);
 	const top = (title: string) => {
 		const label = ` ${title} `;
 		const labelWidth = visibleWidth(label);
 		const remaining = Math.max(0, inner - labelWidth);
 		const left = Math.floor(remaining / 2);
 		const right = remaining - left;
-		return `${border(`╭${"─".repeat(left)}`)}${theme.fg("accent", label)}${border(`${"─".repeat(right)}╮`)}`;
+		return `${border(`┏${"━".repeat(left)}`)}${theme.fg("accent", label)}${border(`${"━".repeat(right)}┓`)}`;
 	};
-	const bottom = () => border(`╰${"─".repeat(inner)}╯`);
+	const bottom = () => border(`┗${"━".repeat(inner)}┛`);
 	return { bottom, divider, empty, inner, row, top };
 }
 
@@ -2363,15 +2388,21 @@ async function openQolSessionSearch(pi: ExtensionAPI, ctx: ExtensionContext, ini
 		return;
 	}
 	const sessions = await refreshQolSessionSearchCache(ctx);
-	const action = await ctx.ui.custom<QolSessionPaletteAction>((tui, theme, _keybindings, done) =>
-		new QolSessionSearchComponent(done, tui, theme, sessions, ctx.cwd, initialQuery), {
-		overlay: true,
-		overlayOptions: {
-			anchor: "center",
-			width: Math.max(70, Math.floor(settingNumber("sessionSearch.overlayWidth", 104, ctx.cwd))),
-			maxHeight: "90%",
-		},
-	});
+	const releaseModalLock = acquireVstackModalLock();
+	let action: QolSessionPaletteAction | undefined;
+	try {
+		action = await ctx.ui.custom<QolSessionPaletteAction>((tui, theme, _keybindings, done) =>
+			new QolSessionSearchComponent(done, tui, theme, sessions, ctx.cwd, initialQuery), {
+			overlay: true,
+			overlayOptions: {
+				anchor: "center",
+				width: Math.max(70, Math.floor(settingNumber("sessionSearch.overlayWidth", 104, ctx.cwd))),
+				maxHeight: "90%",
+			},
+		});
+	} finally {
+		releaseModalLock();
+	}
 	if (!action || action.type === "cancel" || !action.result) return;
 	if (action.type === "resume") {
 		const commandCtx = asCommandContext(ctx);
@@ -2727,7 +2758,7 @@ export default function qol(pi: ExtensionAPI): void {
 		if (event?.isError) {
 			sendQolNotification(ctx, "critical", `Tool ${event.toolName ?? "unknown"} failed.`, "error", `tool-error:${event.toolName ?? "unknown"}`);
 		}
-		if (event?.toolName === "todo_write") maybeNotifyTaskCompletion(ctx, event.details?.state);
+		if (event?.toolName === "tasks_write") maybeNotifyTaskCompletion(ctx, event.details?.state);
 	});
 
 	pi.on("input", async (event) => {

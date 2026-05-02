@@ -24,12 +24,13 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 	getMarkdownTheme,
+	type Theme,
 	truncateHead,
 	truncateTail,
 	type TruncationResult,
 	withFileMutationQueue,
 } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
+import { Container, Markdown, matchesKey, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TUI } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
 
@@ -154,6 +155,490 @@ function formatUsageStats(
 	}
 	if (model) parts.push(model);
 	return parts.join(" ");
+}
+
+const AGENTS_BROWSER_WIDTH = "92%";
+const AGENTS_BROWSER_MAX_HEIGHT = "85%";
+const AGENTS_BROWSER_HEIGHT_RATIO = 0.85;
+const AGENTS_BROWSER_INNER_ROWS = 30;
+const AGENTS_BROWSER_LIST_ROWS = 18;
+const AGENTS_LEFT_MIN_WIDTH = 34;
+const AGENTS_LEFT_MAX_WIDTH = 48;
+const AGENTS_POPUP_PADDING_X = 2;
+const AGENTS_POPUP_PADDING_Y = 1;
+const AGENTS_POPUP_FRAME_ROWS = 2 + AGENTS_POPUP_PADDING_Y * 2;
+const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
+const AGENT_SCOPE_TABS: Array<{ id: AgentScope; label: string }> = [
+	{ id: "project", label: "Project" },
+	{ id: "user", label: "User" },
+	{ id: "both", label: "Both" },
+];
+
+type AgentBrowserAction =
+	| { type: "attach"; agentName: string }
+	| { type: "close" }
+	| { type: "insert"; agentName: string }
+	| { type: "reload" }
+	| { type: "start"; agentName: string }
+	| { type: "stop"; agentName: string };
+
+type AgentPaneStatus = { entry?: PaneRegistryEntry; live: boolean };
+
+interface AgentBrowserUiState {
+	inspectorScroll: number;
+	pane: "list" | "inspector";
+	scope: AgentScope;
+	search: string;
+	selected: number;
+	scroll: number;
+}
+
+interface AgentBrowserLayout {
+	bodyRows: number;
+	innerRows: number;
+	listRows: number;
+}
+
+interface VstackModalLock {
+	depth: number;
+}
+
+function acquireVstackModalLock(): () => void {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const existing = host[VSTACK_MODAL_LOCK_SYMBOL] as VstackModalLock | undefined;
+	const lock = existing && typeof existing.depth === "number" ? existing : { depth: 0 };
+	host[VSTACK_MODAL_LOCK_SYMBOL] = lock;
+	lock.depth += 1;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		lock.depth = Math.max(0, lock.depth - 1);
+	};
+}
+
+function agentInlineLine(text: string): string {
+	return text.replace(/[\r\n]+/g, " ").replace(/\t/g, " ");
+}
+
+function agentPad(text: string, width: number): string {
+	const safeWidth = Math.max(0, width);
+	const truncated = truncateToWidth(agentInlineLine(text), safeWidth, "");
+	return `${truncated}${" ".repeat(Math.max(0, safeWidth - visibleWidth(truncated)))}`;
+}
+
+function isAgentBrowserTextInput(data: string): boolean {
+	return data.length === 1 && data >= " " && data !== "\x7f";
+}
+
+function compactAgentPath(filePath: string): string {
+	const home = os.homedir();
+	return filePath.startsWith(home) ? `~${filePath.slice(home.length)}` : filePath;
+}
+
+function agentSearchText(agent: AgentConfig, status?: AgentPaneStatus): string {
+	return [
+		agent.name,
+		agent.description,
+		agent.source,
+		agent.filePath,
+		agent.model ?? "",
+		agent.tools?.join(" ") ?? "",
+		agent.pane ? "pane persistent tmux" : "one-shot oneshot",
+		status?.live ? "live running" : status?.entry ? "dead stopped" : "",
+	].join(" ").toLowerCase();
+}
+
+function filterAgentsForBrowser(agents: AgentConfig[], query: string, statuses: Map<string, AgentPaneStatus>): AgentConfig[] {
+	const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+	if (tokens.length === 0) return agents;
+	return agents.filter((agent) => tokens.every((token) => agentSearchText(agent, statuses.get(agent.name)).includes(token)));
+}
+
+function scopeNext(scope: AgentScope, delta: number): AgentScope {
+	const scopes: AgentScope[] = ["project", "user", "both"];
+	const index = Math.max(0, scopes.indexOf(scope));
+	return scopes[(index + delta + scopes.length) % scopes.length]!;
+}
+
+async function loadAgentPaneStatuses(runtimeRoot: string): Promise<Map<string, AgentPaneStatus>> {
+	const registry = await readPaneRegistry(runtimeRoot);
+	const entries = await Promise.all(
+		Object.entries(registry).map(async ([agentName, entry]) => [agentName, { entry, live: await paneExists(entry.paneId) }] as const),
+	);
+	return new Map(entries);
+}
+
+function agentFrameContentWidth(width: number): number {
+	return Math.max(1, width - 2 - AGENTS_POPUP_PADDING_X * 2);
+}
+
+function agentBrowserLayout(terminalRows: number): AgentBrowserLayout {
+	const maxInnerRows = Math.max(1, Math.floor(Math.max(1, terminalRows) * AGENTS_BROWSER_HEIGHT_RATIO) - AGENTS_POPUP_FRAME_ROWS);
+	const innerRows = Math.max(1, Math.min(AGENTS_BROWSER_INNER_ROWS, maxInnerRows));
+	const bodyRows = Math.max(0, innerRows - 6);
+	return {
+		bodyRows,
+		innerRows,
+		listRows: Math.max(1, Math.min(AGENTS_BROWSER_LIST_ROWS, Math.max(1, bodyRows - 3))),
+	};
+}
+
+function agentDivider(width: number, theme: Theme): string {
+	return theme.fg("dim", "─".repeat(Math.max(1, width)));
+}
+
+function agentFrame(lines: string[], width: number, theme: Theme, fixedInnerRows = AGENTS_BROWSER_INNER_ROWS): string[] {
+	const safeWidth = Math.max(1, width);
+	const inner = Math.max(1, safeWidth - 2);
+	const contentWidth = agentFrameContentWidth(safeWidth);
+	const border = (s: string) => theme.fg("borderAccent", s);
+	let body = lines;
+	if (body.length > fixedInnerRows) {
+		const hidden = body.length - fixedInnerRows + 1;
+		body = [...body.slice(0, Math.max(0, fixedInnerRows - 1)), theme.fg("dim", `↓ ${hidden} more line(s)`)].slice(0, fixedInnerRows);
+	} else if (body.length < fixedInnerRows) {
+		body = [...body, ...Array.from({ length: fixedInnerRows - body.length }, () => "")];
+	}
+	const blank = `${border("┃")}${" ".repeat(inner)}${border("┃")}`;
+	const out = [`${border("┏")}${border("━".repeat(inner))}${border("┓")}`];
+	for (let i = 0; i < AGENTS_POPUP_PADDING_Y; i += 1) out.push(blank);
+	for (const line of body) out.push(`${border("┃")}${" ".repeat(AGENTS_POPUP_PADDING_X)}${agentPad(line, contentWidth)}${" ".repeat(AGENTS_POPUP_PADDING_X)}${border("┃")}`);
+	for (let i = 0; i < AGENTS_POPUP_PADDING_Y; i += 1) out.push(blank);
+	out.push(`${border("┗")}${border("━".repeat(inner))}${border("┛")}`);
+	return out.map((line) => truncateToWidth(agentInlineLine(line), safeWidth, ""));
+}
+
+function agentActivePill(theme: Theme, label: string): string {
+	return theme.fg("accent", theme.inverse(theme.bold(label)));
+}
+
+function agentInactivePill(theme: Theme, label: string): string {
+	return theme.bg("selectedBg", theme.fg("accent", label));
+}
+
+function agentPaneTitle(theme: Theme, label: string, active: boolean): string {
+	return active ? agentActivePill(theme, ` ${label} `) : theme.fg("muted", theme.bold(label));
+}
+
+function agentEntityTitle(theme: Theme, label: string): string {
+	return theme.fg("text", theme.bold(label));
+}
+
+function renderAgentScopeTabs(active: AgentScope, width: number, theme: Theme): string {
+	const partFor = (tab: { id: AgentScope; label: string }): string => {
+		const label = ` ${truncateToWidth(tab.label, 18, "…")} `;
+		if (tab.id === active) return agentActivePill(theme, label);
+		return agentInactivePill(theme, label);
+	};
+	return truncateToWidth(AGENT_SCOPE_TABS.map(partFor).join(" "), width, "");
+}
+
+function agentStatus(agent: AgentConfig, status: AgentPaneStatus | undefined): "live" | "dead" | "pane" | "one-shot" {
+	if (!agent.pane) return "one-shot";
+	if (status?.live) return "live";
+	if (status?.entry) return "dead";
+	return "pane";
+}
+
+function agentStatusColor(status: ReturnType<typeof agentStatus>): "success" | "warning" | "muted" | "dim" {
+	if (status === "live") return "success";
+	if (status === "dead") return "warning";
+	if (status === "pane") return "muted";
+	return "dim";
+}
+
+function agentStatusIcon(status: ReturnType<typeof agentStatus>, theme: Theme): string {
+	if (status === "live") return theme.fg("success", "●");
+	if (status === "dead") return theme.fg("warning", "×");
+	if (status === "pane") return theme.fg("warning", "○");
+	return theme.fg("dim", "·");
+}
+
+function agentStatusLabel(agent: AgentConfig, status: AgentPaneStatus | undefined, theme: Theme): string {
+	const state = agentStatus(agent, status);
+	if (state === "live") return theme.fg("success", `live ${status?.entry?.paneId ?? ""}`.trim());
+	if (state === "dead") return theme.fg("warning", `dead ${status?.entry?.paneId ?? ""}`.trim());
+	if (state === "pane") return theme.fg("muted", "pane-ready/startable");
+	return theme.fg("dim", "one-shot");
+}
+
+function agentLegend(theme: Theme): string {
+	return `${theme.fg("muted", "Legend")}: ${theme.fg("success", "●")} live pane · ${theme.fg("warning", "○")} pane-ready/startable · ${theme.fg("warning", "×")} stale pane · ${theme.fg("dim", "·")} one-shot`;
+}
+
+function renderAgentList(agents: AgentConfig[], statuses: Map<string, AgentPaneStatus>, ui: AgentBrowserUiState, width: number, theme: Theme, listRows: number): string[] {
+	const lines = [`${agentPaneTitle(theme, "Agents", ui.pane === "list")} ${theme.fg("dim", `(${agents.length})`)}`];
+	if (agents.length === 0) {
+		lines.push(theme.fg("dim", "No matching agents."));
+		return lines;
+	}
+	if (ui.scroll > 0) lines.push(theme.fg("dim", `↑ ${ui.scroll} earlier`));
+	for (const [visibleIndex, agent] of agents.slice(ui.scroll, ui.scroll + listRows).entries()) {
+		const index = ui.scroll + visibleIndex;
+		const status = agentStatus(agent, statuses.get(agent.name));
+		const marker = index === ui.selected ? theme.fg("accent", "›") : theme.fg("dim", " ");
+		const meta = theme.fg("dim", ` ${status === "one-shot" ? "one-shot" : "pane"} · ${agent.source}`);
+		const model = agent.model ? theme.fg("dim", ` · ${agent.model}`) : "";
+		const row = truncateToWidth(`${marker} ${agentStatusIcon(status, theme)} ${agent.name}${meta}${model}`, width, "…");
+		lines.push(index === ui.selected ? theme.bg("selectedBg", agentPad(row, width)) : row);
+	}
+	const hidden = Math.max(0, agents.length - (ui.scroll + listRows));
+	if (hidden > 0) lines.push(theme.fg("dim", `↓ ${hidden} more`));
+	return lines;
+}
+
+function renderAgentPromptViewport(agent: AgentConfig, ui: AgentBrowserUiState, width: number, rows: number, theme: Theme): string[] {
+	const prompt = agent.systemPrompt.trim() || theme.fg("dim", "(empty prompt)");
+	const promptLines = new Markdown(prompt, 0, 0, getMarkdownTheme()).render(width);
+	const visibleRows = Math.max(1, rows - 1);
+	const maxScroll = Math.max(0, promptLines.length - visibleRows);
+	ui.inspectorScroll = Math.max(0, Math.min(ui.inspectorScroll, maxScroll));
+	const visible = promptLines.slice(ui.inspectorScroll, ui.inspectorScroll + visibleRows);
+	const before = ui.inspectorScroll > 0 ? `↑ ${ui.inspectorScroll}` : "";
+	const afterCount = Math.max(0, promptLines.length - ui.inspectorScroll - visibleRows);
+	const after = afterCount > 0 ? `↓ ${afterCount}` : "";
+	const scroll = [before, after].filter(Boolean).join(" · ");
+	return scroll ? [...visible, theme.fg("dim", scroll)] : visible;
+}
+
+function renderAgentInspector(agent: AgentConfig | undefined, statuses: Map<string, AgentPaneStatus>, ui: AgentBrowserUiState, width: number, rows: number, theme: Theme): string[] {
+	if (!agent) return [`${agentPaneTitle(theme, "Inspector", ui.pane === "inspector")} ${theme.fg("dim", "Select an agent to inspect it.")}`];
+	const status = statuses.get(agent.name);
+	const lines: string[] = [
+		`${agentPaneTitle(theme, "Inspector", ui.pane === "inspector")} ${agentEntityTitle(theme, agent.name)} ${theme.fg(agentStatusColor(agentStatus(agent, status)), agentStatus(agent, status))}`,
+		...wrapTextWithAnsi(agent.description || "No description.", width).slice(0, 3),
+		"",
+		`${theme.fg("muted", "Kind")}: ${agent.pane ? "persistent pane" : "one-shot"}    ${theme.fg("muted", "Scope")}: ${agent.source}`,
+		`${theme.fg("muted", "Model")}: ${agent.model ?? "default"}`,
+		`${theme.fg("muted", "Tools")}: ${agent.tools?.join(", ") ?? "default"}`,
+		`${theme.fg("muted", "Path")}: ${compactAgentPath(agent.filePath)}`,
+		`${theme.fg("muted", "State")}: ${agentStatusLabel(agent, status, theme)}`,
+	];
+	if (status?.entry) {
+		lines.push(`${theme.fg("muted", "Pane")}: ${status.entry.paneId} ${status.entry.windowName}`);
+		lines.push(`${theme.fg("muted", "Last task")}: ${status.entry.lastTaskAt ?? "never"}`);
+	}
+	lines.push("", theme.fg("muted", theme.bold("System Prompt")));
+	const promptRows = Math.max(1, rows - lines.length);
+	lines.push(...renderAgentPromptViewport(agent, ui, width, promptRows, theme));
+	return lines.slice(0, rows);
+}
+
+function renderAgentsBody(
+	discovery: ReturnType<typeof discoverAgents>,
+	agents: AgentConfig[],
+	statuses: Map<string, AgentPaneStatus>,
+	ui: AgentBrowserUiState,
+	width: number,
+	theme: Theme,
+	layout: AgentBrowserLayout,
+): string[] {
+	const selected = agents[ui.selected];
+	const maxLeftWidth = Math.max(10, width - 13);
+	const desiredLeftWidth = Math.min(AGENTS_LEFT_MAX_WIDTH, Math.floor(width * 0.38), maxLeftWidth);
+	const leftWidth = Math.max(10, Math.min(maxLeftWidth, Math.max(Math.min(AGENTS_LEFT_MIN_WIDTH, maxLeftWidth), desiredLeftWidth)));
+	const rightWidth = Math.max(1, width - leftWidth - 3);
+	const bodyRows = layout.bodyRows;
+	const liveCount = [...statuses.values()].filter((status) => status.live).length;
+	const paneCount = discovery.agents.filter((agent) => agent.pane).length;
+	const left = renderAgentList(agents, statuses, ui, leftWidth, theme, layout.listRows);
+	const right = renderAgentInspector(selected, statuses, ui, rightWidth, bodyRows, theme);
+	const rows = bodyRows;
+	const lines = [
+		truncateToWidth(
+			`${theme.fg("accent", "Search")}: ${ui.search || theme.fg("dim", "type to filter")}  ${theme.fg("accent", "View")}: agents  ${theme.fg("accent", "Filters")}: scope ${ui.scope} · ${agents.length}/${discovery.agents.length} shown · ${paneCount} pane · ${liveCount} live`,
+			width,
+			"",
+		),
+		agentDivider(width, theme),
+	];
+	for (let i = 0; i < rows; i += 1) {
+		lines.push(`${agentPad(left[i] ?? "", leftWidth)} ${theme.fg("dim", "│")} ${truncateToWidth(right[i] ?? "", rightWidth, "")}`);
+	}
+	lines.push(truncateToWidth(agentLegend(theme), width, ""));
+	return lines;
+}
+
+function createAgentsBrowserComponent(
+	discovery: ReturnType<typeof discoverAgents>,
+	statuses: Map<string, AgentPaneStatus>,
+	ui: AgentBrowserUiState,
+	theme: Theme,
+	requestRender: () => void,
+	getLayout: () => AgentBrowserLayout,
+	done: (action: AgentBrowserAction) => void,
+) {
+	const filtered = () => filterAgentsForBrowser(discovery.agents, ui.search, statuses);
+	const selectedAgent = () => filtered()[ui.selected];
+	const clamp = () => {
+		const layout = getLayout();
+		const list = filtered();
+		ui.selected = Math.max(0, Math.min(ui.selected, Math.max(0, list.length - 1)));
+		if (ui.selected < ui.scroll) ui.scroll = ui.selected;
+		if (ui.selected >= ui.scroll + layout.listRows) ui.scroll = ui.selected - layout.listRows + 1;
+		ui.scroll = Math.max(0, Math.min(ui.scroll, Math.max(0, list.length - layout.listRows)));
+	};
+	const switchScope = (delta: number) => {
+		ui.scope = scopeNext(ui.scope, delta);
+		ui.selected = 0;
+		ui.scroll = 0;
+		ui.inspectorScroll = 0;
+		done({ type: "reload" });
+	};
+	const insertSelected = () => {
+		const agent = selectedAgent();
+		if (agent) done({ type: "insert", agentName: agent.name });
+	};
+	const startSelected = () => {
+		const agent = selectedAgent();
+		if (agent) done({ type: "start", agentName: agent.name });
+	};
+	const attachSelected = () => {
+		const agent = selectedAgent();
+		if (agent) done({ type: "attach", agentName: agent.name });
+	};
+	const stopSelected = () => {
+		const agent = selectedAgent();
+		if (agent) done({ type: "stop", agentName: agent.name });
+	};
+
+	function handleInput(data: string): void {
+		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+			if (ui.search) { ui.search = ""; ui.selected = 0; ui.scroll = 0; requestRender(); return; }
+			done({ type: "close" });
+			return;
+		}
+		if (matchesKey(data, "tab")) return switchScope(1);
+		if (matchesKey(data, "shift+tab")) return switchScope(-1);
+		if (matchesKey(data, "left")) { ui.pane = "list"; requestRender(); return; }
+		if (matchesKey(data, "right")) { ui.pane = "inspector"; requestRender(); return; }
+		if (matchesKey(data, "up")) {
+			if (ui.pane === "inspector") ui.inspectorScroll -= 1;
+			else { ui.selected -= 1; ui.inspectorScroll = 0; clamp(); }
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "down")) {
+			if (ui.pane === "inspector") ui.inspectorScroll += 1;
+			else { ui.selected += 1; ui.inspectorScroll = 0; clamp(); }
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "pageup")) {
+			const layout = getLayout();
+			if (ui.pane === "inspector") ui.inspectorScroll -= Math.max(1, layout.bodyRows);
+			else { ui.selected -= layout.listRows; ui.inspectorScroll = 0; clamp(); }
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "pagedown")) {
+			const layout = getLayout();
+			if (ui.pane === "inspector") ui.inspectorScroll += Math.max(1, layout.bodyRows);
+			else { ui.selected += layout.listRows; ui.inspectorScroll = 0; clamp(); }
+			requestRender();
+			return;
+		}
+		if (matchesKey(data, "home")) { if (ui.pane === "inspector") ui.inspectorScroll = 0; else { ui.selected = 0; ui.scroll = 0; } requestRender(); return; }
+		if (matchesKey(data, "end")) { if (ui.pane === "inspector") ui.inspectorScroll = Number.MAX_SAFE_INTEGER; else { ui.selected = Math.max(0, filtered().length - 1); clamp(); } requestRender(); return; }
+		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "i" || data === "I") return insertSelected();
+		if (data === "s" || data === "S") return startSelected();
+		if (data === "a" || data === "A") return attachSelected();
+		if (data === "x" || data === "X") return stopSelected();
+		if (matchesKey(data, "backspace")) { ui.search = ui.search.slice(0, -1); ui.selected = 0; ui.scroll = 0; ui.inspectorScroll = 0; clamp(); requestRender(); return; }
+		if (matchesKey(data, "ctrl+u")) { ui.search = ""; ui.selected = 0; ui.scroll = 0; ui.inspectorScroll = 0; requestRender(); return; }
+		if (isAgentBrowserTextInput(data)) { ui.search += data; ui.pane = "list"; ui.selected = 0; ui.scroll = 0; ui.inspectorScroll = 0; clamp(); requestRender(); }
+	}
+
+	function render(width: number): string[] {
+		clamp();
+		const layout = getLayout();
+		const safeWidth = Math.max(1, width);
+		const bodyWidth = agentFrameContentWidth(safeWidth);
+		const lines = [
+			renderAgentScopeTabs(ui.scope, bodyWidth, theme),
+			theme.fg("dim", "tab scope · ↑↓ navigate/scroll · ←/→ pane · enter/i insert · type search · s/a/x pane · esc close"),
+			agentDivider(bodyWidth, theme),
+			...renderAgentsBody(discovery, filtered(), statuses, ui, bodyWidth, theme, layout),
+		];
+		return agentFrame(lines, safeWidth, theme, layout.innerRows);
+	}
+
+	return { handleInput, invalidate() {}, render };
+}
+
+async function openAgentsBrowser(
+	ctx: ExtensionContext,
+	initialScope: AgentScope,
+	initialAgentName: string | undefined,
+	runtimeRoot: string,
+	parentSessionId: string,
+	parentModel: string | undefined,
+	parentThinkingLevel: string | undefined,
+): Promise<void> {
+	const releaseModalLock = acquireVstackModalLock();
+	try {
+	const ui: AgentBrowserUiState = { inspectorScroll: 0, pane: initialAgentName ? "inspector" : "list", scope: initialScope, search: "", selected: 0, scroll: 0 };
+	while (true) {
+		const discovery = discoverAgents(ctx.cwd, ui.scope);
+		if (initialAgentName) {
+			const selected = discovery.agents.findIndex((agent) => agent.name === initialAgentName);
+			if (selected >= 0) ui.selected = selected;
+			else {
+				ctx.ui.notify(`Unknown agent "${initialAgentName}" for scope "${ui.scope}"`, "warning");
+				ui.pane = "list";
+			}
+		}
+		const statuses = await loadAgentPaneStatuses(runtimeRoot);
+		const action = await ctx.ui.custom<AgentBrowserAction>(
+			(tui: TUI, theme: Theme, _keybindings, done) => createAgentsBrowserComponent(discovery, statuses, ui, theme, () => tui.requestRender(), () => agentBrowserLayout(tui.terminal.rows), done),
+			{ overlay: true, overlayOptions: { anchor: "center", maxHeight: AGENTS_BROWSER_MAX_HEIGHT, width: AGENTS_BROWSER_WIDTH } },
+		);
+		initialAgentName = undefined;
+		if (!action || action.type === "close") return;
+		if (action.type === "reload") continue;
+		const agent = discovery.agents.find((candidate) => candidate.name === action.agentName);
+		if (!agent) {
+			ctx.ui.notify(`Unknown agent: ${action.agentName}`, "error");
+			continue;
+		}
+		try {
+			if (action.type === "insert") {
+				ctx.ui.pasteToEditor(`Use subagent ${agent.name} to: `);
+				return;
+			}
+			if (action.type === "start") {
+				if (!agent.pane) throw new Error(`${agent.name} is not configured with pane: true.`);
+				const pane = await ensurePersistentPane(runtimeRoot, parentSessionId, ctx.cwd, agent, parentModel, parentThinkingLevel);
+				ctx.ui.notify(`Started/reused ${agent.name} in ${pane.paneId}`, "info");
+				continue;
+			}
+			if (action.type === "attach") {
+				const registry = await readPaneRegistry(runtimeRoot);
+				const entry = registry[agent.name];
+				if (!entry || !(await paneExists(entry.paneId))) throw new Error(`No live pane for ${agent.name}.`);
+				const result = await tmux(["select-pane", "-t", entry.paneId]);
+				if (result.code !== 0) throw new Error(result.stderr || result.stdout || "tmux select-pane failed");
+				ctx.ui.notify(`Attached to ${agent.name} at ${entry.paneId}`, "info");
+				return;
+			}
+			if (action.type === "stop") {
+				const registry = await readPaneRegistry(runtimeRoot);
+				const entry = registry[agent.name];
+				if (!entry) throw new Error(`No pane registry entry for ${agent.name}.`);
+				if (await paneExists(entry.paneId)) await tmux(["kill-pane", "-t", entry.paneId]);
+				delete registry[agent.name];
+				await writePaneRegistry(runtimeRoot, registry);
+				ctx.ui.notify(`Stopped ${agent.name} pane ${entry.paneId}`, "info");
+				continue;
+			}
+		} catch (error) {
+			ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+		}
+	}
+	} finally {
+		releaseModalLock();
+	}
 }
 
 function formatToolCall(
@@ -1443,6 +1928,11 @@ export default function (pi: ExtensionAPI) {
 						scope = command as AgentScope;
 					} else if (command) {
 						showName = command;
+					}
+
+					if (ctx.hasUI) {
+						await openAgentsBrowser(ctx, scope, showName, runtimeRoot, parentSessionId, parentModel, parentThinkingLevel);
+						return;
 					}
 
 					const scopedDiscovery = discoverAgents(ctx.cwd, scope);
