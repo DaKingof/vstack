@@ -281,7 +281,7 @@
         {
           "key": "notification.onCritical",
           "label": "Notify critical info",
-          "description": "Notify for failed tools and assistant messages containing critical, blocked, security, rate-limit, or cannot-proceed signals.",
+          "description": "Notify for assistant messages containing critical, blocked, security, rate-limit, or cannot-proceed signals. Tool failures are intentionally ignored.",
           "type": "boolean",
           "default": true,
           "category": "Notifications Triggers",

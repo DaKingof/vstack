@@ -1145,7 +1145,7 @@ function needsDirection(text: string): boolean {
 }
 
 function criticalInfo(text: string): string | undefined {
-	const match = text.match(/\b(critical|urgent|warning|blocked|cannot proceed|failed|failure|error|security|vulnerab|secret|credential|permission denied|rate limit|context (overflow|full)|manual action required)\b/i);
+	const match = text.match(/\b(critical|urgent|warning|blocked|cannot proceed|security|vulnerab|secret|credential|rate limit|context (overflow|full)|manual action required)\b/i);
 	if (!match) return undefined;
 	const line = text.split(/\r?\n/).find((candidate) => candidate.toLowerCase().includes(match[0].toLowerCase())) ?? text;
 	return line.trim();
@@ -2755,9 +2755,6 @@ export default function qol(pi: ExtensionAPI): void {
 		return undefined;
 	});
 	pi.on("tool_result", (event: any, ctx) => {
-		if (event?.isError) {
-			sendQolNotification(ctx, "critical", `Tool ${event.toolName ?? "unknown"} failed.`, "error", `tool-error:${event.toolName ?? "unknown"}`);
-		}
 		if (event?.toolName === "tasks_write") maybeNotifyTaskCompletion(ctx, event.details?.state);
 	});
 
