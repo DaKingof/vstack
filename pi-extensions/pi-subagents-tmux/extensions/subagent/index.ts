@@ -389,7 +389,7 @@ function agentFrameContentWidth(width: number): number {
 function agentBrowserLayout(terminalRows: number): AgentBrowserLayout {
 	const maxInnerRows = Math.max(1, Math.floor(Math.max(1, terminalRows) * AGENTS_BROWSER_HEIGHT_RATIO) - AGENTS_POPUP_FRAME_ROWS);
 	const innerRows = Math.max(1, Math.min(AGENTS_BROWSER_INNER_ROWS, maxInnerRows));
-	const bodyRows = Math.max(0, innerRows - 6);
+	const bodyRows = Math.max(0, innerRows - 8);
 	return {
 		bodyRows,
 		innerRows,
@@ -564,7 +564,7 @@ function renderAgentsBody(
 	const left = renderAgentList(agents, statuses, ui, leftWidth, theme, layout.listRows);
 	const right = renderAgentInspector(selected, statuses, ui, rightWidth, bodyRows, theme);
 	const rows = bodyRows;
-	const searchLine = theme.bg("toolPendingBg", agentPad(` > ${ui.search || theme.inverse(" ")}`, width));
+	const searchLine = theme.bg("toolPendingBg", agentPad(` > ${ui.search}${theme.inverse(" ")}`, width));
 	const lines = [
 		searchLine,
 		`${theme.fg("muted", "View")}: ${theme.fg("text", "agents")}  ${theme.fg("muted", "Filters")}: scope ${ui.scope} · ${agents.length}/${discovery.agents.length} shown · ${paneCount} pane · ${liveCount} live`,
@@ -672,11 +672,13 @@ function createAgentsBrowserComponent(
 		const layout = getLayout();
 		const safeWidth = Math.max(1, width);
 		const bodyWidth = agentFrameContentWidth(safeWidth);
+		const footer = `${ansiYellow("tab")} ${theme.fg("dim", "scope · ")}${ansiYellow("↑↓")} ${theme.fg("dim", "navigate/scroll · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane · ")}${ansiYellow("enter/i")} ${theme.fg("dim", "insert · ")}${ansiYellow("s/a/x")} ${theme.fg("dim", "pane · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
 		const lines = [
 			renderAgentScopeTabs(ui.scope, bodyWidth, theme),
-			`${ansiYellow("tab")} ${theme.fg("dim", "scope · ")}${ansiYellow("↑↓")} ${theme.fg("dim", "navigate/scroll · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane · ")}${ansiYellow("enter/i")} ${theme.fg("dim", "insert · ")}${ansiYellow("s/a/x")} ${theme.fg("dim", "pane · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`,
-			agentDivider(bodyWidth, theme),
+			"",
 			...renderAgentsBody(discovery, filtered(), statuses, ui, bodyWidth, theme, layout),
+			agentDivider(bodyWidth, theme),
+			footer,
 		];
 		return agentFrame(lines, safeWidth, theme, layout.innerRows, "Subagents");
 	}
@@ -2797,17 +2799,19 @@ function traceViewerLines(state: TraceViewerState, width: number, rows: number, 
 	const maxScroll = Math.max(0, content.length - bodyRows);
 	state.scroll = Math.max(0, Math.min(state.scroll, maxScroll));
 	const visible = content.slice(state.scroll, state.scroll + bodyRows);
-	const footer = theme.fg("dim", `${state.scroll + 1}-${Math.min(content.length, state.scroll + bodyRows)}/${content.length} · ${item?.path ? "enter/e opens $VISUAL/$EDITOR" : "metadata"}`);
+	const footer = item?.path
+		? `${theme.fg("dim", `${state.scroll + 1}-${Math.min(content.length, state.scroll + bodyRows)}/${content.length} · `)}${ansiYellow("enter/e")} ${theme.fg("dim", "opens $VISUAL/$EDITOR")}`
+		: theme.fg("dim", `${state.scroll + 1}-${Math.min(content.length, state.scroll + bodyRows)}/${content.length} · metadata`);
 	const innerLines = [
-		help,
 		tabs,
-		divider(innerWidth, theme),
+		"",
 		meta || file,
 		meta ? file : "",
 		divider(innerWidth, theme),
 		...visible,
 		divider(innerWidth, theme),
 		footer,
+		help,
 	];
 	while (innerLines.length < frameRows - 2) innerLines.splice(Math.max(0, innerLines.length - 2), 0, "");
 	return simpleFrame(innerLines.slice(0, frameRows - 2), width, theme, state.title);

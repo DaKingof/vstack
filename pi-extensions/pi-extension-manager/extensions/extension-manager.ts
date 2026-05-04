@@ -1474,7 +1474,7 @@ function renderExtensions(inventory: Inventory, ui: ManagerUiState, width: numbe
 	const right = renderInspector(inventory, selected, ui, rightWidth, theme, layout.settingsRows);
 	const rows = layout.bodyRows;
 	const view = ui.topTab === TAB_ALL ? (ui.showResources ? "raw resources" : "packages") : "package";
-	const searchText = ` > ${ui.search || theme.inverse(" ")}`;
+	const searchText = ` > ${ui.search}${theme.inverse(" ")}`;
 	const searchLine = theme.bg("toolPendingBg", pad(searchText, width));
 	const lines = [
 		"",
@@ -1918,18 +1918,18 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 		const lines: string[] = [];
 		const searchLine = ui.editing
 			? theme.bg("toolPendingBg", pad(` ${theme.fg("dim", "Editing inline value")}`, bodyWidth))
-			: theme.bg("toolPendingBg", pad(` > ${ui.search || theme.inverse(" ")}`, bodyWidth));
-		lines.push(renderTabBar(tabs, ui.tab, bodyWidth, theme));
-		lines.push("");
-		lines.push(ui.editing
+			: theme.bg("toolPendingBg", pad(` > ${ui.search}${theme.inverse(" ")}`, bodyWidth));
+		const footer = ui.editing
 			? `${theme.fg("dim", "editing value · ")}${ansiYellow("enter")} ${theme.fg("dim", "save · ")}${ansiYellow("esc")} ${theme.fg("dim", "cancel · ")}${ansiYellow("backspace")} ${theme.fg("dim", "delete · ")}${ansiYellow("ctrl+u")} ${theme.fg("dim", "clear")}`
-			: `${ansiYellow("tab")} ${theme.fg("dim", "switch extension tabs · ")}${ansiYellow("↑↓")} ${theme.fg("dim", "navigate · ")}${ansiYellow("enter")} ${theme.fg("dim", "edit/toggle · ")}${ansiYellow("d")} ${theme.fg("dim", "reset setting · ")}${ansiYellow("D")} ${theme.fg("dim", "reset extension · ")}${ansiYellow("backspace")} ${theme.fg("dim", "clear · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`);
+			: `${ansiYellow("tab")} ${theme.fg("dim", "switch extension tabs · ")}${ansiYellow("↑↓")} ${theme.fg("dim", "navigate · ")}${ansiYellow("enter")} ${theme.fg("dim", "edit/toggle · ")}${ansiYellow("d")} ${theme.fg("dim", "reset setting · ")}${ansiYellow("D")} ${theme.fg("dim", "reset extension · ")}${ansiYellow("backspace")} ${theme.fg("dim", "clear · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
+		lines.push(renderTabBar(tabs, ui.tab, bodyWidth, theme));
 		lines.push("");
 		lines.push(searchLine);
 		lines.push("");
 		lines.push(divider(bodyWidth, theme));
 		if (visible.length === 0) {
 			lines.push(theme.fg("muted", "No matching settings."));
+			lines.push(divider(bodyWidth, theme), footer);
 			return frame(lines, safeWidth, theme, layout.innerRows, "Extension Settings");
 		}
 		let lastPackage = "";
@@ -1952,12 +1952,12 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 			const meta = managerMutedForSelection(theme, `${row.schema.type} · ${mode} · ${config.scope}`, selected);
 			const rowText = truncateToWidth(`${itemPad}${label}${" ".repeat(Math.max(1, 36 - visibleWidth(labelText)))}${valueText} ${meta}`, bodyWidth, "…");
 			lines.push(selected ? managerSelectedLine(theme, rowText, bodyWidth) : rowText);
-			if (isEditing) lines.push(theme.fg("muted", "    Enter saves · Esc cancels · Backspace deletes · Ctrl+U clears"));
-			else if (selected && row.schema.description) lines.push(theme.fg("muted", `    ${truncateToWidth(row.schema.description, bodyWidth - 4, "…")}`));
+			if (selected && !isEditing && row.schema.description) lines.push(theme.fg("muted", `    ${truncateToWidth(row.schema.description, bodyWidth - 4, "…")}`));
 		}
 		const moreBefore = ui.scroll > 0 ? `↑ ${ui.scroll}` : "";
 		const moreAfter = ui.scroll + layout.listRows < filtered().length ? `↓ ${filtered().length - ui.scroll - layout.listRows}` : "";
 		if (moreBefore || moreAfter) lines.push("", theme.fg("dim", [moreBefore, moreAfter].filter(Boolean).join(" · ")));
+		lines.push(divider(bodyWidth, theme), footer);
 		return frame(lines, safeWidth, theme, layout.innerRows, "Extension Settings");
 	}
 

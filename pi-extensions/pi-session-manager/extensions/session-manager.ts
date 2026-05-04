@@ -903,6 +903,7 @@ class SessionManagerOverlay implements Focusable {
 		lines.push(top("Session Manager", `${this.filtered.length}/${this.sessions.length} shown`));
 		for (let i = 0; i < POPUP_PADDING_Y; i++) lines.push(blank());
 		lines.push(row(this.renderScopeTabs(bodyWidth)));
+		lines.push(row(""));
 		lines.push(row(this.renderSubheader(bodyWidth, accent, muted, dim, warning, error)));
 		lines.push(filledRow(this.renderSearch(bodyWidth, dim)));
 		lines.push(divider());
@@ -950,10 +951,10 @@ class SessionManagerOverlay implements Focusable {
 
 	private renderSubheader(inner: number, accent: (s: string) => string, muted: (s: string) => string, dim: (s: string) => string, warning: (s: string) => string, error: (s: string) => string): string {
 		if (this.mode === "confirm-delete" && this.deleteTarget) {
-			return error(`Delete “${truncateToWidth(sessionResumeTitle(this.deleteTarget), Math.max(12, inner - 30), "…")}”? Enter confirms, Esc cancels.`);
+			return error(`Delete “${truncateToWidth(sessionResumeTitle(this.deleteTarget), Math.max(12, inner - 10), "…")}”?`);
 		}
 		if (this.mode === "deleting") return warning("Deleting session…");
-		if (this.mode === "rename" && this.renameTarget) return accent(`Rename “${truncateToWidth(sessionResumeTitle(this.renameTarget), Math.max(12, inner - 28), "…")}” — Enter saves, Esc cancels.`);
+		if (this.mode === "rename" && this.renameTarget) return accent(`Rename “${truncateToWidth(sessionResumeTitle(this.renameTarget), Math.max(12, inner - 10), "…")}”`);
 		if (this.notice) {
 			return this.notice.kind === "error" ? error(this.notice.text) : accent(this.notice.text);
 		}
