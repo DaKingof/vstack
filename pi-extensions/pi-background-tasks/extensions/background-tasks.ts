@@ -23,6 +23,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const BG_COMMAND = "bg";
+const DEFAULT_BACKGROUND_BASH_SHORTCUT = "alt+.";
 const DEFAULT_BG_SHORTCUT = "alt+shift+h";
 const DEFAULT_WIDGET_TOGGLE_SHORTCUT = "alt+h";
 const BG_MESSAGE_TYPE = "vstack-background-tasks:event";
@@ -36,6 +37,7 @@ const DEFAULT_FORCE_KILL_GRACE_MS = 5_000;
 const DEFAULT_OUTPUT_BUFFER_MAX_CHARS = 1_000_000;
 const DEFAULT_OUTPUT_ALERT_MAX_CHARS = 10_000;
 const DEFAULT_LOG_TAIL_MAX_CHARS = 50_000;
+const DEFAULT_FORCED_BACKGROUND_WINDOW_MS = 5 * 60 * 1_000;
 const DASHBOARD_WIDTH = 96;
 const DASHBOARD_MAX_HEIGHT = "75%";
 const DASHBOARD_PADDING_X = 2;
@@ -315,6 +317,136 @@ function taskElapsedMs(task: Pick<BackgroundTaskSnapshot, "startedAt" | "status"
 function compactText(value: string, maxChars = 80): string {
 	const compact = value.replace(/\s+/g, " ").trim();
 	return compact.length > maxChars ? `${compact.slice(0, Math.max(0, maxChars - 1))}…` : compact;
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function normalizedCommand(command: string): string {
+	return command.replace(/\s+/g, " ").trim();
+}
+
+function parsePatternList(raw: string): RegExp[] {
+	const patterns: RegExp[] = [];
+	for (const line of raw.split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith("#")) continue;
+		const match = trimmed.match(/^\/(.*)\/([gimsuy]*)$/);
+		try {
+			patterns.push(match ? new RegExp(match[1], match[2]) : new RegExp(trimmed, "i"));
+		} catch {
+			// Ignore malformed optional user patterns; built-in safe patterns still apply.
+		}
+	}
+	return patterns;
+}
+
+function matchesAnyRegex(command: string, patterns: RegExp[]): boolean {
+	for (const pattern of patterns) {
+		pattern.lastIndex = 0;
+		if (pattern.test(command)) return true;
+	}
+	return false;
+}
+
+function loopIterationCount(command: string): number | null {
+	const match = command.match(/\$\(\s*seq\s+(?:(\d+)\s+)?(\d+)\s*\)/i);
+	if (!match) return null;
+	const start = match[1] ? Number.parseInt(match[1], 10) : 1;
+	const end = Number.parseInt(match[2] ?? "", 10);
+	if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+	return Math.abs(end - start) + 1;
+}
+
+interface BashBackgroundDecision {
+	forced: boolean;
+	notifyOnExit: boolean;
+	notifyOnOutput: boolean;
+	notifyPattern?: string;
+	reason: string;
+	title: string;
+}
+
+function autoBackgroundDecision(command: string, cwd?: string): BashBackgroundDecision | null {
+	const normalized = normalizedCommand(command);
+	if (!normalized) return null;
+	if (matchesAnyRegex(normalized, parsePatternList(settingString("autoBackgroundPatterns", "", cwd)))) {
+		return {
+			forced: false,
+			notifyOnExit: true,
+			notifyOnOutput: false,
+			reason: "matched configured auto-background pattern",
+			title: `auto: ${compactText(normalized, 72)}`,
+		};
+	}
+
+	if (/(?:^|[;&|]\s*)watch(?:\s|$)/i.test(normalized)) {
+		return {
+			forced: false,
+			notifyOnExit: true,
+			notifyOnOutput: false,
+			reason: "watch-style command",
+			title: `watch: ${compactText(normalized, 72)}`,
+		};
+	}
+
+	if (/\b(?:tail|journalctl)\b[^\n;|&]*\s-[^\s;|&]*f\b/i.test(normalized)) {
+		return {
+			forced: false,
+			notifyOnExit: true,
+			notifyOnOutput: false,
+			reason: "follow-mode log command",
+			title: `follow: ${compactText(normalized, 72)}`,
+		};
+	}
+
+	const hasShellLoop = /\b(?:for|while|until)\b/i.test(normalized) && /\bdo\b/i.test(normalized) && /\bdone\b/i.test(normalized);
+	const hasSleep = /\bsleep\s+(?:\d+(?:\.\d+)?|\.\d+)/i.test(normalized);
+	if (hasShellLoop && hasSleep) {
+		const iterations = loopIterationCount(normalized);
+		const looksLikeMonitor = /\b(?:pi-bridge|tmux|capture-pane|list-panes|has-session|delegate-state|subagent|session)\b/i.test(normalized);
+		const longFiniteLoop = iterations !== null && iterations >= 30;
+		const openEndedLoop = /\bwhile\s+(?:true|:)\b/i.test(normalized) || /\buntil\b/i.test(normalized);
+		if (looksLikeMonitor || longFiniteLoop || openEndedLoop) {
+			return {
+				forced: false,
+				notifyOnExit: true,
+				notifyOnOutput: false,
+				reason: looksLikeMonitor ? "session/tmux monitoring loop" : "long-running polling loop",
+				title: `monitor: ${compactText(normalized, 72)}`,
+			};
+		}
+	}
+
+	return null;
+}
+
+function forcedBackgroundDecision(command: string, cwd?: string): BashBackgroundDecision {
+	return {
+		forced: true,
+		notifyOnExit: true,
+		notifyOnOutput: settingBoolean("forcedBackgroundNotifyOnOutput", false, cwd),
+		reason: "requested by background shortcut",
+		title: `shortcut: ${compactText(normalizedCommand(command), 72)}`,
+	};
+}
+
+function bashBackgroundAckText(task: BackgroundTaskSnapshot, decision: BashBackgroundDecision): string {
+	return [
+		`Started ${task.id} (pid ${task.pid}) in the background.`,
+		`Reason: ${decision.reason}.`,
+		`Command: ${task.command}`,
+		`Cwd: ${task.cwd}`,
+		`Log: ${task.logFile}`,
+		`Wakeups: exit=${task.notifyOnExit ? "yes" : "no"}, output=${task.notifyOnOutput ? (task.notifyPattern ?? "yes") : "no"}`,
+		"Continue the turn without waiting. Use bg_task list/log/stop to inspect or terminate this task.",
+	].join("\n");
+}
+
+function bashBackgroundAck(task: BackgroundTaskSnapshot, decision: BashBackgroundDecision): string {
+	const text = bashBackgroundAckText(task, decision);
+	return `printf '%s\\n' ${shellQuote(text)}`;
 }
 
 function formatShortcutHint(shortcut: string): string {
@@ -725,6 +857,8 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 
 	let activeCtx: ExtensionContext | null = null;
 	let requestWidgetRender: (() => void) | null = null;
+	let forceNextBashBackgroundAt: number | null = null;
+	const backgroundBashShortcut = settingString("backgroundBashShortcut", DEFAULT_BACKGROUND_BASH_SHORTCUT);
 	const dashboardShortcut = settingString("dashboardShortcut", DEFAULT_BG_SHORTCUT);
 	const widgetToggleShortcut = settingString("widgetToggleShortcut", DEFAULT_WIDGET_TOGGLE_SHORTCUT);
 	let widgetMode: "compact" | "expanded" | "hidden" = settingEnum("widgetDefaultMode", ["compact", "expanded", "hidden"] as const, "compact");
@@ -1083,6 +1217,46 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 
 	const resolveTask = (id?: string, pid?: number): ManagedTask | null => resolveTaskByToken(tasks.values(), id ?? pid);
 
+	const forcedBackgroundWindowMs = (cwd?: string): number => Math.max(1_000, settingNumber("forcedBackgroundWindowSeconds", DEFAULT_FORCED_BACKGROUND_WINDOW_MS / 1_000, cwd) * 1_000);
+
+	const consumeForcedBackground = (cwd?: string): boolean => {
+		if (forceNextBashBackgroundAt == null) return false;
+		if (Date.now() - forceNextBashBackgroundAt > forcedBackgroundWindowMs(cwd)) {
+			forceNextBashBackgroundAt = null;
+			return false;
+		}
+		forceNextBashBackgroundAt = null;
+		return true;
+	};
+
+	const armForcedBackground = (ctx: ExtensionContext | ExtensionCommandContext, source: "shortcut" | "command") => {
+		forceNextBashBackgroundAt = Date.now();
+		const seconds = Math.max(1, Math.round(forcedBackgroundWindowMs(ctx.cwd) / 1_000));
+		const sourceText = source === "shortcut" ? formatShortcutHint(backgroundBashShortcut) : `/${BG_COMMAND} next`;
+		const note = ctx.isIdle?.()
+			? `${sourceText} armed. Next bash command in the next ${seconds}s will start as a background task.`
+			: `${sourceText} armed. Next not-yet-started bash command in this turn will start as a background task. Already-running bash cannot be detached safely.`;
+		ctx.ui.notify(note, "info");
+	};
+
+	const backgroundBashCommand = (command: string, cwd: string | undefined, decision: BashBackgroundDecision): ManagedTask => {
+		return spawnTask({
+			command,
+			cwd,
+			notifyOnExit: decision.notifyOnExit,
+			notifyOnOutput: decision.notifyOnOutput,
+			notifyPattern: decision.notifyPattern,
+			title: decision.title,
+		});
+	};
+
+	const decisionForBashCommand = (command: string, cwd?: string): BashBackgroundDecision | null => {
+		if (!command.trim()) return null;
+		if (consumeForcedBackground(cwd)) return forcedBackgroundDecision(command, cwd);
+		if (!settingBoolean("autoBackgroundBash", true, cwd)) return null;
+		return autoBackgroundDecision(command, cwd);
+	};
+
 	const openDashboard = async (
 		ctx: ExtensionCommandContext | ExtensionContext,
 		initialTask: ManagedTask | null = null,
@@ -1333,6 +1507,37 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 		activeCtx = null;
 	});
 
+	pi.on("tool_call", async (event: any, ctx: ExtensionContext) => {
+		activeCtx = ctx;
+		if (event?.toolName !== "bash") return undefined;
+		const command = typeof event.input?.command === "string" ? event.input.command : "";
+		const decision = decisionForBashCommand(command, ctx.cwd);
+		if (!decision) return undefined;
+
+		const task = backgroundBashCommand(command, ctx.cwd, decision);
+		event.input.command = bashBackgroundAck(rememberSnapshot(task), decision);
+		if (ctx.hasUI) {
+			const label = decision.forced ? "Shortcut moved bash to background" : "Auto-backgrounded bash";
+			ctx.ui.notify(`${label}: ${task.id} (pid ${task.pid})`, "info");
+		}
+		return undefined;
+	});
+
+	pi.on("user_bash", (event: any, ctx: ExtensionContext) => {
+		activeCtx = ctx;
+		const command = typeof event?.command === "string" ? event.command : "";
+		const decision = decisionForBashCommand(command, event?.cwd ?? ctx.cwd);
+		if (!decision) return undefined;
+
+		const task = backgroundBashCommand(command, event?.cwd ?? ctx.cwd, decision);
+		const output = bashBackgroundAckText(rememberSnapshot(task), decision);
+		if (ctx.hasUI) {
+			const label = decision.forced ? "Shortcut moved user bash to background" : "Auto-backgrounded user bash";
+			ctx.ui.notify(`${label}: ${task.id} (pid ${task.pid})`, "info");
+		}
+		return { result: { output, exitCode: 0, cancelled: false, truncated: false } };
+	});
+
 	pi.registerTool({
 		renderShell: "self",
 		name: "bg_status",
@@ -1374,11 +1579,13 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 		name: "bg_task",
 		label: "Background Task",
 		description:
-			"Spawn, inspect, and stop explicit background shell tasks without blocking the current turn. Tasks write persistent logs, do not time out by default, stop as a process group on Unix, and can wake the agent on exit or matching output.",
+			"Spawn, inspect, and stop explicit background shell tasks without blocking the current turn. Tasks write persistent logs, do not time out by default, stop as a process group on Unix, and can wake the agent on exit or matching output. The background-tasks extension also auto-diverts recognized bash monitoring loops before they block.",
 		promptSnippet: "Spawn, inspect, and stop explicit non-blocking background shell tasks.",
 		promptGuidelines: [
 			"Use bg_task instead of bash backgrounding/nohup when the user wants a long-running command to continue while the conversation remains usable.",
 			"Use bg_task list/log/stop to inspect or terminate tasks started by bg_task or /bg.",
+			"Use bg_task for pi-bridge, session, tmux, subagent, or log monitoring instead of raw foreground bash polling loops.",
+			"If a bash monitor is auto-backgrounded, continue the turn and inspect it later with bg_task log/list/stop rather than waiting on foreground bash.",
 		],
 		parameters: Type.Object({
 			action: StringEnum(["spawn", "list", "log", "stop", "clear"] as const, {
@@ -1452,6 +1659,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			if (parts.length === 0 || (parts.length === 1 && !trimmed.endsWith(" "))) {
 				return [
 					{ label: "list", value: "list", description: "Show tracked tasks" },
+					{ label: "next", value: "next", description: "Move the next bash command to background" },
 					{ label: "run", value: "run ", description: "Spawn a background shell task" },
 					{ label: "log", value: "log ", description: "Show task log tail" },
 					{ label: "watch", value: "watch ", description: "Open the dashboard focused on a task" },
@@ -1481,6 +1689,10 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			}
 			if (trimmed === "list") {
 				ctx.ui.notify(formatTaskListText(), "info");
+				return;
+			}
+			if (trimmed === "next") {
+				armForcedBackground(ctx, "command");
 				return;
 			}
 			if (trimmed === "clear") {
@@ -1521,6 +1733,15 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			handler: async (ctx) => {
 				activeCtx = ctx as ExtensionContext;
 				await openDashboard(ctx as ExtensionContext);
+			},
+		});
+	}
+	if (backgroundBashShortcut !== "none") {
+		pi.registerShortcut(backgroundBashShortcut, {
+			description: "Move the next not-yet-started bash command to a background task",
+			handler: async (ctx) => {
+				activeCtx = ctx as ExtensionContext;
+				armForcedBackground(ctx as ExtensionContext, "shortcut");
 			},
 		});
 	}

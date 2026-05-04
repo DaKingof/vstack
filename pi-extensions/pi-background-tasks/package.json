@@ -52,6 +52,42 @@
           "apply": "live"
         },
         {
+          "key": "autoBackgroundBash",
+          "label": "Auto-background blocking bash monitors",
+          "description": "Automatically divert clearly long-running bash monitors (watch, tail -f, pi-bridge/tmux polling loops) into bg_task before they can block the turn.",
+          "type": "boolean",
+          "default": true,
+          "category": "Execution",
+          "apply": "live"
+        },
+        {
+          "key": "autoBackgroundPatterns",
+          "label": "Extra auto-background patterns",
+          "description": "Optional newline-separated regular expressions for additional bash commands that should be auto-backgrounded before execution. Lines starting with # are ignored.",
+          "type": "string",
+          "default": "",
+          "category": "Execution",
+          "apply": "live"
+        },
+        {
+          "key": "forcedBackgroundNotifyOnOutput",
+          "label": "Shortcut output wakeups",
+          "description": "When Alt+. or /bg next forces the next bash into the background, also wake the agent on new output. Exit wakeups are always enabled for forced background tasks.",
+          "type": "boolean",
+          "default": false,
+          "category": "Wakeups",
+          "apply": "live"
+        },
+        {
+          "key": "forcedBackgroundWindowSeconds",
+          "label": "Shortcut arming window",
+          "description": "Seconds after Alt+. or /bg next during which the next bash command is forced into the background.",
+          "type": "number",
+          "default": 300,
+          "category": "Execution",
+          "apply": "live"
+        },
+        {
           "key": "outputSettleMs",
           "label": "Output settle delay",
           "description": "Debounce delay before output wakeups are sent.",
@@ -148,6 +184,16 @@
           "default": 800,
           "category": "UI",
           "apply": "live"
+        },
+        {
+          "key": "backgroundBashShortcut",
+          "label": "Background next bash shortcut",
+          "description": "Keyboard shortcut that arms a one-shot diversion: the next not-yet-started bash command becomes a bg_task. Already-running bash cannot be detached safely. Use \"none\" to disable. Requires restart because shortcuts register at extension load.",
+          "type": "string",
+          "default": "alt+.",
+          "category": "UI",
+          "apply": "restart",
+          "requiresReload": true
         },
         {
           "key": "widgetToggleShortcut",
