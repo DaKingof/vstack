@@ -5,6 +5,7 @@ import { withFileMutationQueue, type ExtensionAPI, type ExtensionContext } from 
 import { Type, type Static } from "typebox";
 import { ExaClient, type ExaDeepType, type NormalizedExaResponse } from "../providers/exa.js";
 import type { WebToolsSettings } from "../settings.js";
+import { emptyComponent, errorSummary, firstText, successSummary, textComponent, tree, webCallText } from "../utils/render.js";
 
 const deepTypes = ["deep-reasoning", "deep-lite", "deep"] as const;
 const reportFormats = ["findings", "markdown", "json"] as const;
@@ -62,12 +63,31 @@ async function writeQueued(path: string, content: string): Promise<void> {
 
 export function createWebResearchToolDefinition(pi: ExtensionAPI, getSettings: (cwd?: string) => WebToolsSettings, name = "web_research") {
 	return {
+		renderShell: "self" as const,
 		name,
 		label: "Web Research",
 		description: "Run Exa Deep Search research and optionally write a findings report. Requires EXA_API_KEY; does not fall back to general web search.",
 		promptSnippet: "Run Exa deep research and write evidence-backed findings reports.",
 		promptGuidelines: ["Use web_research for evidence-backed research reports; pass outputPath when the user asks for findings.md or a saved report."],
 		parameters: webResearchSchema,
+		renderCall(args: WebResearchInput, theme: any, context: any) {
+			if (context?.executionStarted && !context?.isPartial) return emptyComponent();
+			const meta = [args?.type ?? "deep-reasoning", args?.outputPath ? `→ ${args.outputPath}` : undefined].filter(Boolean).join(" · ");
+			return textComponent(webCallText(theme, "Web Research", args?.query ?? "research", meta));
+		},
+		renderResult(result: any, options: any, theme: any, context: any) {
+			if (options?.isPartial) return emptyComponent();
+			if (context?.isError) return textComponent(errorSummary(theme, "Web Research", firstText(result) || "failed"));
+			const details = result?.details ?? {};
+			const outputPath = details.outputPath as string | undefined;
+			const rawOutputPath = details.rawOutputPath as string | undefined;
+			const sourceCount = Array.isArray(details.sources) ? details.sources.length : undefined;
+			const query = context?.args?.query ?? outputPath ?? "complete";
+			const meta = [sourceCount != null ? `${sourceCount} sources` : undefined, outputPath ? `report ${outputPath}` : undefined].filter(Boolean).join(" · ");
+			const lines = [successSummary(theme, "Web Research", query, meta)];
+			if (rawOutputPath) lines.push(`${tree(theme, "└")}${theme.fg("muted", "raw metadata ")}${theme.fg("accent", rawOutputPath)}`);
+			return textComponent(lines.join("\n"));
+		},
 		async execute(_toolCallId: string, params: WebResearchInput, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
 			const settings = getSettings(ctx.cwd);
 			if (!settings.exaDeepResearchEnabled) throw new Error("web_research is disabled by pi-web-tools.exaDeepResearchEnabled.");

@@ -7,6 +7,7 @@ import { resolveWebProvider } from "../provider-selection.js";
 import type { WebProvider, WebToolsSettings } from "../settings.js";
 import { storeWebContent } from "../storage.js";
 import { sourceList } from "../utils/format.js";
+import { accent, emptyComponent, errorSummary, firstText, muted, successSummary, textComponent, tree, webCallText } from "../utils/render.js";
 
 const providers = ["auto", "exa", "openai-native", "perplexity", "gemini"] as const;
 
@@ -34,12 +35,37 @@ function normalizeQueries(params: WebSearchInput): string[] {
 
 export function createWebSearchToolDefinition(pi: ExtensionAPI, getSettings: (cwd?: string) => WebToolsSettings, name = "web_search", forcedProvider?: WebProvider) {
 	return {
+		renderShell: "self" as const,
 		name,
 		label: "Web Search",
 		description: "Unified web search. Supports provider auto|exa|openai-native|perplexity|gemini, batch queries, recency/date/domain filters, and optional content storage. Exa is the implemented direct provider; OpenAI native is rewritten before provider requests on supported models.",
 		promptSnippet: "Search the web across configured providers; use provider=exa for direct results or openai-native on OpenAI/Codex models.",
 		promptGuidelines: ["Use web_search for current web information; prefer web_research for deep evidence-backed findings reports."],
 		parameters: webSearchSchema,
+		renderCall(args: WebSearchInput, theme: any, context: any) {
+			if (context?.executionStarted && !context?.isPartial) return emptyComponent();
+			const query = args?.query || args?.queries?.[0] || "search";
+			const batch = args?.queries && args.queries.length > 1 ? ` +${args.queries.length - 1} queries` : undefined;
+			const provider = args?.provider && args.provider !== "auto" ? args.provider : undefined;
+			return textComponent(webCallText(theme, name === "web_search" ? "Web Search" : name, query, [provider, batch].filter(Boolean).join(" · ")));
+		},
+		renderResult(result: any, options: any, theme: any, context: any) {
+			if (options?.isPartial) return emptyComponent();
+			if (context?.isError) return textComponent(errorSummary(theme, name === "web_search" ? "Web Search" : name, firstText(result) || "failed"));
+			const details = result?.details ?? {};
+			const results = Array.isArray(details.results) ? details.results : [];
+			const provider = details.provider ? `${details.provider}` : "provider";
+			const query = context?.args?.query || context?.args?.queries?.[0] || "complete";
+			const lines = [successSummary(theme, name === "web_search" ? "Web Search" : name, query, `${provider} · ${results.length} results`)];
+			const shown = results.slice(0, options?.expanded ? 8 : 3);
+			for (let index = 0; index < shown.length; index++) {
+				const item = shown[index]!;
+				const title = item.title || item.url || "Untitled";
+				lines.push(`${tree(theme, index === shown.length - 1 && results.length <= shown.length ? "└" : "├")}${accent(theme, title)}${item.contentId ? muted(theme, ` · ${item.contentId}`) : ""}`);
+			}
+			if (results.length > (options?.expanded ? 8 : 3)) lines.push(`${tree(theme, "└")}${muted(theme, `… ${results.length - (options?.expanded ? 8 : 3)} more · Ctrl+O to expand`)}`);
+			return textComponent(lines.join("\n"));
+		},
 		async execute(_toolCallId: string, params: WebSearchInput, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
 			const settings = getSettings(ctx.cwd);
 			const resolution = resolveWebProvider(forcedProvider ?? params.provider as WebProvider | undefined, settings, ctx.model as any);
