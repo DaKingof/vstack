@@ -501,7 +501,7 @@ function renderPanelLines(state: TaskPanelState, theme: Theme, cwd: string): str
 		}
 		const shown = visible.length + (active ? 1 : 0);
 		const hidden = Math.max(0, remaining - shown);
-		if (hidden > 0) lines.push(`${panelBranch(theme, "└", cwd)}${theme.fg("muted", `… ${hidden} more · /tasks show-all`)}`);
+		if (hidden > 0) lines.push(`${panelBranch(theme, "└", cwd)}${theme.fg("muted", `… ${hidden} more`)}`);
 		return lines;
 	}
 	const lines = [header];
