@@ -36,7 +36,9 @@ fn build_source_options(
     project_root: &Path,
 ) -> Vec<tui::RepoOption> {
     let mut sources = Vec::new();
-    sources.push(crate::REPO.to_string());
+    if !registry.was_removed(crate::REPO) {
+        sources.push(crate::REPO.to_string());
+    }
     if let Some(current) = registry.current_for_project(project_root) {
         sources.push(current.to_string());
     }
@@ -62,6 +64,74 @@ fn build_source_options(
         });
     }
     options
+}
+
+#[cfg(test)]
+mod source_option_tests {
+    use super::*;
+
+    #[test]
+    fn source_options_include_default_repo_for_fresh_installs() {
+        let registry = config::SourceRegistry::default();
+        let project_root = std::env::temp_dir().join("vstack_source_options_default_removed");
+        let resolved = ResolvedSource {
+            source: "/repo/local-vstack".into(),
+            label: "local: /repo/local-vstack".into(),
+            dir: PathBuf::from("/repo/local-vstack"),
+            persist: false,
+        };
+
+        let options = build_source_options(&registry, &resolved, &project_root);
+
+        assert_eq!(
+            options
+                .iter()
+                .map(|o| o.source.as_str())
+                .collect::<Vec<_>>(),
+            vec![crate::REPO, "/repo/local-vstack"]
+        );
+    }
+
+    #[test]
+    fn source_options_do_not_re_add_removed_default_repo() {
+        let mut registry = config::SourceRegistry::default();
+        registry.forget(crate::REPO);
+        let project_root = std::env::temp_dir().join("vstack_source_options_default_removed");
+        let resolved = ResolvedSource {
+            source: "/repo/local-vstack".into(),
+            label: "local: /repo/local-vstack".into(),
+            dir: PathBuf::from("/repo/local-vstack"),
+            persist: false,
+        };
+
+        let options = build_source_options(&registry, &resolved, &project_root);
+
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].source, "/repo/local-vstack");
+    }
+
+    #[test]
+    fn source_options_preserve_registered_sources_only() {
+        let mut registry = config::SourceRegistry::default();
+        registry.remember("owner/custom");
+        let project_root = std::env::temp_dir().join("vstack_source_options_registered_only");
+        let resolved = ResolvedSource {
+            source: "owner/custom".into(),
+            label: "owner/custom".into(),
+            dir: PathBuf::from("/cache/owner_custom"),
+            persist: true,
+        };
+
+        let options = build_source_options(&registry, &resolved, &project_root);
+
+        assert_eq!(
+            options
+                .iter()
+                .map(|o| o.source.as_str())
+                .collect::<Vec<_>>(),
+            vec![crate::REPO, "owner/custom"]
+        );
+    }
 }
 
 fn resolve_source_for_app(

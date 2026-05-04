@@ -86,6 +86,10 @@ pub struct SourceRegistry {
     /// Last selected source outside a project-scoped install.
     pub current: Option<String>,
     pub entries: Vec<String>,
+    /// Sources the user explicitly removed. This lets vstack ship a default
+    /// source for fresh installs without resurrecting it after removal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_entries: Vec<String>,
     /// Last selected source per project root. This prevents choosing a source
     /// in one project from silently changing the package source used by
     /// another project.
@@ -210,6 +214,13 @@ impl SourceRegistry {
             self.current = None;
         }
         self.project_current.retain(|_, current| current != source);
+        if !self.removed_entries.iter().any(|entry| entry == source) {
+            self.removed_entries.push(source.to_string());
+        }
+    }
+
+    pub fn was_removed(&self, source: &str) -> bool {
+        self.removed_entries.iter().any(|entry| entry == source)
     }
 }
 
@@ -941,5 +952,14 @@ mod source_registry_tests {
         assert_eq!(reg.current_for_project(&project), None);
         assert!(!reg.entries.contains(&"owner/repo".to_string()));
         let _ = fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn forget_records_removed_source_tombstone() {
+        let mut reg = SourceRegistry::default();
+
+        reg.forget("vanillagreencom/vstack");
+
+        assert!(reg.was_removed("vanillagreencom/vstack"));
     }
 }
