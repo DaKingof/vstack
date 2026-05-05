@@ -379,6 +379,9 @@ function renderStyledCodeBlock(token: any, width: number, markdownTheme: any, ct
 		return code.split("\n").map((line) => (markdownTheme?.codeBlock ? markdownTheme.codeBlock(line) : line));
 	}
 
+	const blockIndent = "  ";
+	const panelWidth = Math.max(1, contentWidth - visibleWidth(blockIndent));
+
 	let highlightedLines: string[];
 	try {
 		highlightedLines = markdownTheme?.highlightCode ? markdownTheme.highlightCode(code, lang) : code.split("\n").map((line: string) => (markdownTheme?.codeBlock ? markdownTheme.codeBlock(line) : line));
@@ -388,20 +391,20 @@ function renderStyledCodeBlock(token: any, width: number, markdownTheme: any, ct
 
 	const strip = markdownTheme?.codeBlockBorder ? markdownTheme.codeBlockBorder("▌") : "▌";
 	const stripWidth = Math.max(1, visibleWidth(strip));
-	const bodyWidth = Math.max(1, contentWidth - stripWidth);
+	const bodyWidth = Math.max(1, panelWidth - stripWidth);
 	const codeWidth = Math.max(1, bodyWidth - 2);
 	const lines: string[] = [];
 	const blankBody = applyCodeBlockBg(" ".repeat(bodyWidth), ctx);
-	lines.push(`${strip}${blankBody}`);
+	lines.push(`${blockIndent}${strip}${blankBody}`);
 	for (const highlightedLine of highlightedLines) {
 		const wrapped = wrapTextWithAnsi(highlightedLine, codeWidth);
 		const segments = wrapped.length > 0 ? wrapped : [""];
 		for (const segment of segments) {
 			const paddedCode = padAnsiLine(segment, codeWidth);
-			lines.push(`${strip}${applyCodeBlockBg(` ${paddedCode} `, ctx)}`);
+			lines.push(`${blockIndent}${strip}${applyCodeBlockBg(` ${paddedCode} `, ctx)}`);
 		}
 	}
-	lines.push(`${strip}${blankBody}`);
+	lines.push(`${blockIndent}${strip}${blankBody}`);
 	return lines;
 }
 
