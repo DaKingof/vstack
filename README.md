@@ -277,58 +277,58 @@ Windows note:
 
 ### Skills
 
-Each skill name links to its `SKILL.md`. `*` marks skills that need project-local setup before first use (`.env.local`, decision directories, or command aliases) — see that skill's `README.md` for bootstrap steps.
+Each skill name links to its skill directory (GitHub renders `README.md` when present; otherwise the file list shows `SKILL.md`). `*` marks skills that need project-local setup before first use (`.env.local`, decision directories, or command aliases) — see that skill's `README.md` for bootstrap steps.
 
 #### Rust
 
 | Skill | Brief |
 |---|---|
-| [`rust-arch`](skills/rust-arch/SKILL.md) | Rust architecture rules, anti-patterns, and review heuristics. |
-| [`rust-async`](skills/rust-async/SKILL.md) | Async internals, runtime patterns, cancellation, and concurrency composition. |
-| [`rust-cargo`](skills/rust-cargo/SKILL.md) | Cargo workflows, workspaces, feature flags, and build/release config. |
-| [`rust-conventions`](skills/rust-conventions/SKILL.md) | Style, layout, tests, and definition-of-done conventions. |
-| [`rust-cross`](skills/rust-cross/SKILL.md) | Cross-compilation, target setup, and multi-platform builds. |
-| [`rust-debugging`](skills/rust-debugging/SKILL.md) | GDB/LLDB, tracing, panic triage, and async runtime debugging. |
-| [`rust-ffi`](skills/rust-ffi/SKILL.md) | Safe C interop and FFI wrapper patterns. |
-| [`rust-no-std`](skills/rust-no-std/SKILL.md) | `no_std` design, alloc boundaries, and embedded-friendly structure. |
-| [`rust-safety`](skills/rust-safety/SKILL.md) | Unsafe code review, SAFETY comments, and safety audit patterns. |
+| [`rust-arch`](skills/rust-arch/) | Rust architecture rules, anti-patterns, and review heuristics. |
+| [`rust-async`](skills/rust-async/) | Async internals, runtime patterns, cancellation, and concurrency composition. |
+| [`rust-cargo`](skills/rust-cargo/) | Cargo workflows, workspaces, feature flags, and build/release config. |
+| [`rust-conventions`](skills/rust-conventions/) | Style, layout, tests, and definition-of-done conventions. |
+| [`rust-cross`](skills/rust-cross/) | Cross-compilation, target setup, and multi-platform builds. |
+| [`rust-debugging`](skills/rust-debugging/) | GDB/LLDB, tracing, panic triage, and async runtime debugging. |
+| [`rust-ffi`](skills/rust-ffi/) | Safe C interop and FFI wrapper patterns. |
+| [`rust-no-std`](skills/rust-no-std/) | `no_std` design, alloc boundaries, and embedded-friendly structure. |
+| [`rust-safety`](skills/rust-safety/) | Unsafe code review, SAFETY comments, and safety audit patterns. |
 
 #### Performance
 
 | Skill | Brief |
 |---|---|
-| [`perf-cache`](skills/perf-cache/SKILL.md) | Cache locality, false sharing, and data layout optimization. |
-| [`perf-ebpf`](skills/perf-ebpf/SKILL.md) | Aya/eBPF instrumentation and kernel-level observability. |
-| [`perf-latency`](skills/perf-latency/SKILL.md) | Benchmarking and percentile-focused latency measurement. |
-| [`perf-lock-free`](skills/perf-lock-free/SKILL.md) | Atomics, loom verification, and lock-free correctness. |
-| [`perf-profiling`](skills/perf-profiling/SKILL.md) | Flamegraphs, hotspot analysis, NUMA, and jitter investigation. |
-| [`perf-simd`](skills/perf-simd/SKILL.md) | SIMD, auto-vectorization, intrinsics, and runtime dispatch. |
-| [`perf-threading`](skills/perf-threading/SKILL.md) | Pinning, topology-aware concurrency, and jitter reduction. |
-| [`perf-zero-alloc`](skills/perf-zero-alloc/SKILL.md) | Eliminating allocations in hot paths. |
+| [`perf-cache`](skills/perf-cache/) | Cache locality, false sharing, and data layout optimization. |
+| [`perf-ebpf`](skills/perf-ebpf/) | Aya/eBPF instrumentation and kernel-level observability. |
+| [`perf-latency`](skills/perf-latency/) | Benchmarking and percentile-focused latency measurement. |
+| [`perf-lock-free`](skills/perf-lock-free/) | Atomics, loom verification, and lock-free correctness. |
+| [`perf-profiling`](skills/perf-profiling/) | Flamegraphs, hotspot analysis, NUMA, and jitter investigation. |
+| [`perf-simd`](skills/perf-simd/) | SIMD, auto-vectorization, intrinsics, and runtime dispatch. |
+| [`perf-threading`](skills/perf-threading/) | Pinning, topology-aware concurrency, and jitter reduction. |
+| [`perf-zero-alloc`](skills/perf-zero-alloc/) | Eliminating allocations in hot paths. |
 
 #### UI / Domain
 
 | Skill | Brief |
 |---|---|
-| [`iced-rs`](skills/iced-rs/SKILL.md) | Iced 0.14 patterns, reactive UI rules, and Elm-style structure. |
-| [`iced-shadcn`](skills/iced-shadcn/SKILL.md) | shadcn Base UI component planning, family decomposition, and parity audits for Iced. |
-| [`price-handling`](skills/price-handling/SKILL.md) | Price rounding, epsilon comparison, and market-price handling. |
-| [`trading-design`](skills/trading-design/SKILL.md) | Dense, professional trading-style interface design guidance. |
+| [`iced-rs`](skills/iced-rs/) | Iced 0.14 patterns, reactive UI rules, and Elm-style structure. |
+| [`iced-shadcn`](skills/iced-shadcn/) | shadcn Base UI component planning, family decomposition, and parity audits for Iced. |
+| [`price-handling`](skills/price-handling/) | Price rounding, epsilon comparison, and market-price handling. |
+| [`trading-design`](skills/trading-design/) | Dense, professional trading-style interface design guidance. |
 
 #### Workflow / Platform
 
 | Skill | Brief | Commands |
 |---|---|---|
-| [`decider`](skills/decider/SKILL.md)* | Architectural decision document management and indexing. | — |
-| [`deep-research`](skills/deep-research/SKILL.md) | Exa-powered deep research and portable findings report generation. | `scripts/deep-research report "question" --output findings.md`, `scripts/deep-research doctor` |
-| [`github`](skills/github/SKILL.md)* | GitHub PR, thread, review, CI, and merge workflows. | — |
-| [`issue-lifecycle`](skills/issue-lifecycle/SKILL.md)* | Delegated implementation/review/QA issue workflows. | — |
-| [`linear`](skills/linear/SKILL.md)* | Linear issue, cycle, milestone, and project workflows. | — |
-| [`flightdeck`](skills/flightdeck/SKILL.md)* | Master session lifecycle for multi-issue parallel dev work; tmux-only. | `/flightdeck start [ISSUE_ID]`, `/flightdeck parallel-check`, `/flightdeck watch`, `/flightdeck status` |
-| [`orchestration`](skills/orchestration/SKILL.md)* | Per-issue inside-worktree lifecycle: dev → review → submit → merge. | `/orchestration start`, `/orchestration dev-start`, `/orchestration ci-fix`, `/orchestration review-pr`, `/orchestration submit-pr`, `/orchestration merge-pr` |
-| [`project-management`](skills/project-management/SKILL.md)* | TPM-orchestrated planning, audit, roadmap, research-driven decomposition. | `/project-management cycle-plan`, `/project-management audit-issues`, `/project-management roadmap plan`, `/project-management roadmap create`, `/project-management research-spike`, `/project-management research-complete` |
-| [`second-opinion`](skills/second-opinion/SKILL.md) | Cross-model review via external AI CLI; auto-detects harness and calls the opposite (Claude ↔ Codex). | `/second-opinion review`, `/second-opinion challenge`, `/second-opinion audit`, `/second-opinion quick` |
-| [`worktree`](skills/worktree/SKILL.md)* | Git worktree creation, env/config linkage, and isolated workflows. | `/worktree create`, `/worktree list`, `/worktree remove`, `/worktree push`, `/worktree check` |
+| [`decider`](skills/decider/)* | Architectural decision document management and indexing. | — |
+| [`deep-research`](skills/deep-research/) | Exa-powered deep research and portable findings report generation. | `scripts/deep-research report "question" --output findings.md`, `scripts/deep-research doctor` |
+| [`github`](skills/github/)* | GitHub PR, thread, review, CI, and merge workflows. | — |
+| [`issue-lifecycle`](skills/issue-lifecycle/)* | Delegated implementation/review/QA issue workflows. | — |
+| [`linear`](skills/linear/)* | Linear issue, cycle, milestone, and project workflows. | — |
+| [`flightdeck`](skills/flightdeck/)* | Master session lifecycle for multi-issue parallel dev work; tmux-only. | `/flightdeck start [ISSUE_ID]`, `/flightdeck parallel-check`, `/flightdeck watch`, `/flightdeck status` |
+| [`orchestration`](skills/orchestration/)* | Per-issue inside-worktree lifecycle: dev → review → submit → merge. | `/orchestration start`, `/orchestration dev-start`, `/orchestration ci-fix`, `/orchestration review-pr`, `/orchestration submit-pr`, `/orchestration merge-pr` |
+| [`project-management`](skills/project-management/)* | TPM-orchestrated planning, audit, roadmap, research-driven decomposition. | `/project-management cycle-plan`, `/project-management audit-issues`, `/project-management roadmap plan`, `/project-management roadmap create`, `/project-management research-spike`, `/project-management research-complete` |
+| [`second-opinion`](skills/second-opinion/) | Cross-model review via external AI CLI; auto-detects harness and calls the opposite (Claude ↔ Codex). | `/second-opinion review`, `/second-opinion challenge`, `/second-opinion audit`, `/second-opinion quick` |
+| [`worktree`](skills/worktree/)* | Git worktree creation, env/config linkage, and isolated workflows. | `/worktree create`, `/worktree list`, `/worktree remove`, `/worktree push`, `/worktree check` |
 
 ### Hooks
 
