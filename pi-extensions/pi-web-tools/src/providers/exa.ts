@@ -50,7 +50,7 @@ export interface NormalizedExaResponse {
 }
 
 function normalizeResults(raw: any): NormalizedExaResult[] {
-	const results = Array.isArray(raw?.results) ? raw.results : [];
+	const results = Array.isArray(raw?.results) ? raw.results : Array.isArray(raw?.sources) ? raw.sources : [];
 	return results.map((result: any) => ({
 		title: typeof result.title === "string" ? result.title : undefined,
 		url: typeof result.url === "string" ? result.url : undefined,

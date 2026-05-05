@@ -2,6 +2,8 @@
 
 First-party Pi package for web access tools.
 
+For the Exa-specific API map and tool semantics, see [`EXA.md`](./EXA.md).
+
 Implemented in this package:
 
 - `web_search` with provider selection (`auto`, `exa`, `openai-native`, `perplexity`, `gemini`). Direct execution is implemented for Exa; OpenAI-native is handled by a `before_provider_request` rewrite on supported OpenAI/Codex models.

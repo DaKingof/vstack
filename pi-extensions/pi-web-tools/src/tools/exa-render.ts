@@ -16,8 +16,10 @@ export function renderExaResultList(label: string, target: string | undefined, r
 	if (context?.isError) return textComponent(errorSummary(theme, providerLabel(label, "exa"), firstText(result) || "failed"));
 	const details = result?.details ?? {};
 	const results: ExaRenderableResult[] = Array.isArray(details.results) ? details.results : [];
-	const meta = `${results.length} ${resultNoun}`;
+	const answer = typeof details.answer === "string" && details.answer.trim() ? details.answer.trim() : undefined;
+	const meta = answer && results.length === 0 ? "answer" : `${results.length} ${resultNoun}`;
 	const lines = [successSummary(theme, providerLabel(label, "exa"), target || "complete", meta)];
+	if (answer) lines.push(`${tree(theme, results.length === 0 ? "└" : "├")}${muted(theme, "answer ")}${accent(theme, oneLine(answer, 130))}`);
 	const limit = options?.expanded ? 8 : 3;
 	const shown = results.slice(0, limit);
 	for (let index = 0; index < shown.length; index++) {
