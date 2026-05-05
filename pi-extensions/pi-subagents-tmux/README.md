@@ -88,9 +88,15 @@ Arguments support autocomplete, including known agent names for `show`, `start`,
 - For `pane: true` agents, `Ctrl+P` starts/reuses a pane, `Ctrl+O` attaches, and `Ctrl+X` stops it.
 - `Esc` clears search or closes.
 
-Status legend: `●` live pane, `○` pane-ready/startable, `×` stale pane, `·` one-shot.
+Agent status legend (Nerd Font glyphs): `` live pane, `` pane-ready/startable, `` stale pane, `·` background. Background-mode subagents (no `pane: true`) display as `bg` in user-facing labels; the internal kind is still `oneshot`.
+
+Dashboard row status: `` queued, `` working, `` waiting (idle pane, ready for next task), `` done (background only), `` failed / blocked. Live panes that finish a task transition to `waiting`, not `done`, since the pane stays alive for the next delegation.
 
 Non-interactive mode emits inline list/show output. Management commands remain available.
+
+## Dashboard widget
+
+The inline subagents widget (default toggle `Alt+A`, popup `Alt+Shift+A`) shows live state for every spawned agent. Each row carries the agent name, its kind (`pane` or `bg`), and live usage stats refreshed from the transcript jsonl every poll cycle: ` N` (turns), `↑in ↓out` (tokens), and `$cost`. Compact mode aggregates totals across all agents on the trailing line. Expanded mode adds a `Total · ...` line at the bottom. Rows sort by start time so the order is stable while live updates patch usage in place.
 
 ## Persistent pane agents
 
