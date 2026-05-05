@@ -52,13 +52,14 @@ const TRACE_VIEWER_MAX_HEIGHT = "88%";
 // instead of unicode geometric/emoji shapes so rendering is consistent
 // regardless of font fallback behavior.
 const ICONS = {
-	check: "\uf00c",        // nf-fa-check
-	times: "\uf00d",        // nf-fa-times
+	check: "\uf00c",        // nf-fa-check (completed / done)
+	times: "\uf00d",        // nf-fa-times (failed / blocked)
 	circleFilled: "\uf111", // nf-fa-circle
 	circleOpen: "\uf10c",   // nf-fa-circle_o
 	clock: "\uf017",        // nf-fa-clock_o (queued / waiting)
-	hourglass: "\uf252",    // nf-fa-hourglass_half (running)
-	warning: "\uf071",      // nf-fa-exclamation_triangle (blocked)
+	cog: "\uf013",          // nf-fa-cog (working / running)
+	hourglass: "\uf252",    // nf-fa-hourglass_half (legacy / unused)
+	warning: "\uf071",      // nf-fa-exclamation_triangle (general warning)
 	dotSmall: "\uf444",     // nf-fa-circle (smaller filled circle)
 } as const;
 
@@ -1838,8 +1839,8 @@ function dashboardStatusFor(rawStatus: PaneTaskStatus | "running" | "waiting", k
 function dashboardStatusIcon(status: SubagentDashboardItem["status"], theme: Theme): string {
 	if (status === "completed") return theme.fg("success", ICONS.check);
 	if (status === "failed") return theme.fg("error", ICONS.times);
-	if (status === "blocked") return theme.fg("warning", ICONS.warning);
-	if (status === "running") return theme.fg("warning", ICONS.hourglass);
+	if (status === "blocked") return theme.fg("error", ICONS.times);
+	if (status === "running") return theme.fg("warning", ICONS.cog);
 	if (status === "waiting") return theme.fg("warning", ICONS.clock);
 	if (status === "queued") return theme.fg("warning", ICONS.clock);
 	return theme.fg("accent", ICONS.circleFilled);
@@ -2847,7 +2848,7 @@ const CompleteSubagentParams = Type.Object({
 
 function paneCompletionIcon(status: PaneTaskStatus, theme: Theme): string {
 	if (status === "completed") return theme.fg("success", ICONS.check);
-	if (status === "blocked") return theme.fg("warning", ICONS.warning);
+	if (status === "blocked") return theme.fg("error", ICONS.times);
 	if (status === "failed") return theme.fg("error", ICONS.times);
 	if (status === "queued") return theme.fg("warning", ICONS.clock);
 	return theme.fg("muted", ICONS.dotSmall);
@@ -3538,7 +3539,7 @@ export default function (pi: ExtensionAPI) {
 		const icon = details?.status === "failed"
 			? theme.fg("error", ICONS.times)
 			: details?.status === "blocked"
-				? theme.fg("warning", ICONS.warning)
+				? theme.fg("error", ICONS.times)
 				: theme.fg("success", ICONS.check);
 		const tail = statusWord === "complete" ? " · now waiting" : "";
 		const headline = `${icon} ${theme.fg("toolTitle", theme.bold(`${agentLabel} ${statusWord}`))}${theme.fg("muted", tail)}`;
