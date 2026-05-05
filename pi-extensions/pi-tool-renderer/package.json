@@ -101,7 +101,7 @@
         {
           "key": "compactUserMessages",
           "label": "Compact user messages",
-          "description": "Remove top/bottom padding from user message cards and render a border with the configured token instead of a filled background. Disable to restore Pi defaults.",
+          "description": "Remove top/bottom padding from user message cards and render an ANSI green border with a red π marker near the top-left instead of a filled background. Disable to restore Pi defaults.",
           "type": "boolean",
           "default": true,
           "category": "Messages",
@@ -117,23 +117,7 @@
           "apply": "reload",
           "requiresReload": true
         },
-        {
-          "key": "userMessageBackground",
-          "label": "User message border color",
-          "description": "Theme token used as the foreground color for compact user message borders. The legacy key name is kept for existing settings.",
-          "type": "enum",
-          "enumValues": [
-            "customMessageBg",
-            "selectedBg",
-            "userMessageBg",
-            "toolPendingBg",
-            "toolSuccessBg",
-            "toolErrorBg"
-          ],
-          "default": "customMessageBg",
-          "category": "Messages",
-          "apply": "live"
-        },
+
         {
           "key": "renderMutationTools",
           "label": "Render edits/writes compactly",

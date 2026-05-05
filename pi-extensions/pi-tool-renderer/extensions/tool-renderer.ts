@@ -11,7 +11,9 @@ const TOOL_EXECUTION_RENDERER_PATCH_SYMBOL = Symbol.for("vstack.pi-tool-renderer
 const TOOL_CHROME_PATCH_SYMBOL = Symbol.for("vstack.pi-tool-renderer.tool-chrome-patch");
 const COMPACTION_SUMMARY_RENDERER_PATCH_SYMBOL = Symbol.for("vstack.pi-tool-renderer.compaction-summary-renderer-patch");
 
-const USER_MESSAGE_BORDER_TOKENS = new Set(["selectedBg", "userMessageBg", "customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg"]);
+const ANSI_GREEN = "\x1b[32m";
+const ANSI_RED = "\x1b[31m";
+const ANSI_FG_RESET = "\x1b[39m";
 
 type VstackConfig = Record<string, unknown>;
 
@@ -74,30 +76,53 @@ function settingEnum<T extends string>(key: string, allowed: readonly T[], fallb
 	return typeof value === "string" && (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
 }
 
-function userMessageBorderToken(cwd?: string): string {
-	const token = settingString("userMessageBackground", "customMessageBg", cwd);
-	return USER_MESSAGE_BORDER_TOKENS.has(token) ? token : "customMessageBg";
+function ansiRed(text: string): string {
+	return `${ANSI_RED}${text}${ANSI_FG_RESET}`;
 }
 
-function userMessageBorder(theme: any, token: string, text: string): string {
+function ansiGreen(text: string): string {
+	return `${ANSI_GREEN}${text}${ANSI_FG_RESET}`;
+}
+
+function fgParts(theme: any, token: string): { open: string; close: string } {
+	const marker = "\uE000";
 	try {
-		return theme.fg(token as any, text);
+		const styled = theme.fg(token, marker);
+		const index = styled.indexOf(marker);
+		if (index < 0) return { open: "", close: "" };
+		return { open: styled.slice(0, index), close: styled.slice(index + marker.length) };
 	} catch {
-		return theme.fg("borderAccent", text);
+		return { open: "", close: "" };
 	}
 }
 
-function renderUserMessageBorder(lines: string[], width: number, theme: any, token: string): string[] {
+function applyBaseTextFg(line: string, theme: any): string {
+	let normalized = line;
+	for (const token of ["userMessageText", "text"]) {
+		const { open } = fgParts(theme, token);
+		if (open) normalized = normalized.split(open).join(ANSI_FG_RESET);
+	}
+	return `${ANSI_FG_RESET}${normalized.replace(/\x1b\[(?:0|39)m/g, (reset) => `${reset}${ANSI_FG_RESET}`)}${ANSI_FG_RESET}`;
+}
+
+function renderUserMessageBorder(lines: string[], width: number, theme: any): string[] {
 	if (lines.length === 0 || width < 4) return lines;
 	const innerWidth = Math.max(1, width - 2);
-	const border = (text: string) => userMessageBorder(theme, token, text);
+	const border = (text: string) => ansiGreen(text);
+	const marker = (text: string) => ansiRed(text);
+	const topBorder = () => {
+		if (innerWidth < 5) return border("━".repeat(innerWidth));
+		const left = "━━ ";
+		const right = ` ${"━".repeat(Math.max(0, innerWidth - visibleWidth(left) - 2))}`;
+		return `${border(left)}${marker("π")}${border(right)}`;
+	};
 	const fitLine = (line: string) => {
 		const clipped = truncateToWidth(line, innerWidth, "");
-		return clipped + " ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)));
+		return applyBaseTextFg(clipped, theme) + " ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)));
 	};
 
 	return [
-		`${border("┏")}${border("━".repeat(innerWidth))}${border("┓")}`,
+		`${border("┏")}${topBorder()}${border("┓")}`,
 		...lines.map((line) => `${border("┃")}${fitLine(line)}${border("┃")}`),
 		`${border("┗")}${border("━".repeat(innerWidth))}${border("┛")}`,
 	];
@@ -206,8 +231,7 @@ function installUserMessageRenderer(pi: ExtensionAPI, UserMessageComponent: any)
 				const cwd = ctx.cwd ?? process.cwd();
 				const compact = settingBoolean("compactUserMessages", true, cwd);
 				const paddingY = compact ? 0 : 1;
-				const borderToken = compact ? userMessageBorderToken(cwd) : "userMessageBg";
-				const boxState = compact ? `${paddingY}:border:${borderToken}` : `${paddingY}:background:${borderToken}`;
+				const boxState = compact ? `${paddingY}:border:ansi-green:text:pi-red:left` : `${paddingY}:background:userMessageBg`;
 
 				if (box[USER_MESSAGE_BOX_STATE_SYMBOL] !== boxState) {
 					box.paddingY = paddingY;
@@ -218,7 +242,7 @@ function installUserMessageRenderer(pi: ExtensionAPI, UserMessageComponent: any)
 							const theme = state?.activeCtx?.ui?.theme;
 							if (!theme?.bg) return content;
 							try {
-								return theme.bg(borderToken as any, content);
+								return theme.bg("userMessageBg", content);
 							} catch {
 								return theme.bg("userMessageBg", content);
 							}
@@ -229,9 +253,9 @@ function installUserMessageRenderer(pi: ExtensionAPI, UserMessageComponent: any)
 				}
 
 				if (compact && width >= 4) {
-					const theme = ctx.ui?.theme;
+					const theme = ctx.ui?.theme ?? FALLBACK_THEME;
 					const lines = state!.originalRender.call(this, Math.max(1, width - 2));
-					return theme?.fg ? renderUserMessageBorder(lines, width, theme, borderToken) : lines;
+					return renderUserMessageBorder(lines, width, theme);
 				}
 			}
 
