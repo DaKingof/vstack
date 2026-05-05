@@ -1,13 +1,156 @@
 use crate::agent;
+use crate::agent::Agent;
 use crate::config::{self, InstallMethod, LockFile};
 use crate::harness::Harness;
 use crate::hook;
+use crate::hook::Hook;
 use crate::installer;
+use crate::pi_extension::PiExtension;
 use crate::skill;
+use crate::skill::Skill;
 use crate::tui;
 use anyhow::Context;
 use anyhow::Result;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+#[allow(clippy::too_many_arguments)]
+fn print_install_summary(
+    global: bool,
+    scope: &str,
+    method: InstallMethod,
+    resolved_source: &ResolvedSource,
+    harness_names: &[&str],
+    harnesses: &[Harness],
+    agents: &[Agent],
+    skills: &[Skill],
+    hooks: &[Hook],
+    pi_extensions: &[PiExtension],
+    previously_installed: &HashSet<String>,
+    skipped_harnesses: &[String],
+) {
+    let bar = "─".repeat(60);
+    eprintln!("\n{bar}");
+    if global {
+        eprintln!(
+            "⚠  GLOBAL install — affects every project on this machine"
+        );
+        eprintln!("{bar}");
+    } else {
+        eprintln!("vstack add");
+        eprintln!("{bar}");
+    }
+    eprintln!("Source:   {}", resolved_source.label);
+    let scope_target = if global {
+        config::display_path(&config::global_state_dir())
+    } else {
+        config::display_path(&config::project_root())
+    };
+    eprintln!("Scope:    {} ({})", scope.to_uppercase(), scope_target);
+    eprintln!("Method:   {method}");
+    eprintln!("Harness:  {}", harness_names.join(", "));
+    if !skipped_harnesses.is_empty() {
+        eprintln!("Skipped:  {}", skipped_harnesses.join(", "));
+    }
+
+    let total = agents.len() + skills.len() + hooks.len() + pi_extensions.len();
+    let updated_count = agents
+        .iter()
+        .filter(|a| previously_installed.contains(&a.name))
+        .count()
+        + skills
+            .iter()
+            .filter(|s| previously_installed.contains(&s.name))
+            .count()
+        + hooks
+            .iter()
+            .filter(|h| previously_installed.contains(&h.name))
+            .count()
+        + pi_extensions
+            .iter()
+            .filter(|e| previously_installed.contains(&e.name))
+            .count();
+    let new_count = total.saturating_sub(updated_count);
+    eprintln!("\nInstalled {total} item(s) — {new_count} new, {updated_count} updated:");
+
+    let primary_harness = harnesses.first().copied();
+    let item_status = |name: &str| -> &'static str {
+        if previously_installed.contains(name) {
+            "updated"
+        } else {
+            "new"
+        }
+    };
+
+    if !agents.is_empty() {
+        eprintln!("  Agents:");
+        for a in agents {
+            let path = primary_harness
+                .map(|h| h.agents_dir(global).join(h.agent_filename(&a.name)))
+                .map(|p| config::display_path(&p))
+                .unwrap_or_default();
+            eprintln!("    {:<20}  {path}  ({})", a.name, item_status(&a.name));
+        }
+    }
+    if !skills.is_empty() {
+        eprintln!("  Skills:");
+        let canonical_dir = if global {
+            config::global_state_dir().join("skills")
+        } else {
+            config::project_root().join(".agents").join("skills")
+        };
+        for s in skills {
+            let path = config::display_path(&canonical_dir.join(&s.name));
+            eprintln!("    {:<20}  {path}  ({})", s.name, item_status(&s.name));
+        }
+    }
+    if !hooks.is_empty() {
+        eprintln!("  Hooks:");
+        for h in hooks {
+            let matcher = h.matcher.as_deref().unwrap_or("*");
+            eprintln!(
+                "    {:<20}  {}:{}  ({})",
+                h.name,
+                h.event,
+                matcher,
+                item_status(&h.name)
+            );
+        }
+    }
+    if !pi_extensions.is_empty() {
+        let pkg_dir = if global {
+            crate::config::user_home_dir()
+                .join(".pi")
+                .join("agent")
+                .join("packages")
+        } else {
+            config::project_root().join(".pi").join("packages")
+        };
+        eprintln!("  Pi extensions:");
+        for e in pi_extensions {
+            let path = config::display_path(&pkg_dir.join(&e.name));
+            eprintln!("    {:<20}  {path}  ({})", e.name, item_status(&e.name));
+        }
+    }
+
+    let revert_names: Vec<String> = agents
+        .iter()
+        .map(|a| a.name.clone())
+        .chain(skills.iter().map(|s| s.name.clone()))
+        .chain(hooks.iter().map(|h| h.name.clone()))
+        .chain(pi_extensions.iter().map(|e| e.name.clone()))
+        .filter(|n| !previously_installed.contains(n))
+        .collect();
+    if !revert_names.is_empty() {
+        let scope_flag = if global { " --global" } else { "" };
+        eprintln!(
+            "\nRevert with:\n  vstack remove {}{}",
+            revert_names.join(" "),
+            scope_flag,
+        );
+    }
+    eprintln!("{bar}\n");
+}
 
 struct ResolvedSource {
     source: String,
@@ -218,10 +361,41 @@ pub fn run(
     agent_filter: Option<Vec<String>>,
     skill_filter: Option<Vec<String>>,
     hook_filter: Option<Vec<String>>,
+    pi_extension_filter: Option<Vec<String>>,
     copy: bool,
     yes: bool,
     all: bool,
 ) -> Result<()> {
+    // Non-interactive global guard: `--global -y` (or `--global --harness ...
+    // -y`) without an item filter would install the entire source catalog
+    // into ~/.config/vstack and every detected harness's user dir. That has
+    // bitten us repeatedly when an agent runs `--global --harness pi -y` to
+    // update one Pi package and accidentally installs every agent, skill,
+    // and hook globally. Force the caller to be explicit.
+    let non_interactive = yes || all || harness_filter.is_some();
+    let has_item_filter = agent_filter.is_some()
+        || skill_filter.is_some()
+        || hook_filter.is_some()
+        || pi_extension_filter.is_some();
+    if global && non_interactive && !all && !has_item_filter {
+        eprintln!(
+"
+Refusing --global without an item filter or --all.
+
+Unfiltered --global installs every agent, skill, hook, and Pi package
+in the source globally. Pick one:
+
+  vstack add --global --pi-extension <name> --harness pi -y
+  vstack add --global --skill <name> -y
+  vstack add --global --agent <name> -y
+  vstack add --global --all -y           # whole catalog, on purpose
+
+Drop --global to install at project scope (default).
+"
+        );
+        anyhow::bail!("global install requires --all or an explicit item filter");
+    }
+
     let mut registry =
         config::SourceRegistry::load(&config::source_registry_path()).unwrap_or_default();
     let mut current_source = source.clone();
@@ -255,20 +429,21 @@ pub fn run(
         let all_agents = agent::discover_agents(&agents_dir)?;
         let all_skills = skill::discover_skills(&skills_dir)?;
         let all_hooks = hook::discover_hooks(&hooks_dir)?;
-        let pi_extensions =
+        let all_pi_extensions =
             crate::pi_extension::discover_pi_extensions(&pi_ext_dir).unwrap_or_default();
         let dep_graph = skill::build_dependency_graph(&all_skills);
 
-        // Filter helpers: each kind narrows independently. Setting
-        // --agent A doesn't suppress skills/hooks (and vice versa) —
-        // a kind without a filter still discovers everything. To
-        // install ONLY one kind, combine its filter with the others
-        // set to a non-matching name (or use --skill '*' as today's
-        // explicit "all skills" sentinel and elide the others).
-        let agents = if let Some(ref filter) = agent_filter {
-            if filter.iter().any(|f| f == "*") {
-                all_agents
-            } else {
+        // Filter semantics: passing any item filter restricts the install to
+        // only the kinds named; unfiltered kinds get nothing. Use `--all` for
+        // "everything," or `--skill '*'` as the per-kind "all of this kind"
+        // sentinel when combining with narrower filters.
+        let any_item_filter = agent_filter.is_some()
+            || skill_filter.is_some()
+            || hook_filter.is_some()
+            || pi_extension_filter.is_some();
+        let agents = match agent_filter.as_deref() {
+            Some(filter) if filter.iter().any(|f| f == "*") => all_agents,
+            Some(filter) => {
                 let wanted: std::collections::HashSet<&str> =
                     filter.iter().map(String::as_str).collect();
                 all_agents
@@ -276,13 +451,12 @@ pub fn run(
                     .filter(|a| wanted.contains(a.name.as_str()))
                     .collect()
             }
-        } else {
-            all_agents
+            None if any_item_filter => Vec::new(),
+            None => all_agents,
         };
-        let skills = if let Some(ref filter) = skill_filter {
-            if filter.iter().any(|f| f == "*") {
-                all_skills
-            } else {
+        let skills = match skill_filter.as_deref() {
+            Some(filter) if filter.iter().any(|f| f == "*") => all_skills,
+            Some(filter) => {
                 let (expanded, auto_added) = skill::expand_dependencies(filter, &dep_graph);
                 if !auto_added.is_empty() {
                     eprintln!("Auto-added dependencies: {}", auto_added.join(", "));
@@ -292,13 +466,12 @@ pub fn run(
                     .filter(|s| expanded.contains(&s.name))
                     .collect()
             }
-        } else {
-            all_skills
+            None if any_item_filter => Vec::new(),
+            None => all_skills,
         };
-        let hooks = if let Some(ref filter) = hook_filter {
-            if filter.iter().any(|f| f == "*") {
-                all_hooks
-            } else {
+        let hooks = match hook_filter.as_deref() {
+            Some(filter) if filter.iter().any(|f| f == "*") => all_hooks,
+            Some(filter) => {
                 let wanted: std::collections::HashSet<&str> =
                     filter.iter().map(String::as_str).collect();
                 all_hooks
@@ -306,8 +479,21 @@ pub fn run(
                     .filter(|h| wanted.contains(h.name.as_str()))
                     .collect()
             }
-        } else {
-            all_hooks
+            None if any_item_filter => Vec::new(),
+            None => all_hooks,
+        };
+        let pi_extensions = match pi_extension_filter.as_deref() {
+            Some(filter) if filter.iter().any(|f| f == "*") => all_pi_extensions,
+            Some(filter) => {
+                let wanted: std::collections::HashSet<&str> =
+                    filter.iter().map(String::as_str).collect();
+                all_pi_extensions
+                    .into_iter()
+                    .filter(|e| wanted.contains(e.name.as_str()))
+                    .collect()
+            }
+            None if any_item_filter => Vec::new(),
+            None => all_pi_extensions,
         };
 
         let total = agents.len() + skills.len() + hooks.len() + pi_extensions.len();
@@ -790,26 +976,30 @@ pub fn run(
                 agent_filter,
                 skill_filter,
                 hook_filter,
+                pi_extension_filter,
                 copy,
                 yes,
                 all,
             );
         }
     } else {
-        let counts: Vec<String> = [
-            (!summary.agents.is_empty()).then(|| format!("{} agents", summary.agents.len())),
-            (!summary.skills.is_empty()).then(|| format!("{} skills", summary.skills.len())),
-            (!summary.hooks.is_empty()).then(|| format!("{} hooks", summary.hooks.len())),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        eprintln!(
-            "\n  Installed {} · {} · {} scope\n  → {}",
-            counts.join(" · "),
-            method,
+        print_install_summary(
+            global,
             scope,
-            harness_names.join(", ")
+            method,
+            &resolved_source,
+            &harness_names,
+            &harnesses,
+            &selected_agents,
+            &selected_skills,
+            &selected_hooks,
+            if pi_in_harnesses {
+                &selected_pi_extensions
+            } else {
+                &[]
+            },
+            &previously_installed,
+            &skipped_harnesses,
         );
         if !global && !selected_agents.is_empty() {
             eprintln!(

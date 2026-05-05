@@ -12,7 +12,13 @@ Via vstack:
 vstack add vanillagreencom/vstack
 ```
 
-Select Pi as the target harness and choose **pi-session-bridge** from the **Pi Extensions** tab. Non-interactive Pi installs can use `vstack add vanillagreencom/vstack --harness pi -y` to install the catalog's Pi agents/skills/hooks and Pi packages. vstack registers the package in Pi's `settings.json`.
+Select Pi as the target harness and choose **pi-session-bridge** from the **Pi Extensions** tab. Non-interactive single-package install:
+
+```bash
+vstack add vanillagreencom/vstack --pi-extension pi-session-bridge --harness pi -y
+```
+
+Item filters (`--pi-extension`/`--skill`/`--agent`/`--hook`) restrict the install to only the kinds named. vstack registers the package in Pi's `settings.json`.
 
 Manual install:
 

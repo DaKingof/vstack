@@ -768,7 +768,7 @@ function buildInventory(pi: ExtensionAPI, ctx: ExtensionContext): Inventory {
 				item.updateSource = "vstack";
 				item.updateAvailable = isNewer(latest, installedVersion);
 				const scopeFlag = item.scope === "user" ? " --global" : "";
-				item.updateCommand = `vstack add ${sourceEntry.sourceRepo}${scopeFlag} --harness pi -y`;
+				item.updateCommand = `vstack add ${sourceEntry.sourceRepo}${scopeFlag} --pi-extension ${item.packageName} --harness pi -y`;
 				continue;
 			}
 		}

@@ -51,6 +51,18 @@ cargo install --git https://github.com/vanillagreencom/vstack.git vstack
 vstack add vanillagreencom/vstack
 ```
 
+### Non-interactive installs
+
+Four item filters narrow `vstack add` — `--agent`, `--skill`, `--hook`, `--pi-extension`. Passing any filter restricts the install to only the kinds you name; kinds without an explicit filter install nothing. To install across multiple kinds, list each. To install everything, pass `--all`.
+
+```bash
+vstack add vanillagreencom/vstack --pi-extension pi-web-tools --harness pi -y   # one Pi package
+vstack add vanillagreencom/vstack --global --skill decider -y                    # one skill, global
+vstack add vanillagreencom/vstack --global --all -y                              # everything, global
+```
+
+Every run prints a summary with scope (`PROJECT (...)` vs `GLOBAL (...)`), method, and each item's destination path — read it before claiming success. `--global` without an item filter or `--all` is refused, since it would otherwise install the entire catalog into `~/.config/vstack`, `~/.claude`, `~/.pi`.
+
 ## Project-Local Config
 
 Two config files live at the project root:

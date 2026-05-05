@@ -18,4 +18,6 @@ For any `pi-extensions/**` or Pi package behavior change:
    - Report commit hash and refresh result.
 4. Do not say done/fixed/committed/ready to test until commit + refresh are complete. If skipped, say so and why.
 
-New Pi package: install only that Pi package globally with `vstack` (not agents/skills/hooks). Worktree/feature branch dev: test via local project Pi settings for that checkout; do not add vstack repo sources pointing at temp/worktree paths.
+Worktree/feature branch dev: test via local project Pi settings for that checkout; do not add vstack repo sources pointing at temp/worktree paths.
+
+General `vstack add` scope rules apply (see [AGENTS.md](../AGENTS.md#rules)).

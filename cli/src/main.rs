@@ -62,6 +62,10 @@ struct Cli {
     #[arg(long, value_delimiter = ',')]
     hook: Option<Vec<String>>,
 
+    /// Install specific Pi extensions by name (comma-separated)
+    #[arg(long, value_delimiter = ',', visible_alias = "pi-package")]
+    pi_extension: Option<Vec<String>>,
+
     /// Copy files instead of symlinking
     #[arg(long)]
     copy: bool,
@@ -94,6 +98,9 @@ enum Commands {
         /// Install specific hooks by name (comma-separated)
         #[arg(long, value_delimiter = ',')]
         hook: Option<Vec<String>>,
+        /// Install specific Pi extensions by name (comma-separated)
+        #[arg(long, value_delimiter = ',', visible_alias = "pi-package")]
+        pi_extension: Option<Vec<String>>,
         #[arg(long)]
         copy: bool,
         #[arg(short, long)]
@@ -162,10 +169,22 @@ fn main() -> Result<()> {
             agent,
             skill,
             hook,
+            pi_extension,
             copy,
             yes,
             all,
-        }) => commands::add::run(source, global, harness, agent, skill, hook, copy, yes, all),
+        }) => commands::add::run(
+            source,
+            global,
+            harness,
+            agent,
+            skill,
+            hook,
+            pi_extension,
+            copy,
+            yes,
+            all,
+        ),
         Some(Commands::Remove { names, global }) => commands::remove::run(&names, global),
         Some(Commands::List { global, harness }) => commands::list::run(global, harness.as_deref()),
         Some(Commands::Check) => commands::check::run(),
@@ -181,6 +200,7 @@ fn main() -> Result<()> {
             cli.agent,
             cli.skill,
             cli.hook,
+            cli.pi_extension,
             cli.copy,
             cli.yes,
             cli.all,
