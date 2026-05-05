@@ -4631,18 +4631,14 @@ export default function (pi: ExtensionAPI) {
 					theme.fg("accent", "● ") +
 					theme.fg("toolTitle", theme.bold(headerLabel)) +
 					hint;
-				const rowIcon = (r: SingleResult) => {
-					if (r.exitCode === -1) return theme.fg("warning", `${ICONS.hourglass} `);
-					if (r.exitCode > 0) return theme.fg("error", `${ICONS.times} `);
-					const queued = Boolean(r.taskId && r.paneId);
-					return queued ? theme.fg("warning", `${ICONS.clock} `) : theme.fg("success", `${ICONS.check} `);
-				};
 				const nameWidth = Math.min(28, Math.max(0, ...details.results.map((r) => visibleWidth(r.agent))));
+				const rowTaskPreview = (r: SingleResult, maxChars: number) =>
+					r.task ? theme.fg("dim", ` · ${oneLinePreview(r.task, maxChars)}`) : "";
 				const treeText = details.results
 					.map((r, index) => {
 						const prefix = index === details.results.length - 1 ? "└" : "├";
 						const name = padAnsi(theme.fg("accent", theme.bold(r.agent)), nameWidth);
-						return `${subagentBranch(theme, prefix, cwd)}${rowIcon(r)}${name}  ${finalOutputPreview(r, 100)}${truncationBadge(r)}`;
+						return `${subagentBranch(theme, prefix, cwd)}${name}${rowTaskPreview(r, 100)}${truncationBadge(r)}`;
 					})
 					.join("\n");
 
@@ -4658,7 +4654,7 @@ export default function (pi: ExtensionAPI) {
 						const finalOutput = getFinalOutput(r.messages).trim();
 
 						lines.push(
-							`${subagentBranch(theme, branch, cwd)}${rowIcon(r)}${theme.fg("accent", theme.bold(r.agent))}${task ? theme.fg("dim", ` · ${task}`) : ""}${truncationBadge(r)}`,
+							`${subagentBranch(theme, branch, cwd)}${theme.fg("accent", theme.bold(r.agent))}${task ? theme.fg("dim", ` · ${task}`) : ""}${truncationBadge(r)}`,
 						);
 						lines.push(`${stem}${theme.fg("muted", "Tools")}`);
 						if (toolCalls.length > 0) {
