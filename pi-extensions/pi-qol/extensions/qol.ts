@@ -410,7 +410,7 @@ function permissionGatePrompt(matched: string, command: string, cwd?: string): s
 	const matchedLabel = truncateToWidth(sanitizePermissionGatePreview(matched).replace(/\n+/g, " ").trim() || "configured pattern", DEFAULT_PERMISSION_GATE_PREVIEW_LINE_WIDTH, "…");
 	const commandStats = `${formatCount(preview.totalLines, "line")}, ${formatCount(preview.totalChars, "char")}`;
 	return [
-		`⚠️ Permission gate matched: ${matchedLabel}`,
+		`Permission gate matched: ${matchedLabel}`,
 		"",
 		`Bash command (${commandStats}${preview.truncated ? "; compact preview" : ""}):`,
 		"```sh",
@@ -1132,8 +1132,7 @@ function statuslineContextInfo(ctx: ExtensionContext): { label: string; percent:
 
 function gitBadge(state: GitState, showDirtyMarker: boolean): string {
 	if (!state.branch) return "";
-	const icon = state.inLinkedWorktree || state.branch !== "main" ? `🌳 ${state.branch}` : "🦀";
-	return ` (${icon}${state.dirty && showDirtyMarker ? "*" : ""})`;
+	return ` (${state.branch}${state.dirty && showDirtyMarker ? "*" : ""})`;
 }
 
 function makeFallbackGitState(cwd: string): GitState {
@@ -2178,11 +2177,11 @@ type QolSessionAction = "resume" | "copy" | "summarize" | "newSession" | "back";
 
 const QOL_SESSION_ACTIONS: QolSessionAction[] = ["resume", "copy", "summarize", "newSession", "back"];
 const QOL_SESSION_ACTION_LABELS: Record<QolSessionAction, string> = {
-	resume: "↩ Resume",
-	copy: "✎ Copy Prompt",
-	summarize: "📋 Inject Summary",
-	newSession: "✦ New + Context",
-	back: "← Back",
+	resume: "Resume Session From Here",
+	copy: "Copy Prompt",
+	summarize: "Inject Context",
+	newSession: "New Session + Context",
+	back: "Back",
 };
 
 interface QolSessionSearchSession {
@@ -2219,7 +2218,9 @@ interface QolSessionSearchState {
 }
 
 interface QolSessionUserMessage {
+	entryId?: string;
 	index: number;
+	parentId?: string | null;
 	text: string;
 	timestamp?: number;
 }
@@ -2339,9 +2340,9 @@ async function refreshQolSessionSearchCache(ctx: ExtensionContext, options?: { f
 	if (!options?.force && fresh) return qolSessionSearchCache;
 	if (qolSessionSearchLoading) return qolSessionSearchLoading;
 
-	if (!options?.quiet && ctx.hasUI) ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, "🔍 Loading sessions...");
+	if (!options?.quiet && ctx.hasUI) ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, "Loading sessions...");
 	qolSessionSearchLoading = loadQolSessionSearchSessions(ctx, (loaded, total) => {
-		if (!options?.quiet && ctx.hasUI) ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, `🔍 Loading sessions ${loaded}/${total}`);
+		if (!options?.quiet && ctx.hasUI) ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, `Loading sessions ${loaded}/${total}`);
 	}).then((sessions) => {
 		qolSessionSearchCache = sessions;
 		qolSessionSearchLoadedAt = Date.now();
@@ -2808,7 +2809,9 @@ function sessionUserMessages(sessionPath: string): QolSessionUserMessage[] {
 			const text = oneLine(messageContentText(message.content));
 			if (!text) continue;
 			messages.push({
+				entryId: typeof entry.id === "string" ? entry.id : undefined,
 				index: messages.length + 1,
+				parentId: typeof entry.parentId === "string" || entry.parentId === null ? entry.parentId : undefined,
 				text,
 				timestamp: typeof message.timestamp === "number" ? message.timestamp : undefined,
 			});
@@ -3051,7 +3054,7 @@ function boxParts(width: number, theme: Theme) {
 	};
 	const selectedRow = (content = "") => row(content, true);
 	const empty = () => `${border("┃")}${" ".repeat(frameInner)}${border("┃")}`;
-	const divider = () => row(theme.fg("muted", "━".repeat(inner)));
+	const divider = () => row(theme.fg("borderMuted", "━".repeat(inner)));
 	const top = (label = "", right = "") => {
 		if (!label) return border(`┏${"━".repeat(frameInner)}┓`);
 		const rightPlain = right ? ` ${right} ` : "";
@@ -3148,7 +3151,7 @@ class QolSessionSearchComponent {
 	}
 
 	private selectedFocusText(message: QolSessionUserMessage): string {
-		return `Focus on user message #${message.index}: ${message.text}`;
+		return `Focus on prompt #${message.index}: ${message.text}`;
 	}
 
 	private handleSearchInput(data: string): void {
@@ -3231,6 +3234,10 @@ class QolSessionSearchComponent {
 			if (!message) return;
 			this.actionState = { actionIndex: 0, message, result: state.result };
 			this.screen = "actions";
+			return;
+		}
+		if (data.toLowerCase() === "r") {
+			this.done({ result: state.result, type: "resume" });
 			return;
 		}
 		if (matchesKey(data, "up")) {
@@ -3360,8 +3367,8 @@ class QolSessionSearchComponent {
 			const gap = Math.max(1, inner - visibleWidth(clippedLeft) - visibleWidth(right));
 			return `${clippedLeft}${" ".repeat(gap)}${right}`;
 		};
-		const cursor = accent("│");
-		const queryDisplay = `${state.query.slice(0, state.cursor)}${cursor}${state.query.slice(state.cursor)}`;
+		const cursorChar = state.query[state.cursor] ?? " ";
+		const queryDisplay = `${state.query.slice(0, state.cursor)}${this.theme.inverse(cursorChar)}${state.query.slice(state.cursor + (state.cursor < state.query.length ? 1 : 0))}`;
 		lines.push(filledRow(` > ${queryDisplay}`));
 		lines.push(row(dim(`${state.total} sessions · re:<pattern> regex · "phrase" exact`)));
 		lines.push(empty(), divider(), empty());
@@ -3372,7 +3379,6 @@ class QolSessionSearchComponent {
 			const start = Math.max(0, Math.min(state.selected - Math.floor(maxVisible / 2), state.results.length - maxVisible));
 			const end = Math.min(start + maxVisible, state.results.length);
 			const rowBudget = Math.max(10, inner);
-			const itemPad = " ";
 			for (let i = start; i < end; i++) {
 				const result = state.results[i]!;
 				const selected = i === state.selected;
@@ -3381,23 +3387,23 @@ class QolSessionSearchComponent {
 				const right = selected ? this.theme.fg("text", rightPlain) : dim(rightPlain);
 				const titleBudget = Math.max(12, rowBudget - visibleWidth(right) - 1);
 				const titleText = truncateToWidth(title, titleBudget, "…");
-				const left = `${itemPad}${selected ? this.theme.bold(accent(titleText)) : this.theme.bold(titleText)}`;
+				const left = selected ? this.theme.bold(accent(titleText)) : this.theme.bold(titleText);
 				const titleRow = pair(left, right);
 				lines.push(selected ? selectedRow(titleRow) : row(titleRow));
 
 				const folder = shortPathForUi(result.cwd || dirname(result.path));
 				const project = sessionDisplayName(result);
-				lines.push(row(`${itemPad}${muted(truncateToWidth(`${project} · ${folder}`, inner - visibleWidth(itemPad), "…"))}`));
+				lines.push(row(muted(truncateToWidth(`${project} · ${folder}`, inner, "…"))));
 
 				const snippet = state.query.trim() ? (result.snippets[0] || lastUserMessageSnippet(result)) : lastUserMessageSnippet(result);
 				const label = state.query.trim() ? "match" : "last";
-				const snippetPrefix = `${itemPad}${dim(`${label}:`)} `;
+				const snippetPrefix = `${dim(`${label}:`)} `;
 				lines.push(row(`${snippetPrefix}${truncateToWidth(styleSessionSnippet(snippet, state.query, this.theme), inner - visibleWidth(snippetPrefix), "…")}`));
-				if (i < end - 1) lines.push(row(`${itemPad}${dim("─".repeat(Math.max(8, inner - visibleWidth(itemPad))))}`));
+				if (i < end - 1) lines.push(row(this.theme.fg("borderMuted", "─".repeat(Math.max(8, inner)))));
 			}
 			if (state.results.length > maxVisible) lines.push(empty(), row(dim(`${state.selected + 1}/${state.results.length} ${state.query.trim() ? "matches" : "recent sessions"}`)));
 		}
-		lines.push(divider());
+		lines.push(divider(), empty());
 		lines.push(row(`${ansiYellow("↑↓")} ${dim("sessions")}  ${ansiYellow("enter")} ${dim("prompts")}  ${ansiYellow("ctrl+u")} ${dim("clear")}  ${ansiYellow("esc")} ${dim("close")}`));
 		lines.push(bottom());
 		return lines;
@@ -3409,19 +3415,18 @@ class QolSessionSearchComponent {
 		const dim = (s: string) => this.theme.fg("dim", s);
 		const muted = (s: string) => this.theme.fg("muted", s);
 		const result = state.result;
-		const lines: string[] = [top("Your Prompts", `${state.selected + 1}/${state.messages.length}`), empty()];
+		const lines: string[] = [top("Session Prompts", `${state.selected + 1}/${state.messages.length}`), empty()];
 		const pair = (left: string, right: string) => {
 			const leftWidth = Math.max(1, inner - visibleWidth(right) - 1);
 			const clippedLeft = truncateToWidth(left, leftWidth, "…");
 			const gap = Math.max(1, inner - visibleWidth(clippedLeft) - visibleWidth(right));
 			return `${clippedLeft}${" ".repeat(gap)}${right}`;
 		};
-		const itemPad = " ";
 		const right = dim(`${promptCountLabel(state.messages.length)} · ${formatSessionSearchDate(result.modified)}`);
-		const title = truncateToWidth(sessionResumeTitle(result), Math.max(12, inner - visibleWidth(right) - visibleWidth(itemPad) - 1), "…");
-		lines.push(row(pair(`${itemPad}${this.theme.bold(accent(title))}`, right)));
-		lines.push(row(`${itemPad}${muted(truncateToWidth(shortPathForUi(result.cwd || result.path), inner - visibleWidth(itemPad), "…"))}`));
-		lines.push(row(`${itemPad}${dim(`${state.messages.length} user prompt${state.messages.length === 1 ? "" : "s"} · choose one for actions/focus`)}`));
+		const title = truncateToWidth(sessionResumeTitle(result), Math.max(12, inner - visibleWidth(right) - 1), "…");
+		lines.push(row(pair(this.theme.bold(accent(title)), right)));
+		lines.push(row(muted(truncateToWidth(shortPathForUi(result.cwd || result.path), inner, "…"))));
+		lines.push(row(dim(`${state.messages.length} user prompt${state.messages.length === 1 ? "" : "s"} · enter opens prompt actions · r resumes latest session state`)));
 		lines.push(empty(), divider(), empty());
 
 		const maxVisible = Math.max(6, Math.floor(settingNumber("sessionSearch.messageMaxVisible", 12, this.cwd)));
@@ -3430,16 +3435,16 @@ class QolSessionSearchComponent {
 		for (let i = start; i < end; i++) {
 			const message = state.messages[i]!;
 			const selected = i === state.selected;
-			const numberPlain = `#${message.index}`.padStart(4);
+			const numberPlain = `#${message.index}`;
 			const number = selected ? this.theme.fg("text", numberPlain) : dim(numberPlain);
-			const textWidth = Math.max(12, inner - visibleWidth(itemPad) - visibleWidth(number) - 2);
+			const textWidth = Math.max(12, inner - visibleWidth(number) - 1);
 			const text = truncateToWidth(message.text, textWidth, "…");
-			const messageRow = `${itemPad}${number} ${selected ? this.theme.bold(accent(text)) : text}`;
+			const messageRow = `${number} ${selected ? this.theme.bold(accent(text)) : text}`;
 			lines.push(selected ? selectedRow(messageRow) : row(messageRow));
 		}
 		if (state.messages.length > maxVisible) lines.push(empty(), row(dim(`${state.selected + 1}/${state.messages.length} user prompts`)));
-		lines.push(divider());
-		lines.push(row(`${ansiYellow("↑↓")} ${dim("prompts")}  ${ansiYellow("enter")} ${dim("actions")}  ${ansiYellow("esc")} ${dim("sessions")}`));
+		lines.push(divider(), empty());
+		lines.push(row(`${ansiYellow("↑↓")} ${dim("prompts")}  ${ansiYellow("enter")} ${dim("prompt actions")}  ${ansiYellow("r")} ${dim("resume session")}  ${ansiYellow("esc")} ${dim("sessions")}`));
 		lines.push(bottom());
 		return lines;
 	}
@@ -3449,48 +3454,51 @@ class QolSessionSearchComponent {
 		const accent = (s: string) => this.theme.fg("accent", s);
 		const dim = (s: string) => this.theme.fg("dim", s);
 		const muted = (s: string) => this.theme.fg("muted", s);
-		const lines: string[] = [top("Message Actions"), empty()];
-		lines.push(row(`  ${this.theme.bold(accent(sessionResumeTitle(state.result)))}  ${dim(`#${state.message.index}`)}`));
-		lines.push(row(`  ${muted(truncateToWidth(shortPathForUi(state.result.cwd || state.result.path), inner - 4, "…"))}`));
+		const lines: string[] = [top("Prompt Actions"), empty()];
+		const title = truncateToWidth(sessionResumeTitle(state.result), Math.max(12, inner - visibleWidth(`#${state.message.index}`) - 2), "…");
+		lines.push(row(`${this.theme.bold(accent(title))}  ${dim(`#${state.message.index}`)}`));
+		lines.push(row(muted(truncateToWidth(shortPathForUi(state.result.cwd || state.result.path), inner, "…"))));
 		lines.push(empty(), divider(), empty());
-		lines.push(row(dim("  Selected prompt:")));
-		const wrapped = wrapVisible(state.message.text, inner - 6, 4);
-		for (const line of wrapped) lines.push(row(`  ${line}`));
+		lines.push(row(dim("Selected prompt")));
+		const wrapped = wrapVisible(state.message.text, inner, 4);
+		for (const line of wrapped) lines.push(row(line));
 		lines.push(empty());
-		lines.push(row(dim("  Resume opens the full session. Summary actions use this prompt as focus.")));
-		lines.push(empty(), divider());
+		lines.push(row(dim("Resume Session From Here restores this prompt in the selected session.")));
+		lines.push(row(dim("Inject Context adds a summary here; New Session + Context imports it into a new session.")));
+		lines.push(empty(), divider(), empty());
 		const actions = QOL_SESSION_ACTIONS.map((action, index) => {
 			const label = QOL_SESSION_ACTION_LABELS[action];
 			return index === state.actionIndex ? this.theme.bold(accent(`[${label}]`)) : dim(`[${label}]`);
 		});
-		lines.push(row(`  ${actions.join(" ")}`));
+		for (const line of wrapVisible(actions.join(" "), inner, 2)) lines.push(row(line));
+		lines.push(empty());
 		lines.push(row(`${ansiYellow("tab")}/${ansiYellow("←→")} ${dim("cycle")}  ${ansiYellow("enter")} ${dim("choose")}  ${ansiYellow("esc")} ${dim("prompts")}`));
 		lines.push(bottom());
 		return lines;
 	}
 
 	private renderFocus(width: number, state: QolSessionFocusState): string[] {
-		const { bottom, divider, empty, inner, row, top } = boxParts(width, this.theme);
+		const { bottom, divider, empty, filledRow, inner, row, top } = boxParts(width, this.theme);
 		const accent = (s: string) => this.theme.fg("accent", s);
 		const dim = (s: string) => this.theme.fg("dim", s);
 		const muted = (s: string) => this.theme.fg("muted", s);
-		const action = state.type === "newSession" ? "New + Context" : "Inject Summary";
-		const lines: string[] = [top("Summary Focus", action), empty()];
-		lines.push(row(`  ${accent(sessionResumeTitle(state.result))}  ${dim(`→ ${action}`)}`));
-		lines.push(row(`  ${muted(truncateToWidth(`Default focus: #${state.message.index} ${state.message.text}`, inner - 4, "…"))}`));
+		const action = state.type === "newSession" ? "New Session + Context" : "Inject Context";
+		const lines: string[] = [top("Context Focus", action), empty()];
+		lines.push(row(`${accent(sessionResumeTitle(state.result))}  ${dim(`-> ${action}`)}`));
+		lines.push(row(muted(truncateToWidth(`Default focus: #${state.message.index} ${state.message.text}`, inner, "…"))));
 		lines.push(empty(), divider(), empty());
-		const cursor = accent("│");
-		const prefix = `  ${dim("✎")} `;
-		const textWidth = Math.max(10, inner - visibleWidth(prefix) - 2);
+		const prefix = "> ";
+		const textWidth = Math.max(10, inner - visibleWidth(prefix));
 		if (!state.prompt) {
-			lines.push(row(`${prefix}${cursor}${muted("optional override; Enter uses selected prompt as focus...")}`));
+			lines.push(filledRow(`${prefix}${this.theme.inverse(" ")}${muted(" optional focus override; Enter uses the selected prompt")}`));
 		} else {
-			const text = `${state.prompt.slice(0, state.cursor)}${cursor}${state.prompt.slice(state.cursor)}`;
+			const cursorChar = state.prompt[state.cursor] ?? " ";
+			const text = `${state.prompt.slice(0, state.cursor)}${this.theme.inverse(cursorChar)}${state.prompt.slice(state.cursor + (state.cursor < state.prompt.length ? 1 : 0))}`;
 			const wrapped = wrapVisible(text, textWidth, 5);
-			for (let i = 0; i < wrapped.length; i++) lines.push(row(`${i === 0 ? prefix : " ".repeat(visibleWidth(prefix))}${wrapped[i]}`));
+			for (let i = 0; i < wrapped.length; i++) lines.push(filledRow(`${i === 0 ? prefix : " ".repeat(visibleWidth(prefix))}${wrapped[i]}`));
 		}
-		lines.push(empty(), divider());
-		lines.push(row(`${ansiYellow("enter")} ${dim("summarize")}  ${ansiYellow("esc")} ${dim("actions")}`));
+		lines.push(empty(), divider(), empty());
+		lines.push(row(`${ansiYellow("enter")} ${dim(action === "Inject Context" ? "inject context" : "create session with context")}  ${ansiYellow("esc")} ${dim("actions")}`));
 		lines.push(bottom());
 		return lines;
 	}
@@ -3502,6 +3510,66 @@ function wrapVisible(text: string, width: number, maxLines: number): string[] {
 	const head = wrapped.slice(0, Math.max(0, maxLines - 1));
 	const tail = wrapped.slice(Math.max(0, maxLines - 1)).join(" ");
 	return [...head, truncateToWidth(tail, width, "…")];
+}
+
+class QolSessionSearchLoadingComponent {
+	private readonly controller = new AbortController();
+	private readonly startedAt = Date.now();
+	private frame = 0;
+	private timer: ReturnType<typeof setInterval> | undefined;
+
+	constructor(
+		private readonly tui: { requestRender(): void },
+		private readonly theme: Theme,
+		private readonly title: string,
+		private readonly message: string,
+		private readonly done: (value: null) => void,
+	) {
+		this.timer = setInterval(() => {
+			this.frame += 1;
+			this.tui.requestRender();
+		}, 180);
+		this.timer.unref?.();
+	}
+
+	get signal(): AbortSignal {
+		return this.controller.signal;
+	}
+
+	dispose(): void {
+		if (this.timer) clearInterval(this.timer);
+		this.timer = undefined;
+	}
+
+	invalidate(): void {}
+
+	handleInput(data: string): void {
+		if (!matchesKey(data, "escape") && !matchesKey(data, "ctrl+c")) return;
+		if (!this.controller.signal.aborted) this.controller.abort();
+		this.dispose();
+		this.done(null);
+	}
+
+	render(width: number): string[] {
+		const { bottom, divider, empty, row, top } = boxParts(width, this.theme);
+		const dim = (s: string) => this.theme.fg("dim", s);
+		const muted = (s: string) => this.theme.fg("muted", s);
+		const accent = (s: string) => this.theme.fg("accent", s);
+		const frames = ["|", "/", "-", "\\"];
+		const elapsed = `${Math.max(0, Math.floor((Date.now() - this.startedAt) / 1000))}s`;
+		const indicator = accent(frames[this.frame % frames.length]!);
+		return [
+			top(this.title, elapsed),
+			empty(),
+			row(`${indicator} ${muted(this.message)}`),
+			row(dim("Long sessions may take a few seconds to summarize.")),
+			empty(),
+			divider(),
+			empty(),
+			row(`${ansiYellow("esc")} ${dim("cancel")}  ${ansiYellow("ctrl+c")} ${dim("cancel")}`),
+			bottom(),
+		];
+	}
 }
 
 function trimSessionSummaryInput(text: string, cwd: string): string {
@@ -3536,7 +3604,7 @@ function messagesForSessionSummary(sessionPath: string): AgentMessage[] {
 	}
 }
 
-async function buildSessionSearchContextMessage(ctx: ExtensionContext, result: QolSessionSearchResult, customPrompt?: string): Promise<QolSessionSearchPendingMessage> {
+async function buildSessionSearchContextMessage(ctx: ExtensionContext, result: QolSessionSearchResult, customPrompt?: string, signal?: AbortSignal): Promise<QolSessionSearchPendingMessage> {
 	const messages = messagesForSessionSummary(result.path);
 	const fallbackText = result.allMessagesText || result.firstMessage;
 	const conversationText = messages.length > 0 ? serializeConversation(convertToLlm(messages)) : fallbackText;
@@ -3552,7 +3620,7 @@ async function buildSessionSearchContextMessage(ctx: ExtensionContext, result: Q
 			focus ? `User focus: ${focus}` : "Focus on facts needed to continue or reference this previous session.",
 		].join("\n"),
 		purpose: "session-search",
-		signal: ctx.signal,
+		signal: signal ?? ctx.signal,
 	});
 	const title = sessionDisplayName(result);
 	const content = [
@@ -3575,16 +3643,55 @@ async function buildSessionSearchContextMessage(ctx: ExtensionContext, result: Q
 	};
 }
 
-async function injectSessionSearchContext(pi: ExtensionAPI, ctx: ExtensionContext, result: QolSessionSearchResult, customPrompt?: string): Promise<void> {
+async function buildSessionSearchContextMessageWithLoader(ctx: ExtensionContext, result: QolSessionSearchResult, customPrompt: string | undefined, actionLabel: string): Promise<QolSessionSearchPendingMessage> {
 	const title = sessionDisplayName(result);
-	ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, `🔍 Summarizing ${title}...`);
+	if (!ctx.hasUI) return buildSessionSearchContextMessage(ctx, result, customPrompt);
+	ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, `Summarizing ${title}...`);
+	const releaseModalLock = acquireVstackModalLock();
+	let failure: unknown;
 	try {
-		const message = await buildSessionSearchContextMessage(ctx, result, customPrompt);
-		pi.sendMessage({ customType: SESSION_SEARCH_CONTEXT_TYPE, content: message.content, details: message.details, display: true }, { deliverAs: "followUp", triggerTurn: false });
-		ctx.ui.notify(`Session context injected: ${title}`, "info");
+		const message = await ctx.ui.custom<QolSessionSearchPendingMessage | null>((tui: any, theme: any, _kb: any, done: (value: QolSessionSearchPendingMessage | null) => void) => {
+			let closed = false;
+			const loader = new QolSessionSearchLoadingComponent(tui, theme, actionLabel, "Summarizing session context...", (value) => {
+				if (closed) return;
+				closed = true;
+				done(value);
+			});
+			const finish = (value: QolSessionSearchPendingMessage | null) => {
+				if (closed) return;
+				closed = true;
+				loader.dispose();
+				done(value);
+			};
+			buildSessionSearchContextMessage(ctx, result, customPrompt, loader.signal)
+				.then(finish)
+				.catch((error) => {
+					if (!loader.signal?.aborted) failure = error;
+					finish(null);
+				});
+			return loader;
+		}, {
+			overlay: true,
+			overlayOptions: {
+				anchor: "center",
+				width: Math.max(56, Math.min(92, Math.floor(settingNumber("sessionSearch.overlayWidth", 104, ctx.cwd) * 0.75))),
+				maxHeight: "70%",
+			},
+		});
+		if (failure) throw failure;
+		if (!message) throw new Error("Session context summary cancelled");
+		return message;
 	} finally {
+		releaseModalLock();
 		ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, undefined);
 	}
+}
+
+async function injectSessionSearchContext(pi: ExtensionAPI, ctx: ExtensionContext, result: QolSessionSearchResult, customPrompt?: string): Promise<void> {
+	const title = sessionDisplayName(result);
+	const message = await buildSessionSearchContextMessageWithLoader(ctx, result, customPrompt, "Inject Context");
+	pi.sendMessage({ customType: SESSION_SEARCH_CONTEXT_TYPE, content: message.content, details: message.details, display: true }, { deliverAs: "followUp", triggerTurn: false });
+	ctx.ui.notify(`Session context injected: ${title}`, "info");
 }
 
 function asCommandContext(ctx: ExtensionContext): (ExtensionContext & Partial<ExtensionCommandContext>) {
@@ -3593,30 +3700,36 @@ function asCommandContext(ctx: ExtensionContext): (ExtensionContext & Partial<Ex
 
 async function createNewSessionWithSearchContext(pi: ExtensionAPI, ctx: ExtensionContext, result: QolSessionSearchResult, customPrompt?: string): Promise<void> {
 	const title = sessionDisplayName(result);
-	ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, `🔍 Summarizing ${title}...`);
-	try {
-		const message = await buildSessionSearchContextMessage(ctx, result, customPrompt);
-		const commandCtx = asCommandContext(ctx);
-		if (typeof commandCtx.newSession === "function") {
-			const parentSession = ctx.sessionManager.getSessionFile?.();
+	const message = await buildSessionSearchContextMessageWithLoader(ctx, result, customPrompt, "New Session + Context");
+
+	const commandCtx = asCommandContext(ctx);
+	if (typeof commandCtx.newSession === "function") {
+		const parentSession = ctx.sessionManager.getSessionFile?.();
+		let replacementStarted = false;
+		try {
 			const switchResult = await commandCtx.newSession({
 				parentSession,
 				withSession: async (replacementCtx: any) => {
-					if (typeof replacementCtx.sendMessage === "function") {
-						await replacementCtx.sendMessage({ customType: SESSION_SEARCH_CONTEXT_TYPE, content: message.content, details: message.details, display: true }, { triggerTurn: false });
+					replacementStarted = true;
+					try {
+						if (typeof replacementCtx.sendMessage === "function") {
+							await replacementCtx.sendMessage({ customType: SESSION_SEARCH_CONTEXT_TYPE, content: message.content, details: message.details, display: true }, { triggerTurn: false });
+						}
+						replacementCtx.ui.notify(`New session has context from ${title}`, "info");
+					} catch (error) {
+						replacementCtx.ui.notify(`New session context import failed: ${stringifyError(error)}`, "error");
 					}
-					replacementCtx.ui.notify(`New session has context from ${title}`, "info");
 				},
 			});
 			if (switchResult.cancelled) ctx.ui.notify("New session cancelled", "info");
-			return;
+		} catch (error) {
+			if (!replacementStarted) throw error;
 		}
-		setPendingSessionSearchMessage(message);
-		ctx.ui.setEditorText("/new");
-		ctx.ui.notify(`${title} — press Enter to create a new session with this context`, "info");
-	} finally {
-		ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, undefined);
+		return;
 	}
+	setPendingSessionSearchMessage(message);
+	ctx.ui.setEditorText("/new");
+	ctx.ui.notify(`${title} — press Enter to create a new session with this context`, "info");
 }
 
 async function consumePendingSessionSearchContext(pi: ExtensionAPI, ctx: ExtensionContext, reason: unknown): Promise<void> {
@@ -3653,11 +3766,27 @@ async function openQolSessionSearch(pi: ExtensionAPI, ctx: ExtensionContext, ini
 	if (action.type === "resume") {
 		const commandCtx = asCommandContext(ctx);
 		if (typeof commandCtx.switchSession === "function") {
+			const targetTitle = sessionDisplayName(action.result);
+			const selectedMessage = action.message;
+			let replacementStarted = false;
 			try {
-				const result = await commandCtx.switchSession(action.result.path);
-				if (!result.cancelled) ctx.ui.notify(`Resumed ${sessionDisplayName(action.result)}`, "info");
+				const result = await commandCtx.switchSession(action.result.path, {
+					withSession: async (replacementCtx: any) => {
+						replacementStarted = true;
+						if (selectedMessage?.entryId) {
+							const manager = replacementCtx.sessionManager as any;
+							if (selectedMessage.parentId && typeof manager?.branch === "function") manager.branch(selectedMessage.parentId);
+							else if (selectedMessage.parentId === null && typeof manager?.resetLeaf === "function") manager.resetLeaf();
+							replacementCtx.ui.setEditorText(selectedMessage.text);
+							replacementCtx.ui.notify(`Resumed ${targetTitle} from prompt #${selectedMessage.index}. Submit to branch from here.`, "info");
+							return;
+						}
+						replacementCtx.ui.notify(`Resumed session: ${targetTitle}`, "info");
+					},
+				});
+				if (result.cancelled) ctx.ui.notify("Resume cancelled", "info");
 			} catch (error) {
-				ctx.ui.notify(`Resume failed: ${stringifyError(error)}`, "error");
+				if (!replacementStarted) ctx.ui.notify(`Resume failed: ${stringifyError(error)}`, "error");
 			}
 			return;
 		}
@@ -3675,7 +3804,8 @@ async function openQolSessionSearch(pi: ExtensionAPI, ctx: ExtensionContext, ini
 		try {
 			await injectSessionSearchContext(pi, ctx, action.result, action.customPrompt);
 		} catch (error) {
-			ctx.ui.notify(`Session summary failed: ${stringifyError(error)}`, "error");
+			const message = stringifyError(error);
+			ctx.ui.notify(/cancelled/i.test(message) ? "Inject context cancelled" : `Inject context failed: ${message}`, /cancelled/i.test(message) ? "info" : "error");
 			ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, undefined);
 		}
 		return;
@@ -3684,7 +3814,8 @@ async function openQolSessionSearch(pi: ExtensionAPI, ctx: ExtensionContext, ini
 		try {
 			await createNewSessionWithSearchContext(pi, ctx, action.result, action.customPrompt);
 		} catch (error) {
-			ctx.ui.notify(`New session context failed: ${stringifyError(error)}`, "error");
+			const message = stringifyError(error);
+			ctx.ui.notify(/cancelled/i.test(message) ? "New Session + Context cancelled" : `New Session + Context failed: ${message}`, /cancelled/i.test(message) ? "info" : "error");
 			ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, undefined);
 		}
 	}
@@ -3702,10 +3833,10 @@ function renderSessionSearchContextMessage(message: any, options: any, theme: Th
 			: "";
 	const title = raw.match(/^## Session Search Context:\s*(.+)$/m)?.[1]?.trim() || "session";
 	const date = raw.match(/\*\*Date:\*\*\s*([^|\n]+)/)?.[1]?.trim() || "";
-	const header = `${theme.fg("accent", "🔍 ")}${theme.fg("customMessageLabel", theme.bold("Session context: "))}${theme.fg("accent", title)}${date ? theme.fg("muted", ` (${date})`) : ""}`;
-	if (!options?.expanded) return new Text(header, 0, 0);
+	const header = `${theme.fg("customMessageLabel", theme.bold("Session context: "))}${theme.fg("accent", title)}${date ? theme.fg("muted", ` (${date})`) : ""}`;
+	if (!options?.expanded) return new Text(`${header}${theme.fg("dim", "  ctrl+o expand")}`, 0, 0);
 	const body = raw.slice(raw.indexOf("\n") + 1).trim();
-	return new Text(body ? `${header}\n\n${theme.fg("muted", body)}` : header, 0, 0);
+	return new Text(body ? `${header}\n\n${body}` : header, 0, 0);
 }
 
 export default function qol(pi: ExtensionAPI): void {
