@@ -2039,7 +2039,7 @@ function renderDashboardWidgetLines(state: SubagentDashboardState, theme: Theme,
 		const body = usageParts.length > 0
 			? usageParts.map((part) => theme.fg("dim", part)).join(dotSep)
 			: theme.fg("dim", `${items.length} transcript${items.length === 1 ? "" : "s"}`);
-		lines.push(`${subagentBranch(theme, "└", cwd)}${theme.fg("success", "done")}${dotSep}${body}`);
+		lines.push(`${subagentBranch(theme, "└", cwd)}${body}`);
 		return dashboardFrame(lines.map((line) => truncateToWidth(line, Math.max(1, width - 4), "")), Math.max(1, width), theme);
 	}
 	const maxItems = state.mode === "compact" || state.collapsed ? 1 : state.mode === "normal" ? Math.min(3, dashboardMaxItems(cwd)) : dashboardMaxItems(cwd);
