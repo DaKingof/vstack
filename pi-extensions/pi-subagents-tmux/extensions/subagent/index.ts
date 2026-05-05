@@ -1830,9 +1830,7 @@ function renderDashboardWidgetLines(state: SubagentDashboardState, theme: Theme,
 		const name = padAnsi(theme.fg("accent", theme.bold(item.agent)), nameWidth);
 		const where = theme.fg("dim", item.kind);
 		const bridge = item.bridge ? theme.fg("success", " · bridge") : "";
-		const transcriptRef = dashboardTraceRef(item);
-		const transcript = transcriptRef ? theme.fg("dim", ` · trace ${transcriptRef}`) : "";
-		lines.push(`${branch}${dashboardStatusIcon(item.status, theme)} ${name}  ${dashboardStatusText(item, theme)} ${where}${bridge}${transcript}`);
+		lines.push(`${branch}${dashboardStatusIcon(item.status, theme)} ${name}  ${dashboardStatusText(item, theme)} ${where}${bridge}`);
 		if (state.mode === "expanded" && !state.collapsed && item.message) {
 			lines.push(`${subagentStem(theme, index === shown.length - 1 && items.length <= shown.length, cwd)}${theme.fg("toolOutput", oneLinePreview(item.message, Math.max(48, width - 16)))}`);
 		}
@@ -4283,11 +4281,8 @@ export default function (pi: ExtensionAPI) {
 			};
 		},
 
-		renderCall(args, theme, context) {
-			const cwd = context?.cwd;
+		renderCall(args, theme, _context) {
 			const scope: AgentScope = args.agentScope ?? "project";
-			const treeLine = (prefix: "├" | "└", name: string, task?: string) =>
-				`${subagentBranch(theme, prefix, cwd)}${theme.fg("accent", theme.bold(name))}${task ? theme.fg("dim", ` · ${oneLinePreview(task, 48)}`) : ""}`;
 			if (args.chain && args.chain.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
@@ -4310,15 +4305,10 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (args.tasks && args.tasks.length > 0) {
 				const tasks = args.tasks as Array<{ agent: string; task?: string }>;
-				let text =
+				const text =
 					theme.fg("accent", "● ") +
-					theme.fg("toolTitle", theme.bold(`${tasks.length} background agent${tasks.length === 1 ? "" : "s"} launching`)) +
+					theme.fg("toolTitle", theme.bold(`${tasks.length} agent${tasks.length === 1 ? "" : "s"} launching`)) +
 					theme.fg("muted", ` [${scope}]`);
-				const shown = tasks.slice(0, 8);
-				for (const [index, task] of shown.entries()) {
-					text += `\n${treeLine(index === shown.length - 1 && tasks.length <= shown.length ? "└" : "├", task.agent, task.task)}`;
-				}
-				if (tasks.length > shown.length) text += `\n${subagentBranch(theme, "└", cwd)}${theme.fg("muted", `… +${tasks.length - shown.length} more`)}`;
 				return new Text(text, 0, 0);
 			}
 			const agentName = args.agent || "...";
@@ -4553,13 +4543,20 @@ export default function (pi: ExtensionAPI) {
 				const running = details.results.filter((r) => r.exitCode === -1).length;
 				const successCount = details.results.filter((r) => r.exitCode === 0).length;
 				const failCount = details.results.filter((r) => r.exitCode > 0).length;
+				const queuedPaneCount = details.results.filter((r) => r.exitCode === 0 && r.taskId && r.paneId).length;
+				const oneshotCompletedCount = successCount - queuedPaneCount;
 				const isRunning = running > 0;
 				const total = details.results.length;
+				const pluralN = (n: number) => (n === 1 ? "" : "s");
 				const headerLabel = isRunning
-					? `${total} background agent${total === 1 ? "" : "s"} running`
+					? `${total} agent${pluralN(total)} running`
 					: failCount > 0
-						? `${successCount}/${total} background agent${total === 1 ? "" : "s"} completed`
-						: `${total} background agent${total === 1 ? "" : "s"} completed`;
+						? `${successCount}/${total} agent${pluralN(total)} completed`
+						: queuedPaneCount === total
+							? `${total} agent${pluralN(total)} queued`
+							: queuedPaneCount > 0
+								? `${oneshotCompletedCount} completed, ${queuedPaneCount} queued`
+								: `${total} agent${pluralN(total)} completed`;
 				const headerText =
 					theme.fg("accent", "● ") +
 					theme.fg("toolTitle", theme.bold(headerLabel)) +
