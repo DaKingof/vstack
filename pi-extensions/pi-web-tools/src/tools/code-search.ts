@@ -6,6 +6,28 @@ import { storeWebContent } from "../storage.js";
 import { sourceList } from "../utils/format.js";
 import { renderExaCall, renderExaResultList } from "./exa-render.js";
 
+function parseExaCodeSources(text: string): Array<{ title?: string; url: string }> {
+	const sources: Array<{ title?: string; url: string }> = [];
+	const seen = new Set<string>();
+	const lines = text.split(/\r?\n/);
+	let pendingTitle: string | undefined;
+	for (const line of lines) {
+		const headingMatch = line.match(/^##+\s+(.+?)\s*$/);
+		if (headingMatch) { pendingTitle = headingMatch[1]; continue; }
+		const urlMatch = line.match(/^\s*(https?:\/\/\S+)\s*$/);
+		if (urlMatch) {
+			const url = urlMatch[1]!.replace(/[).,;]+$/, "");
+			const key = url.toLowerCase();
+			if (!seen.has(key)) {
+				seen.add(key);
+				sources.push({ title: pendingTitle, url });
+			}
+			pendingTitle = undefined;
+		}
+	}
+	return sources;
+}
+
 export const codeSearchSchema = Type.Object({
 	query: Type.String(),
 	numResults: Type.Optional(Type.Number()),
@@ -38,9 +60,10 @@ export function createCodeSearchToolDefinition(pi: ExtensionAPI, getSettings: (c
 					const context = await client.codeContext(params.query, tokensNum, signal);
 					if (context.text.trim()) {
 						const stored = storeWebContent(pi, { title: `Code Context: ${params.query}`, url: "", content: context.text, metadata: { query: params.query, provider: "exa", tool: "code_search", contentKind: "code-context", source: "exa-code", outputTokens: context.outputTokens, resultsCount: context.resultsCount } });
+						const sources = parseExaCodeSources(context.text);
 						return {
 							content: [{ type: "text", text: `${context.text}\n\nUse get_web_content with content id ${stored.id} for the full stored context.` }],
-							details: { provider: "exa-code", source: "exa-code", text: context.text, outputTokens: context.outputTokens, resultsCount: context.resultsCount, contentId: stored.id, results: [] },
+							details: { provider: "exa-code", source: "exa-code", text: context.text, outputTokens: context.outputTokens, resultsCount: context.resultsCount, contentId: stored.id, results: sources },
 						};
 					}
 				} catch (error) {

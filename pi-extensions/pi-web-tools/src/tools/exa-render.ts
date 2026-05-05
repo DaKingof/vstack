@@ -60,7 +60,24 @@ export function renderExaResultList(label: string, target: string | undefined, r
 	const providerTag = isExaCode ? "exa-code" : "exa";
 	const lines = [successSummary(theme, providerLabel(label, providerTag), target || "complete", meta)];
 	if (isExaCode) {
-		if (typeof details?.contentId === "string" && details.contentId) lines.push(`${tree(theme, "└")}${muted(theme, "content id ")}${accent(theme, details.contentId)}`);
+		const expanded = Boolean(options?.expanded);
+		const sources: ExaRenderableResult[] = Array.isArray(details?.results) ? details.results : [];
+		const contentId = typeof details?.contentId === "string" ? details.contentId : undefined;
+		const contentIdLineLast = !expanded || sources.length === 0;
+		if (contentId) lines.push(`${tree(theme, contentIdLineLast ? "└" : "├")}${muted(theme, "content id ")}${accent(theme, contentId)}`);
+		if (!expanded && sources.length > 0) {
+			lines.push(`${tree(theme, "└")}${muted(theme, `… ${sources.length} source${sources.length === 1 ? "" : "s"} · Ctrl+O to expand`)}`);
+		} else if (expanded && sources.length > 0) {
+			const limit = 12;
+			const shown = sources.slice(0, limit);
+			for (let i = 0; i < shown.length; i++) {
+				const item = shown[i]!;
+				const title = item.title || item.url || "Untitled";
+				const isLast = i === shown.length - 1 && sources.length <= shown.length;
+				lines.push(`${tree(theme, isLast ? "└" : "├")}${accent(theme, oneLine(title, 72))}${item.url ? muted(theme, ` · ${oneLine(item.url, 72)}`) : ""}`);
+			}
+			if (sources.length > limit) lines.push(`${tree(theme, "└")}${muted(theme, `… ${sources.length - limit} more`)}`);
+		}
 		return textComponent(lines.join("\n"));
 	}
 	if (answer) lines.push(...answerPreviewLines(answer, theme, Boolean(options?.expanded), results.length > 0));

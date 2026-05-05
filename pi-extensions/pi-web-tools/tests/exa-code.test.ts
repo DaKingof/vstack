@@ -22,17 +22,20 @@ test("ExaClient.codeContext POSTs to /context and parses response", async () => 
 	assert.equal(out.resultsCount, 12);
 });
 
-test("code_search renderer shows Exa Code label with token count and content id", () => {
+test("code_search renderer shows Exa Code label with token count, content id, and Ctrl+O hint", () => {
 	const tool = createCodeSearchToolDefinition({ appendEntry() {} } as any, () => ({ apiKeys: { exa: "k" } } as any));
 	const theme = { fg: (_t: string, s: string) => s, bold: (s: string) => s };
-	const rendered = tool.renderResult({
-		content: [{ type: "text", text: "snippets" }],
-		details: { provider: "exa-code", source: "exa-code", outputTokens: 1500, resultsCount: 8, contentId: "web-foo", results: [] },
-	}, {}, theme, { args: { query: "react" } }).render(200).join("\n");
-	assert.match(rendered, /Code Search \(Exa Code\) react/);
-	assert.match(rendered, /1500 tokens · 8 sources/);
-	assert.match(rendered, /content id web-foo/);
-	assert.doesNotMatch(rendered, /0 results/);
+	const details = { provider: "exa-code", source: "exa-code", outputTokens: 1500, resultsCount: 8, contentId: "web-foo", results: [{ title: "React Hooks", url: "https://react.dev/reference/react/useState" }, { title: "GFG", url: "https://geeksforgeeks.org/x" }] };
+	const compact = tool.renderResult({ content: [{ type: "text", text: "snippets" }], details }, {}, theme, { args: { query: "react" } }).render(200).join("\n");
+	assert.match(compact, /Code Search \(Exa Code\) react/);
+	assert.match(compact, /1500 tokens · 8 sources/);
+	assert.match(compact, /content id web-foo/);
+	assert.match(compact, /… 2 sources · Ctrl\+O to expand/);
+	assert.doesNotMatch(compact, /0 results/);
+	const expanded = tool.renderResult({ content: [{ type: "text", text: "snippets" }], details }, { expanded: true }, theme, { args: { query: "react" } }).render(200).join("\n");
+	assert.match(expanded, /React Hooks/);
+	assert.match(expanded, /react\.dev\/reference\/react\/useState/);
+	assert.match(expanded, /GFG/);
 });
 
 test("code_search prefers Exa Code context and stores the full text", async () => {
