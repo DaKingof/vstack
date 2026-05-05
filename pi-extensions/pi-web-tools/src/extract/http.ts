@@ -1,3 +1,5 @@
+import { assessExtractionQuality, fetchViaJina, htmlToMarkdown as readableHtmlToMarkdown } from "./html.js";
+
 export interface ExtractedContent {
 	url: string;
 	title?: string;
@@ -11,49 +13,11 @@ export interface HttpFetchOptions {
 	fetchImpl?: typeof fetch;
 	textMaxCharacters?: number;
 	signal?: AbortSignal;
+	jinaFallback?: boolean;
+	jinaApiKey?: string;
 }
 
-function decodeEntities(text: string): string {
-	return text
-		.replace(/&nbsp;/g, " ")
-		.replace(/&amp;/g, "&")
-		.replace(/&lt;/g, "<")
-		.replace(/&gt;/g, ">")
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'");
-}
-
-export function htmlToMarkdown(html: string): { title?: string; markdown: string } {
-	const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim();
-	const main = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1]
-		?? html.match(/<article\b[^>]*>([\s\S]*?)<\/article>/i)?.[1]
-		?? html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1]
-		?? html;
-	let body = main
-		.replace(/<script[\s\S]*?<\/script>/gi, "")
-		.replace(/<style[\s\S]*?<\/style>/gi, "")
-		.replace(/<noscript[\s\S]*?<\/noscript>/gi, "")
-		.replace(/<svg[\s\S]*?<\/svg>/gi, "")
-		.replace(/<(header|nav|footer|aside)\b[\s\S]*?<\/\1>/gi, "")
-		.replace(/<form\b[\s\S]*?<\/form>/gi, "")
-		.replace(/<\/(h[1-6]|p|li|blockquote|pre|tr|div|section|article)>/gi, "\n")
-		.replace(/<br\s*\/?>/gi, "\n")
-		.replace(/<h1[^>]*>/gi, "\n# ")
-		.replace(/<h2[^>]*>/gi, "\n## ")
-		.replace(/<h3[^>]*>/gi, "\n### ")
-		.replace(/<li[^>]*>/gi, "\n- ")
-		.replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, href, label) => `${label.replace(/<[^>]+>/g, "").trim()} (${href})`)
-		.replace(/<[^>]+>/g, " ");
-	body = decodeEntities(body)
-		.replace(/[ \t]+/g, " ")
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter((line) => line && line !== "-" && line !== "•")
-		.join("\n")
-		.replace(/\n{3,}/g, "\n\n")
-		.trim();
-	return { title: title ? decodeEntities(title) : undefined, markdown: body };
-}
+export const htmlToMarkdown = readableHtmlToMarkdown;
 
 export function isProbablyPdf(url: string, contentType?: string): boolean {
 	if (/application\/pdf/i.test(contentType ?? "")) return true;
@@ -67,8 +31,20 @@ export function isProbablyPdf(url: string, contentType?: string): boolean {
 export async function fetchHttpContent(url: string, options: HttpFetchOptions = {}): Promise<ExtractedContent> {
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const response = await fetchImpl(url, { signal: options.signal });
-	if (!response.ok) throw new Error(`HTTP fetch failed (${response.status}) for ${url}`);
 	const contentType = response.headers.get("content-type") ?? undefined;
+	const chain: string[] = [];
+	const metadata: Record<string, unknown> = { contentType, status: response.status };
+	if (!response.ok) {
+		if (options.jinaFallback && (response.status === 403 || response.status === 429 || response.status >= 500)) {
+			chain.push(`http:${response.status}`);
+			const jina = await fetchViaJina(url, { fetchImpl, signal: options.signal, apiKey: options.jinaApiKey });
+			chain.push("jina");
+			let content = jina.markdown;
+			if (options.textMaxCharacters && content.length > options.textMaxCharacters) content = content.slice(0, options.textMaxCharacters);
+			return { url, title: jina.title, content, contentType, status: response.status, metadata: { ...metadata, extraction: "jina", extractionChain: chain } };
+		}
+		throw new Error(`HTTP fetch failed (${response.status}) for ${url}`);
+	}
 	const raw = await response.text();
 	let title: string | undefined;
 	let content = raw;
@@ -78,10 +54,30 @@ export async function fetchHttpContent(url: string, options: HttpFetchOptions = 
 		title = extracted.title;
 		content = extracted.markdown;
 		extraction = "html-basic";
+		chain.push("html-basic");
+		if (options.jinaFallback) {
+			const quality = assessExtractionQuality({ title, markdown: content }, raw.length);
+			if (quality.blocked || quality.lowContent) {
+				metadata.fallbackReasons = quality.reasons;
+				try {
+					const jina = await fetchViaJina(url, { fetchImpl, signal: options.signal, apiKey: options.jinaApiKey });
+					title = jina.title ?? title;
+					content = jina.markdown;
+					extraction = "jina";
+					chain.push("jina");
+				} catch (error) {
+					metadata.jinaError = error instanceof Error ? error.message : String(error);
+					chain.push("jina-failed");
+				}
+			}
+		}
 	} else if (/json/i.test(contentType ?? "")) {
 		try { content = JSON.stringify(JSON.parse(raw), null, 2); extraction = "json"; }
 		catch { extraction = "json-raw"; }
+		chain.push(extraction);
+	} else {
+		chain.push("text");
 	}
 	if (options.textMaxCharacters && content.length > options.textMaxCharacters) content = content.slice(0, options.textMaxCharacters);
-	return { url, title, content, contentType, status: response.status, metadata: { extraction, contentType, status: response.status } };
+	return { url, title, content, contentType, status: response.status, metadata: { ...metadata, extraction, extractionChain: chain } };
 }

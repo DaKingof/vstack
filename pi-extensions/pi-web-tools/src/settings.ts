@@ -25,9 +25,10 @@ export interface WebToolsSettings {
 	exaResearchModes: Record<string, Record<string, unknown>>;
 	browserCookieAccess: boolean;
 	githubClone: { enabled: boolean; maxRepoSizeMB: number };
+	htmlExtraction: { jinaFallback: boolean };
 	video: { enabled: boolean };
 	shortcuts: { curator: string; activity: string };
-	apiKeys: Partial<Record<ResolvedWebProvider | "openai", string>>;
+	apiKeys: Partial<Record<ResolvedWebProvider | "openai" | "jina", string>>;
 	privateConfigFile?: string;
 	warnings: string[];
 }
@@ -49,6 +50,7 @@ export const DEFAULT_SETTINGS: Omit<WebToolsSettings, "apiKeys" | "warnings" | "
 	exaResearchModes: {},
 	browserCookieAccess: false,
 	githubClone: { enabled: true, maxRepoSizeMB: 350 },
+	htmlExtraction: { jinaFallback: true },
 	video: { enabled: true },
 	shortcuts: { curator: "ctrl+shift+s", activity: "ctrl+shift+w" },
 };
@@ -242,6 +244,7 @@ export function loadSettings(cwd = process.cwd()): WebToolsSettings {
 		catch (error) { warnings.push(`${privateConfigFile}: ${error instanceof Error ? error.message : String(error)}`); }
 	}
 	const githubClone = nested(raw, "githubClone");
+	const htmlExtraction = nested(raw, "htmlExtraction");
 	const video = nested(raw, "video");
 	const shortcuts = nested(raw, "shortcuts");
 	const sharedSecrets = ["exaApiKey", "perplexityApiKey", "geminiApiKey", "openaiApiKey"].filter((key) => typeof raw[key] === "string");
@@ -251,6 +254,7 @@ export function loadSettings(cwd = process.cwd()): WebToolsSettings {
 	const perplexityKey = process.env.PERPLEXITY_API_KEY || secretFrom(secrets, ["PERPLEXITY_API_KEY", "perplexityApiKey"]);
 	const geminiKey = process.env.GEMINI_API_KEY || secretFrom(secrets, ["GEMINI_API_KEY", "geminiApiKey"]);
 	const openAiKey = process.env.OPENAI_API_KEY || secretFrom(secrets, ["OPENAI_API_KEY", "openaiApiKey"]);
+	const jinaKey = process.env.JINA_API_KEY || secretFrom(secrets, ["JINA_API_KEY", "jinaApiKey"]);
 	return {
 		enabled: boolSetting(raw, "enabled"),
 		autoEnable: boolSetting(raw, "autoEnable"),
@@ -271,6 +275,9 @@ export function loadSettings(cwd = process.cwd()): WebToolsSettings {
 			enabled: typeof githubClone.enabled === "boolean" ? githubClone.enabled : DEFAULT_SETTINGS.githubClone.enabled,
 			maxRepoSizeMB: numberSetting(githubClone, "maxRepoSizeMB", DEFAULT_SETTINGS.githubClone.maxRepoSizeMB, 1),
 		},
+		htmlExtraction: {
+			jinaFallback: typeof htmlExtraction.jinaFallback === "boolean" ? htmlExtraction.jinaFallback : DEFAULT_SETTINGS.htmlExtraction.jinaFallback,
+		},
 		video: { enabled: typeof video.enabled === "boolean" ? video.enabled : DEFAULT_SETTINGS.video.enabled },
 		shortcuts: {
 			curator: stringSetting(shortcuts, "curator", DEFAULT_SETTINGS.shortcuts.curator),
@@ -281,6 +288,7 @@ export function loadSettings(cwd = process.cwd()): WebToolsSettings {
 			perplexity: resolveSecretRef(perplexityKey, "PERPLEXITY_API_KEY", warnings),
 			gemini: resolveSecretRef(geminiKey, "GEMINI_API_KEY", warnings),
 			openai: resolveSecretRef(openAiKey, "OPENAI_API_KEY", warnings),
+			jina: resolveSecretRef(jinaKey, "JINA_API_KEY", warnings),
 		},
 		privateConfigFile,
 		warnings,

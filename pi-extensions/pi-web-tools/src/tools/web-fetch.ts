@@ -199,7 +199,7 @@ export function createWebFetchToolDefinition(pi: ExtensionAPI, getSettings: (cwd
 							stored.push(storeWebContent(pi, { title: url.split("/").pop() || url, url, content: pdf.text, metadata: { provider: "http", tool: name, ...pdf.metadata } }));
 							continue;
 						}
-						const extracted = await fetchHttpContent(url, { signal });
+						const extracted = await fetchHttpContent(url, { signal, jinaFallback: settings.htmlExtraction.jinaFallback, jinaApiKey: settings.apiKeys.jina });
 						stored.push(storeWebContent(pi, { title: extracted.title, url: extracted.url, content: extracted.content, metadata: { provider: "http", tool: name, ...extracted.metadata } }));
 					} catch (error) {
 						failed.push({ url, error });
