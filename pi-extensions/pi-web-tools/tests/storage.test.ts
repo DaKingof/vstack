@@ -145,11 +145,15 @@ test("advanced Exa tools render compact provider-labeled summaries", () => {
 	const answer = createWebAnswerToolDefinition({} as any, () => ({}) as any);
 	const similar = createWebFindSimilarToolDefinition({} as any, () => ({}) as any);
 	const answerCall = answer.renderCall({ query: "What is Ghostty?" }, theme, {}).render(200).join("\n");
-	const answerResult = answer.renderResult({ details: { answer: "Ghostty is a fast terminal emulator.", results: [] } }, {}, theme, { args: { query: "What is Ghostty?" } }).render(200).join("\n");
+	const longAnswer = "Ghostty is a fast terminal emulator. ".repeat(30);
+	const answerResult = answer.renderResult({ details: { answer: longAnswer, results: [] } }, {}, theme, { args: { query: "What is Ghostty?" } }).render(200).join("\n");
+	const expandedAnswerResult = answer.renderResult({ details: { answer: longAnswer, results: [] } }, { expanded: true }, theme, { args: { query: "What is Ghostty?" } }).render(200).join("\n");
 	const similarResult = similar.renderResult({ details: { results: [{ title: "Docs", url: "https://ghostty.org/docs" }, { title: "Repo", url: "https://github.com/ghostty-org/ghostty" }] } }, {}, theme, { args: { url: "https://ghostty.org" } }).render(200).join("\n");
 	assert.match(answerCall, /Web Answer \(Exa\) What is Ghostty\?/);
 	assert.match(answerResult, /Web Answer \(Exa\) What is Ghostty\? · answer/);
 	assert.match(answerResult, /answer Ghostty is a fast terminal emulator\./);
+	assert.match(answerResult, /Ctrl\+O to expand/);
+	assert.ok(expandedAnswerResult.length > answerResult.length);
 	assert.match(similarResult, /Web Find Similar \(Exa\) https:\/\/ghostty.org · 2 results/);
 	assert.match(similarResult, /Docs · https:\/\/ghostty.org\/docs/);
 });
