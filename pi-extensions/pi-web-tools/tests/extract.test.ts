@@ -113,13 +113,13 @@ test("fetchHttpContent without jinaFallback returns blocked content as-is", asyn
 	assert.deepEqual(out.metadata.extractionChain, ["html-basic"]);
 });
 
-test("GitHub blob extraction uses raw URL", async () => {
+test("GitHub blob extraction uses raw URL when clone is disabled", async () => {
 	const seen: string[] = [];
 	const fetchImpl = (async (url: any) => {
 		seen.push(String(url));
 		return response("file contents");
 	}) as typeof fetch;
-	const extracted = await extractGitHubUrl("https://github.com/o/r/blob/main/a.txt", { fetchImpl });
+	const extracted = await extractGitHubUrl("https://github.com/o/r/blob/main/a.txt", { fetchImpl, cloneEnabled: false });
 	assert.equal(extracted?.content, "file contents");
 	assert.equal(seen[0], "https://raw.githubusercontent.com/o/r/main/a.txt");
 });

@@ -199,7 +199,7 @@ export function createWebFetchToolDefinition(pi: ExtensionAPI, getSettings: (cwd
 							stored.push(storeWebContent(pi, { title: basename(localPath), url: pathToFileURL(localPath).href, content: pdf.text, metadata: { provider: "local", tool: name, localPath, ...pdf.metadata } }));
 							continue;
 						}
-						const github = settings.githubClone.enabled ? await extractGitHubUrl(url, { signal }).catch((error) => ({ error })) : undefined;
+						const github = await extractGitHubUrl(url, { signal, cloneEnabled: settings.githubClone.enabled, maxRepoSizeMB: settings.githubClone.maxRepoSizeMB, cloneTimeoutSeconds: settings.githubClone.cloneTimeoutSeconds, maxAgeHours: settings.githubClone.cacheMaxAgeHours }).catch((error) => ({ error }));
 						if (github && !("error" in github)) {
 							stored.push(storeWebContent(pi, { title: github.title, url, content: github.content, metadata: github.metadata }));
 							continue;

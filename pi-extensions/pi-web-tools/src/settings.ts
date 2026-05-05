@@ -24,7 +24,7 @@ export interface WebToolsSettings {
 	includeContentByDefault: boolean;
 	exaResearchModes: Record<string, Record<string, unknown>>;
 	browserCookieAccess: boolean;
-	githubClone: { enabled: boolean; maxRepoSizeMB: number };
+	githubClone: { enabled: boolean; maxRepoSizeMB: number; cloneTimeoutSeconds: number; cacheMaxAgeHours: number };
 	htmlExtraction: { jinaFallback: boolean };
 	browserCookies: { preferredBrowser: "auto" | "firefox" | "zen" | "chrome" | "chromium"; profile?: string };
 	video: { enabled: boolean };
@@ -50,7 +50,7 @@ export const DEFAULT_SETTINGS: Omit<WebToolsSettings, "apiKeys" | "warnings" | "
 	includeContentByDefault: false,
 	exaResearchModes: {},
 	browserCookieAccess: false,
-	githubClone: { enabled: true, maxRepoSizeMB: 350 },
+	githubClone: { enabled: true, maxRepoSizeMB: 350, cloneTimeoutSeconds: 60, cacheMaxAgeHours: 24 },
 	htmlExtraction: { jinaFallback: true },
 	browserCookies: { preferredBrowser: "auto" },
 	video: { enabled: true },
@@ -277,6 +277,8 @@ export function loadSettings(cwd = process.cwd()): WebToolsSettings {
 		githubClone: {
 			enabled: typeof githubClone.enabled === "boolean" ? githubClone.enabled : DEFAULT_SETTINGS.githubClone.enabled,
 			maxRepoSizeMB: numberSetting(githubClone, "maxRepoSizeMB", DEFAULT_SETTINGS.githubClone.maxRepoSizeMB, 1),
+			cloneTimeoutSeconds: numberSetting(githubClone, "cloneTimeoutSeconds", DEFAULT_SETTINGS.githubClone.cloneTimeoutSeconds, 5, 600),
+			cacheMaxAgeHours: numberSetting(githubClone, "cacheMaxAgeHours", DEFAULT_SETTINGS.githubClone.cacheMaxAgeHours, 0, 8760),
 		},
 		htmlExtraction: {
 			jinaFallback: typeof htmlExtraction.jinaFallback === "boolean" ? htmlExtraction.jinaFallback : DEFAULT_SETTINGS.htmlExtraction.jinaFallback,

@@ -1,3 +1,5 @@
+import { cloneOrUpdateRepo, defaultCacheDir, isGitInstalled, readBlobFromCache, readReadmeFromCache, readTreeFromCache, summarizeTreeEntries } from "./github-clone.js";
+
 export type GitHubUrlKind = "repo" | "blob" | "tree" | "commit";
 
 export interface ParsedGitHubUrl {
@@ -14,6 +16,11 @@ export interface GitHubExtractOptions {
 	fetchImpl?: typeof fetch;
 	signal?: AbortSignal;
 	maxTreeEntries?: number;
+	cloneEnabled?: boolean;
+	maxRepoSizeMB?: number;
+	cloneTimeoutSeconds?: number;
+	cacheDir?: string;
+	maxAgeHours?: number;
 }
 
 function splitRefAndPath(parts: string[]): { ref?: string; path?: string } {
@@ -47,10 +54,57 @@ async function jsonFetch(fetchImpl: typeof fetch, url: string, signal?: AbortSig
 	return response.json();
 }
 
+async function shouldUseClone(parsed: ParsedGitHubUrl, options: GitHubExtractOptions, fetchImpl: typeof fetch): Promise<{ useClone: boolean; sizeKB?: number; defaultBranch?: string }> {
+	if (options.cloneEnabled === false) return { useClone: false };
+	if (parsed.kind === "commit") return { useClone: false };
+	if (!isGitInstalled()) return { useClone: false };
+	try {
+		const meta = await jsonFetch(fetchImpl, `https://api.github.com/repos/${parsed.owner}/${parsed.repo}`, options.signal);
+		const maxKB = (options.maxRepoSizeMB ?? 350) * 1024;
+		const size = typeof meta?.size === "number" ? meta.size : 0;
+		if (size > maxKB) return { useClone: false, sizeKB: size, defaultBranch: meta?.default_branch };
+		return { useClone: true, sizeKB: size, defaultBranch: meta?.default_branch };
+	} catch {
+		return { useClone: false };
+	}
+}
+
+async function extractFromClone(parsed: ParsedGitHubUrl, options: GitHubExtractOptions, defaultBranch: string | undefined) {
+	const clone = await cloneOrUpdateRepo(parsed.owner, parsed.repo, parsed.ref ?? defaultBranch, {
+		cacheDir: options.cacheDir ?? defaultCacheDir(),
+		timeoutSeconds: options.cloneTimeoutSeconds,
+		maxAgeHours: options.maxAgeHours,
+	});
+	const meta = { provider: "github", ...parsed, extraction: "clone", cachePath: clone.cachePath, headRef: clone.headRef, cloned: clone.cloned, updated: clone.updated, defaultBranch };
+	if (parsed.kind === "blob" && parsed.path) {
+		const blob = readBlobFromCache(clone.cachePath, parsed.path);
+		if (!blob) throw new Error(`File not found in cloned repo: ${parsed.path}`);
+		return { title: `${parsed.owner}/${parsed.repo}/${parsed.path}`, content: blob.content, metadata: { ...meta, bytes: blob.bytes } };
+	}
+	if (parsed.kind === "tree") {
+		const tree = readTreeFromCache(clone.cachePath, parsed.path ?? "", options.maxTreeEntries ?? 200);
+		if (!tree) throw new Error(`Directory not found in cloned repo: ${parsed.path ?? "/"}`);
+		return { title: `${parsed.owner}/${parsed.repo}/${parsed.path ?? ""}`, content: summarizeTreeEntries(tree.entries, tree.truncated), metadata: { ...meta, entries: tree.entries.length, truncated: tree.truncated } };
+	}
+	const readme = readReadmeFromCache(clone.cachePath) ?? "";
+	const tree = readTreeFromCache(clone.cachePath, "", options.maxTreeEntries ?? 80);
+	const treeText = tree ? summarizeTreeEntries(tree.entries, tree.truncated) : "";
+	const body = [`# ${parsed.owner}/${parsed.repo}`, `Cached at: ${clone.cachePath}`, treeText ? `\n## Tree (top entries)\n${treeText}` : undefined, readme ? `\n## README\n\n${readme}` : undefined].filter(Boolean).join("\n");
+	return { title: `${parsed.owner}/${parsed.repo}`, content: body, metadata: { ...meta, hasReadme: Boolean(readme), entries: tree?.entries.length ?? 0 } };
+}
+
 export async function extractGitHubUrl(input: string, options: GitHubExtractOptions = {}) {
 	const parsed = parseGitHubUrl(input);
 	if (!parsed) return undefined;
 	const fetchImpl = options.fetchImpl ?? fetch;
+	const decision = await shouldUseClone(parsed, options, fetchImpl);
+	if (decision.useClone) {
+		try {
+			return await extractFromClone(parsed, options, decision.defaultBranch);
+		} catch (error) {
+			// fall through to API path on clone failure
+		}
+	}
 	if (parsed.kind === "blob" && parsed.rawUrl) {
 		const response = await fetchImpl(parsed.rawUrl, { signal: options.signal });
 		if (!response.ok) throw new Error(`GitHub raw fetch failed (${response.status}) for ${parsed.rawUrl}`);
