@@ -249,6 +249,15 @@ function renderTaskLine(task: TaskItem, theme: Theme, active = false, prefix = "
 	return `${prefix}${marker} ${taskText(task, active, theme)}${notes}`;
 }
 
+function mutedRule(theme: Theme, width: number): string {
+	const rule = "─".repeat(Math.max(1, width));
+	try {
+		return theme.fg("borderMuted", rule);
+	} catch {
+		return theme.fg("muted", rule);
+	}
+}
+
 class SingleLineText {
 	constructor(private readonly text: string) {}
 	invalidate(): void {}
@@ -258,8 +267,21 @@ class SingleLineText {
 	}
 }
 
+class RuledSingleLineText {
+	constructor(private readonly text: string, private readonly theme: Theme) {}
+	invalidate(): void {}
+	render(width: number): string[] {
+		if (!this.text.trim()) return [];
+		return [mutedRule(this.theme, width), truncateToWidth(this.text, Math.max(1, width), ""), mutedRule(this.theme, width)];
+	}
+}
+
 function singleLine(text: string): SingleLineText {
 	return new SingleLineText(text);
+}
+
+function ruledSingleLine(text: string, theme: Theme): RuledSingleLineText {
+	return new RuledSingleLineText(text, theme);
 }
 
 function formatShortcutHint(shortcut: string): string {
@@ -873,7 +895,7 @@ export default function taskPanel(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer(TASK_COMPLETE_MESSAGE_TYPE, (message: any, _options: any, theme: Theme) => {
 		const summary = typeof message?.details?.summary === "string" ? message.details.summary : typeof message?.content === "string" ? message.content : "Tasks complete";
 		const action = typeof message?.details?.action === "string" ? message.details.action : "mark_done";
-		return singleLine(renderTaskToolSummary(summary, action, theme));
+		return ruledSingleLine(renderTaskToolSummary(summary, action, theme), theme);
 	});
 
 	const compactToolOutput = settingBoolean("compactToolOutput", true);
