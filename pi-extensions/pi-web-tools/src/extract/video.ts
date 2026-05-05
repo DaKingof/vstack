@@ -42,6 +42,15 @@ export interface LocalVideoExtractResult {
 
 const DEFAULT_PROMPT = "Describe the contents of this video. Include important visual details, text on screen, and approximate timestamps for major sections.";
 
+const TRANSCRIPT_KEYWORDS = /\b(transcri[bp]|transcription|verbatim|subtitle|caption|lyrics?\b)/i;
+const TIMESTAMP_DIRECTIVE = "\n\nFormat the output as a transcript with [HH:MM:SS] timestamps at every line break (every 10-15 seconds). Include spoken dialogue, lyrics, and notable visual cues. Do not omit timestamps.";
+
+function enhancePrompt(input: string | undefined): string {
+	const base = input ?? DEFAULT_PROMPT;
+	if (input && TRANSCRIPT_KEYWORDS.test(input) && !/\[hh:mm/i.test(input)) return base + TIMESTAMP_DIRECTIVE;
+	return base;
+}
+
 async function uploadVideoToGemini(filePath: string, apiKey: string, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<{ uri: string; mimeType: string }> {
 	const data = await readFile(filePath);
 	const mimeType = videoMimeForPath(filePath);
@@ -93,7 +102,7 @@ export async function extractLocalVideo(filePath: string, options: LocalVideoExt
 	const { uri, mimeType } = await uploadVideoToGemini(filePath, options.geminiApiKey, fetchImpl, options.signal);
 	const model = options.geminiModel ?? "gemini-2.5-flash";
 	const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(options.geminiApiKey)}`;
-	const body = { contents: [{ role: "user", parts: [{ fileData: { fileUri: uri, mimeType } }, { text: options.prompt ?? DEFAULT_PROMPT }] }] };
+	const body = { contents: [{ role: "user", parts: [{ fileData: { fileUri: uri, mimeType } }, { text: enhancePrompt(options.prompt) }] }] };
 	const response = await fetchImpl(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: options.signal });
 	if (!response.ok) {
 		const text = await response.text().catch(() => "");

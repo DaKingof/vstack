@@ -53,11 +53,20 @@ export interface YouTubeExtractResult {
 
 const DEFAULT_PROMPT = "Provide a structured summary of the video: title (if shown), key topics, important quotes, and any visual details. Include approximate timestamps for major sections.";
 
+const TRANSCRIPT_KEYWORDS = /\b(transcri[bp]|transcription|verbatim|subtitle|caption|lyrics?\b)/i;
+const TIMESTAMP_DIRECTIVE = "\n\nFormat the output as a transcript with [HH:MM:SS] timestamps at every line break (every 10-15 seconds). Include spoken dialogue, lyrics, and notable visual cues. Do not omit timestamps.";
+
+function enhancePrompt(input: string | undefined): string {
+	const base = input ?? DEFAULT_PROMPT;
+	if (input && TRANSCRIPT_KEYWORDS.test(input) && !/\[hh:mm/i.test(input)) return base + TIMESTAMP_DIRECTIVE;
+	return base;
+}
+
 async function tryGeminiWeb(parsed: ParsedYouTubeUrl, options: YouTubeExtractOptions): Promise<YouTubeExtractResult | undefined> {
 	const cookies = await readBrowserCookies({ ...(options.browserCookies ?? {}), requiredCookies: ["__Secure-1PSID", "__Secure-1PSIDTS"] });
 	if (!cookies) return undefined;
 	const client = new GeminiWebClient(cookies.cookies, options.fetchImpl ?? fetch);
-	const prompt = `${options.prompt ?? DEFAULT_PROMPT}\n\nYouTube video: ${parsed.canonicalUrl}`;
+	const prompt = `${enhancePrompt(options.prompt)}\n\nYouTube video: ${parsed.canonicalUrl}`;
 	const text = await client.query(prompt, { model: options.geminiModel, signal: options.signal, timeoutMs: options.timeoutMs });
 	return {
 		videoId: parsed.videoId,
@@ -75,7 +84,7 @@ async function tryGeminiApi(parsed: ParsedYouTubeUrl, options: YouTubeExtractOpt
 	const model = options.geminiModel ?? "gemini-2.5-flash";
 	const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(options.geminiApiKey)}`;
 	const body = {
-		contents: [{ role: "user", parts: [{ fileData: { fileUri: parsed.canonicalUrl, mimeType: "video/mp4" } }, { text: options.prompt ?? DEFAULT_PROMPT }] }],
+		contents: [{ role: "user", parts: [{ fileData: { fileUri: parsed.canonicalUrl, mimeType: "video/mp4" } }, { text: enhancePrompt(options.prompt) }] }],
 	};
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const response = await fetchImpl(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: options.signal });
