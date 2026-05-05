@@ -1132,7 +1132,8 @@ function statuslineContextInfo(ctx: ExtensionContext): { label: string; percent:
 
 function gitBadge(state: GitState, showDirtyMarker: boolean): string {
 	if (!state.branch) return "";
-	return ` (${state.branch}${state.dirty && showDirtyMarker ? "*" : ""})`;
+	const icon = state.inLinkedWorktree || state.branch !== "main" ? `🌳 ${state.branch}` : "🦀";
+	return ` (${icon}${state.dirty && showDirtyMarker ? "*" : ""})`;
 }
 
 function makeFallbackGitState(cwd: string): GitState {
