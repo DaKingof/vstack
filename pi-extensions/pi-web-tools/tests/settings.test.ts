@@ -113,13 +113,16 @@ test("loadSettings resolves op:// API key references with op CLI", () => {
 	writeFileSync(join(user, "settings.json"), JSON.stringify({ vstack: { extensionManager: { config: { "pi-web-tools": { exaApiKey: "op://vault/exa/key" } } } } }));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	const previousPath = process.env.PATH;
+	const previousExa = process.env.EXA_API_KEY;
 	process.env.PI_CODING_AGENT_DIR = user;
 	process.env.PATH = `${bin}:${previousPath}`;
+	delete process.env.EXA_API_KEY;
 	try {
 		const settings = loadSettings(project);
 		assert.equal(settings.apiKeys.exa, "resolved-exa");
 	} finally {
 		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousDir;
 		process.env.PATH = previousPath;
+		if (previousExa === undefined) delete process.env.EXA_API_KEY; else process.env.EXA_API_KEY = previousExa;
 	}
 });

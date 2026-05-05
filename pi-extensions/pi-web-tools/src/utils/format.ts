@@ -7,6 +7,9 @@ export function jsonText(value: unknown): string {
 	return JSON.stringify(value, null, 2);
 }
 
-export function sourceList(results: Array<{ title?: string; url?: string }>): string {
-	return results.map((result, index) => `${index + 1}. ${result.title || result.url || "Untitled"}${result.url ? ` — ${result.url}` : ""}`).join("\n");
+export function sourceList(results: Array<{ title?: string; url?: string; contentId?: string }>): string {
+	return results.map((result, index) => {
+		const bits = [result.url, result.contentId ? `content id ${result.contentId}` : undefined].filter(Boolean).join(" — ");
+		return `${index + 1}. ${result.title || result.url || "Untitled"}${bits ? ` — ${bits}` : ""}`;
+	}).join("\n");
 }

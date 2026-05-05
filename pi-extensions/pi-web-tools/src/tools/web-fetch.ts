@@ -161,7 +161,8 @@ export function createWebFetchToolDefinition(pi: ExtensionAPI, getSettings: (cwd
 				const item = stored[index]!;
 				const itemPreview = Array.isArray(preview?.items) ? preview.items.find((candidate: any) => candidate?.id === item.id) : undefined;
 				const previewMeta = itemPreview?.truncated ? ` · preview ${itemPreview.shownCharacters}/${itemPreview.fullCharacters} chars` : "";
-				lines.push(`${tree(theme, index === stored.length - 1 ? "└" : "├")}${accent(theme, displayTitle(item))}${muted(theme, ` · content id ${item.id}${previewMeta}`)}`);
+				const itemMeta = [item.url, previewMeta ? previewMeta.replace(/^ · /, "") : undefined].filter(Boolean).join(" · ");
+				lines.push(`${tree(theme, index === stored.length - 1 ? "└" : "├")}${accent(theme, displayTitle(item))}${itemMeta ? muted(theme, ` · ${itemMeta}`) : ""}`);
 			}
 			if (stored.length > 3) lines.push(`${tree(theme, "└")}${muted(theme, `… ${stored.length - 3} more`)}`);
 			return textComponent(lines.join("\n"));

@@ -7,7 +7,7 @@ import { resolveWebProvider } from "../provider-selection.js";
 import type { WebProvider, WebToolsSettings } from "../settings.js";
 import { storeWebContent } from "../storage.js";
 import { sourceList } from "../utils/format.js";
-import { accent, emptyComponent, errorSummary, firstText, muted, providerLabel, successSummary, textComponent, tree, webCallText } from "../utils/render.js";
+import { accent, emptyComponent, errorSummary, firstText, muted, oneLine, providerLabel, successSummary, textComponent, tree, webCallText } from "../utils/render.js";
 
 const providers = ["auto", "exa", "openai-native", "perplexity", "gemini"] as const;
 
@@ -61,7 +61,8 @@ export function createWebSearchToolDefinition(pi: ExtensionAPI, getSettings: (cw
 			for (let index = 0; index < shown.length; index++) {
 				const item = shown[index]!;
 				const title = item.title || item.url || "Untitled";
-				lines.push(`${tree(theme, index === shown.length - 1 && results.length <= shown.length ? "└" : "├")}${accent(theme, title)}${item.contentId ? muted(theme, ` · ${item.contentId}`) : ""}`);
+				const meta = [item.url ? oneLine(item.url, 76) : undefined].filter(Boolean).join(" · ");
+				lines.push(`${tree(theme, index === shown.length - 1 && results.length <= shown.length ? "└" : "├")}${accent(theme, title)}${meta ? muted(theme, ` · ${meta}`) : ""}`);
 			}
 			if (results.length > (options?.expanded ? 8 : 3)) lines.push(`${tree(theme, "└")}${muted(theme, `… ${results.length - (options?.expanded ? 8 : 3)} more · Ctrl+O to expand`)}`);
 			return textComponent(lines.join("\n"));
@@ -87,12 +88,17 @@ export function createWebSearchToolDefinition(pi: ExtensionAPI, getSettings: (cw
 					endPublishedDate: params.endPublishedDate,
 				}, signal);
 				for (const result of response.results) {
-					const stored = result.text || result.summary ? storeWebContent(pi, { title: result.title, url: result.url, content: result.text || result.summary || "", metadata: { query, provider: "exa" } }) : undefined;
+					const stored = result.text || result.summary ? storeWebContent(pi, {
+						title: result.title,
+						url: result.url,
+						content: result.text || result.summary || "",
+						metadata: { query, provider: "exa", tool: name, contentKind: "search-result", providerTextMaxCharacters: params.textMaxCharacters ?? 12000 },
+					}) : undefined;
 					all.push({ ...result, contentId: stored?.id });
 				}
 			}
 			return {
-				content: [{ type: "text", text: `Provider: exa\nResults: ${all.length}\n${sourceList(all)}${all.some((r) => r.contentId) ? "\n\nUse get_web_content with contentId for stored full text." : ""}` }],
+				content: [{ type: "text", text: `Provider: exa\nResults: ${all.length}\n${sourceList(all)}${all.some((r) => r.contentId) ? "\n\nUse get_web_content with the content id for stored full text." : ""}` }],
 				details: { provider: "exa", results: all },
 			};
 		},

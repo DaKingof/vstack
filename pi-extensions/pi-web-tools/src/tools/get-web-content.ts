@@ -26,6 +26,11 @@ function displayTitle(item: { title?: string; url?: string; id?: string }): stri
 	return item.title?.trim() || fallbackTitle(item.url, item.id || "content");
 }
 
+function isStoredExcerpt(metadata: Record<string, unknown> | undefined): boolean {
+	const kind = String(metadata?.contentKind ?? "");
+	return ["search-result", "code-search-result", "answer-source", "similar-result"].includes(kind);
+}
+
 export function createGetWebContentToolDefinition(name = "get_web_content") {
 	return {
 		renderShell: "self" as const,
@@ -36,7 +41,7 @@ export function createGetWebContentToolDefinition(name = "get_web_content") {
 		parameters: getWebContentSchema,
 		renderCall(args: GetWebContentInput, theme: any, context: any) {
 			if (context?.executionStarted && !context?.isPartial) return emptyComponent();
-			return textComponent(webCallText(theme, providerLabel("Get Web Content", "session"), args?.id ?? "content id", args?.maxCharacters ? `${args.maxCharacters} chars` : undefined));
+			return textComponent(webCallText(theme, providerLabel("Get Web Content", "session"), args?.id ? "stored content" : "content", args?.maxCharacters ? `${args.maxCharacters} chars` : undefined));
 		},
 		renderResult(result: any, options: any, theme: any, context: any) {
 			if (options?.isPartial) return emptyComponent();
@@ -48,17 +53,20 @@ export function createGetWebContentToolDefinition(name = "get_web_content") {
 				return textComponent(lines.join("\n"));
 			}
 			const details = result?.details ?? {};
-			const provider = details?.metadata?.provider ?? "stored";
+			const metadata = details?.metadata as Record<string, unknown> | undefined;
+			const provider = metadata?.provider ?? "stored";
 			const title = displayTitle({ title: details.title, url: details.url, id: details.id ?? context?.args?.id });
 			const contentLength = typeof details.contentLength === "number" ? details.contentLength : 0;
 			const maxCharacters = typeof details.maxCharacters === "number" ? details.maxCharacters : contentLength;
 			const shownCharacters = Math.min(contentLength, Math.max(0, maxCharacters));
 			const lengthMeta = details.truncated ? `${shownCharacters}/${contentLength} chars` : `${contentLength} chars`;
-			const meta = [lengthMeta, details.truncated ? "truncated" : "full"].filter(Boolean).join(" · ");
-			const rows = [details.id ? "contentId" : undefined, provider ? "source" : undefined, details.url ? "url" : undefined].filter(Boolean);
+			const excerpt = isStoredExcerpt(metadata);
+			const providerCap = typeof metadata?.providerTextMaxCharacters === "number" ? metadata.providerTextMaxCharacters : undefined;
+			const meta = [lengthMeta, details.truncated ? "truncated" : excerpt ? "stored excerpt" : "full"].filter(Boolean).join(" · ");
+			const rows = [provider ? "source" : undefined, providerCap ? "providerCap" : undefined, details.url ? "url" : undefined].filter(Boolean);
 			const lines = [successSummary(theme, providerLabel("Get Web Content", "session"), title, meta)];
-			if (details.id) lines.push(`${tree(theme, rows.at(-1) === "contentId" ? "└" : "├")}${muted(theme, "content id ")}${accent(theme, details.id)}`);
 			if (provider) lines.push(`${tree(theme, rows.at(-1) === "source" ? "└" : "├")}${muted(theme, "source ")}${accent(theme, providerDisplayName(provider))}`);
+			if (providerCap) lines.push(`${tree(theme, rows.at(-1) === "providerCap" ? "└" : "├")}${muted(theme, "provider cap ")}${accent(theme, `${providerCap} chars`)}`);
 			if (details.url) lines.push(`${tree(theme, "└")}${muted(theme, details.url)}`);
 			return textComponent(lines.join("\n"));
 		},

@@ -30,9 +30,9 @@ function registerTools(pi: ExtensionAPI): void {
 	pi.registerTool(createWebSearchToolDefinition(pi, currentSettings) as never);
 	pi.registerTool(createWebFetchToolDefinition(pi, currentSettings) as never);
 	pi.registerTool(createWebResearchToolDefinition(pi, currentSettings) as never);
-	pi.registerTool(createWebAnswerToolDefinition(currentSettings) as never);
-	pi.registerTool(createWebFindSimilarToolDefinition(currentSettings) as never);
-	pi.registerTool(createCodeSearchToolDefinition(currentSettings) as never);
+	pi.registerTool(createWebAnswerToolDefinition(pi, currentSettings) as never);
+	pi.registerTool(createWebFindSimilarToolDefinition(pi, currentSettings) as never);
+	pi.registerTool(createCodeSearchToolDefinition(pi, currentSettings) as never);
 	pi.registerTool(createGetWebContentToolDefinition() as never);
 	if (currentSettings().compatibilityTools) {
 		pi.registerTool(createWebFetchToolDefinition(pi, currentSettings, "fetch_content") as never);
@@ -40,8 +40,8 @@ function registerTools(pi: ExtensionAPI): void {
 		pi.registerTool(createWebSearchToolDefinition(pi, currentSettings, "web_search_exa", "exa") as never);
 		pi.registerTool(createWebFetchToolDefinition(pi, currentSettings, "web_fetch_exa") as never);
 		pi.registerTool(createWebResearchToolDefinition(pi, currentSettings, "web_research_exa") as never);
-		pi.registerTool(createWebAnswerToolDefinition(currentSettings, "web_answer_exa") as never);
-		pi.registerTool(createWebFindSimilarToolDefinition(currentSettings, "web_find_similar_exa") as never);
+		pi.registerTool(createWebAnswerToolDefinition(pi, currentSettings, "web_answer_exa") as never);
+		pi.registerTool(createWebFindSimilarToolDefinition(pi, currentSettings, "web_find_similar_exa") as never);
 	}
 }
 
