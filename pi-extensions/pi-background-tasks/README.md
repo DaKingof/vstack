@@ -38,6 +38,7 @@ Built-in auto-background matches are intentionally conservative:
 
 - `watch ...`
 - `tail -f ...` and `journalctl -f ...`
+- delayed Pi session/tmux monitors such as `sleep 50; pi-bridge history ...`
 - shell loops with `sleep` that appear to monitor Pi session bridge, tmux panes, subagent/delegate state, or long finite/open-ended polling loops
 
 Use `Alt+.` or `/bg next` when you know the next bash command should be backgrounded even if it does not match the conservative patterns. The shortcut cannot detach a bash process that has already started, because Pi's built-in bash tool does not expose a public process handle to extensions. If pressed while a tool is already running, it applies to the next bash command that has not yet started.

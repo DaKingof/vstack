@@ -359,6 +359,22 @@ function loopIterationCount(command: string): number | null {
 	return Math.abs(end - start) + 1;
 }
 
+function sleepSeconds(command: string): number | null {
+	const match = command.match(/\bsleep\s+((?:\d+(?:\.\d+)?)|(?:\.\d+))\s*([smhd])?\b/i);
+	if (!match) return null;
+	const value = Number.parseFloat(match[1] ?? "");
+	if (!Number.isFinite(value)) return null;
+	const unit = (match[2] ?? "s").toLowerCase();
+	if (unit === "d") return value * 86_400;
+	if (unit === "h") return value * 3_600;
+	if (unit === "m") return value * 60;
+	return value;
+}
+
+function looksLikeSessionMonitor(command: string): boolean {
+	return /\b(?:pi-bridge|tmux|capture-pane|list-panes|has-session|delegate-state|subagent|session)\b/i.test(command);
+}
+
 interface BashBackgroundDecision {
 	forced: boolean;
 	notifyOnExit: boolean;
@@ -401,11 +417,22 @@ function autoBackgroundDecision(command: string, cwd?: string): BashBackgroundDe
 		};
 	}
 
+	const delaySeconds = sleepSeconds(normalized);
+	if (delaySeconds !== null && delaySeconds >= 5 && looksLikeSessionMonitor(normalized)) {
+		return {
+			forced: false,
+			notifyOnExit: true,
+			notifyOnOutput: false,
+			reason: "delayed session/tmux monitoring command",
+			title: `monitor: ${compactText(normalized, 72)}`,
+		};
+	}
+
 	const hasShellLoop = /\b(?:for|while|until)\b/i.test(normalized) && /\bdo\b/i.test(normalized) && /\bdone\b/i.test(normalized);
 	const hasSleep = /\bsleep\s+(?:\d+(?:\.\d+)?|\.\d+)/i.test(normalized);
 	if (hasShellLoop && hasSleep) {
 		const iterations = loopIterationCount(normalized);
-		const looksLikeMonitor = /\b(?:pi-bridge|tmux|capture-pane|list-panes|has-session|delegate-state|subagent|session)\b/i.test(normalized);
+		const looksLikeMonitor = looksLikeSessionMonitor(normalized);
 		const longFiniteLoop = iterations !== null && iterations >= 30;
 		const openEndedLoop = /\bwhile\s+(?:true|:)\b/i.test(normalized) || /\buntil\b/i.test(normalized);
 		if (looksLikeMonitor || longFiniteLoop || openEndedLoop) {
