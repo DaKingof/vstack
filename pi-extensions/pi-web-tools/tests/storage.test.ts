@@ -107,6 +107,20 @@ test("web_fetch renderer shows concise preview shown/full metadata when preview-
 	assert.doesNotMatch(rendered, /GitHub\/Auto/);
 });
 
+test("web_fetch renders cached at row when GitHub clone metadata is present", () => {
+	const tool = createWebFetchToolDefinition({} as any, () => ({}) as any);
+	const result = buildWebFetchToolResult([{
+		id: "web-gh",
+		title: "owner/repo",
+		url: "https://github.com/owner/repo",
+		content: "# owner/repo",
+		createdAt: "2026-01-01T00:00:00.000Z",
+		metadata: { provider: "github", extraction: "clone", cachePath: "/home/user/.pi/agent/cache/github/owner__repo" },
+	}], "github");
+	const rendered = tool.renderResult(result, {}, theme, { args: { provider: "auto", url: "https://github.com/owner/repo" } }).render(200).join("\n");
+	assert.match(rendered, /cached at \/home\/user\/\.pi\/agent\/cache\/github\/owner__repo/);
+});
+
 test("web_fetch labels HTTP+Jina when extraction fell back through Jina", () => {
 	const tool = createWebFetchToolDefinition({} as any, () => ({}) as any);
 	const result = buildWebFetchToolResult([{

@@ -171,8 +171,12 @@ export function createWebFetchToolDefinition(pi: ExtensionAPI, getSettings: (cwd
 				const itemPreview = Array.isArray(preview?.items) ? preview.items.find((candidate: any) => candidate?.id === item.id) : undefined;
 				const suppressLeafPreview = stored.length === 1 && preview?.truncated;
 				const previewMeta = !suppressLeafPreview && itemPreview?.truncated ? `preview ${itemPreview.shownCharacters}/${itemPreview.fullCharacters} chars` : "";
+				const cachePath = typeof item?.metadata?.cachePath === "string" ? item.metadata.cachePath : undefined;
 				const itemMeta = [item.url, previewMeta || undefined].filter(Boolean).join(" · ");
-				lines.push(`${tree(theme, index === stored.length - 1 ? "└" : "├")}${accent(theme, displayTitle(item))}${itemMeta ? muted(theme, ` · ${itemMeta}`) : ""}`);
+				const hasCache = Boolean(cachePath);
+				const connector = index === stored.length - 1 && !hasCache ? "└" : "├";
+				lines.push(`${tree(theme, connector)}${accent(theme, displayTitle(item))}${itemMeta ? muted(theme, ` · ${itemMeta}`) : ""}`);
+				if (cachePath) lines.push(`${tree(theme, index === stored.length - 1 ? "└" : "├")}${muted(theme, "cached at ")}${accent(theme, cachePath)}`);
 			}
 			if (stored.length > 3) lines.push(`${tree(theme, "└")}${muted(theme, `… ${stored.length - 3} more`)}`);
 			return textComponent(lines.join("\n"));
