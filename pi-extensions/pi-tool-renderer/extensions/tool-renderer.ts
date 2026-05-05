@@ -1941,6 +1941,7 @@ const OPENAI_STYLE_TOOL_NAMES = new Set([
 	"TaskOutput",
 	"TaskStop",
 	"TaskExecute",
+	"ScheduleWakeup",
 ]);
 
 type ToolChromeMode = "off" | "transparent" | "outlines";
@@ -2219,6 +2220,22 @@ function renderApplyPatchResult(result: any, { expanded, isPartial }: any, theme
 	return makeTruncatedLines(text);
 }
 
+function formatScheduleWakeupDelay(value: unknown): string {
+	const seconds = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+	if (!Number.isFinite(seconds) || seconds <= 0) return "later";
+	if (seconds < 60) return `${Math.round(seconds)}s`;
+	const minutes = seconds / 60;
+	if (minutes < 60) return `${Number.isInteger(minutes) ? minutes : minutes.toFixed(1)}m`;
+	const hours = minutes / 60;
+	return `${Number.isInteger(hours) ? hours : hours.toFixed(1)}h`;
+}
+
+function summarizeScheduleWakeupCall(args: any, theme: any): string {
+	const delay = formatScheduleWakeupDelay(args?.delaySeconds ?? args?.delay_seconds ?? args?.delay ?? args?.seconds);
+	const reason = stringArg(args, "reason", "prompt", "description") || "scheduled wakeup";
+	return `${theme.fg("accent", delay)}${theme.fg("dim", " · ")}${theme.fg("muted", oneLine(reason, 56))}`;
+}
+
 function summarizeGenericCall(name: string, args: any, theme: any): string {
 	if (isMcpToolName(name)) {
 		const parts = name.split("__").filter(Boolean);
@@ -2246,6 +2263,7 @@ function summarizeGenericCall(name: string, args: any, theme: any): string {
 			const ids = stringArrayArg(args, "taskIds", "task_ids");
 			return ids.length <= 1 ? theme.fg("accent", ids[0] ?? "start tasks") : `${theme.fg("accent", ids[0]!)}${theme.fg("muted", ` +${ids.length - 1} tasks`)}`;
 		}
+		case "ScheduleWakeup": return summarizeScheduleWakeupCall(args, theme);
 		default: return theme.fg("accent", oneLine(stringArg(args, "path", "file_path", "url", "query", "name", "subject", "tool", "description", "prompt") || humanizeToolName(name), 72));
 	}
 }
@@ -2261,6 +2279,10 @@ function renderGenericToolResult(name: string, result: any, { expanded, isPartia
 	const lines = raw ? raw.split(/\r?\n/) : [];
 	const mode = isMcpToolName(name) ? mcpOutputMode(context?.cwd) : "preview";
 	if (mode === "hidden") return makeEmpty();
+	if (name === "ScheduleWakeup" && context?.isError) {
+		const first = lines.find((line) => /not found/i.test(line)) || lines[0] || "Tool ScheduleWakeup not found";
+		return makeTruncatedLines(`${treeConnector(theme, "└")}${theme.fg("error", "x tool not found")}${theme.fg("dim", " · ")}${theme.fg("muted", first)}`);
+	}
 	if (context?.isError) {
 		const first = lines[0] || `${humanizeToolName(name)} failed`;
 		return makeTruncatedLines(`${treeConnector(theme, "└")}${theme.fg("error", first)}`);
