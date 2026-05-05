@@ -2301,6 +2301,34 @@ function renderGenericToolCall(name: string, args: any, theme: any, context: any
 	return makeTruncatedLines(`${genericStatusPrefix(context, theme)}${toolLabel(theme, `${humanizeToolName(name)} `)}${summarizeGenericCall(name, args, theme)}`);
 }
 
+function renderScheduleWakeupCall(args: any, theme: any, context: any): TruncatedLines | ReturnType<typeof makeEmpty> {
+	if (context?.executionStarted) return makeEmpty();
+	return makeTruncatedLines(`${genericStatusPrefix(context, theme)}${toolLabel(theme, "Schedule Wakeup ")}${summarizeScheduleWakeupCall(args, theme)}`);
+}
+
+function renderScheduleWakeupResult(result: any, { expanded, isPartial }: any, theme: any, context: any): TruncatedLines | ReturnType<typeof makeEmpty> {
+	if (isPartial) return makeEmpty();
+	clearBlink(context);
+	const raw = textContent(result).trim();
+	const args = context?.args ?? {};
+	const notFound = context?.isError && /not found/i.test(raw);
+	const status = context?.isError
+		? theme.fg("error", notFound ? "x not found" : "x error")
+		: theme.fg("success", "done");
+	let text = `${stackPrefix(theme)}${toolLabel(theme, "Schedule Wakeup ")}${summarizeScheduleWakeupCall(args, theme)}${theme.fg("dim", " · ")}${status}`;
+	if (!expanded) return makeTruncatedLines(`${text}${theme.fg("dim", " · Ctrl+O")}`);
+	const json = JSON.stringify(args, null, 2).split(/\r?\n/);
+	text += `\n${treeConnector(theme, raw ? "├" : "└", context?.cwd)}${theme.fg("muted", "args")}`;
+	text += `\n${json.map((line) => `${treeStem(theme, raw ? "├" : "└", context?.cwd)}${theme.fg("dim", clipLine(line, context?.cwd))}`).join("\n")}`;
+	if (raw) {
+		const lines = raw.split(/\r?\n/);
+		text += `\n${treeConnector(theme, "└", context?.cwd)}${theme.fg(context?.isError ? "error" : "muted", clipLine(lines[0] ?? raw, context?.cwd))}`;
+		for (const line of lines.slice(1, 8)) text += `\n${treeStem(theme, "└", context?.cwd)}${theme.fg("dim", clipLine(line, context?.cwd))}`;
+		if (lines.length > 8) text += `\n${treeStem(theme, "└", context?.cwd)}${theme.fg("muted", `… ${lines.length - 8} more line(s)`)}`;
+	}
+	return makeTruncatedLines(text);
+}
+
 function renderGenericToolResult(name: string, result: any, { expanded, isPartial }: any, theme: any, context: any): TruncatedLines | ReturnType<typeof makeEmpty> {
 	if (isPartial) return renderPendingDetail(`${humanizeToolName(name)}…`, theme);
 	clearBlink(context);
@@ -2308,10 +2336,6 @@ function renderGenericToolResult(name: string, result: any, { expanded, isPartia
 	const lines = raw ? raw.split(/\r?\n/) : [];
 	const mode = isMcpToolName(name) ? mcpOutputMode(context?.cwd) : "preview";
 	if (mode === "hidden") return makeEmpty();
-	if (name === "ScheduleWakeup" && context?.isError) {
-		const first = lines.find((line) => /not found/i.test(line)) || lines[0] || "Tool ScheduleWakeup not found";
-		return makeTruncatedLines(`${treeConnector(theme, "└")}${theme.fg("error", "x tool not found")}${theme.fg("dim", " · ")}${theme.fg("muted", first)}`);
-	}
 	if (context?.isError) {
 		const first = lines[0] || `${humanizeToolName(name)} failed`;
 		return makeTruncatedLines(`${treeConnector(theme, "└")}${theme.fg("error", first)}`);
@@ -2339,6 +2363,9 @@ function installToolExecutionRendererPatch(pi: ExtensionAPI): void {
 	const state = { originalGetCallRenderer, originalGetResultRenderer };
 	proto.getCallRenderer = function patchedGetCallRenderer(this: any) {
 		const toolName = typeof this?.toolName === "string" ? this.toolName : "";
+		if (toolName === "ScheduleWakeup" && settingBoolean("genericToolRenderers", true)) {
+			return (args: any, theme: any, context: any) => renderScheduleWakeupCall(args, theme, context);
+		}
 		if (toolName === "apply_patch" && settingBoolean("applyPatchRenderer", true) && !componentDefinesRenderer(this, "renderCall")) {
 			return (args: any, theme: any, context: any) => renderApplyPatchCall(args, theme, context);
 		}
@@ -2349,6 +2376,9 @@ function installToolExecutionRendererPatch(pi: ExtensionAPI): void {
 	};
 	proto.getResultRenderer = function patchedGetResultRenderer(this: any) {
 		const toolName = typeof this?.toolName === "string" ? this.toolName : "";
+		if (toolName === "ScheduleWakeup" && settingBoolean("genericToolRenderers", true)) {
+			return (result: any, options: any, theme: any, context: any) => renderScheduleWakeupResult(result, options, theme, context);
+		}
 		if (toolName === "apply_patch" && settingBoolean("applyPatchRenderer", true) && !componentDefinesRenderer(this, "renderResult")) {
 			return (result: any, options: any, theme: any, context: any) => renderApplyPatchResult(result, options, theme, context);
 		}
