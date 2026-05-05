@@ -276,6 +276,7 @@ interface VstackModalLock {
 }
 
 interface ThinkingTimerStore {
+	cwd?: string;
 	enabled: boolean;
 	starts: Map<string, number>;
 	durations: Map<string, number>;
@@ -420,6 +421,8 @@ function permissionGatePrompt(matched: string, command: string, cwd?: string): s
 	].join("\n");
 }
 
+const THINKING_LABEL_DEFAULT = "󰍛";
+
 const lastNotificationAt = new Map<string, number>();
 const lastQuestionNotificationAt = new Map<string, number>();
 let tmuxMarkedTarget: string | undefined;
@@ -438,8 +441,13 @@ function formatThinkingElapsed(ms: number): string {
 	return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
 }
 
-function thinkingTimerLabel(theme: ThinkingTimerStore["theme"], ms: number): string {
-	const base = "Thinking...";
+function thinkingLabel(cwd?: string): string {
+	const configured = settingString("thinkingLabel.text", THINKING_LABEL_DEFAULT, cwd).trim();
+	return configured || THINKING_LABEL_DEFAULT;
+}
+
+function thinkingTimerLabel(theme: ThinkingTimerStore["theme"], ms: number, cwd?: string): string {
+	const base = thinkingLabel(cwd);
 	const elapsed = ` ${formatThinkingElapsed(ms)}`;
 	if (!theme) return `${base}${elapsed}`;
 	return theme.italic(theme.fg("thinkingText", base) + theme.fg("dim", elapsed));
@@ -476,7 +484,8 @@ function installThinkingTimerPatch(): void {
 				if (!child || typeof child !== "object") continue;
 				if (typeof child.setText !== "function") continue;
 				if (typeof child.text !== "string") continue;
-				if (!child.text.includes("Thinking...")) continue;
+				const expectedLabel = thinkingLabel(store.cwd);
+				if (!child.text.includes(expectedLabel) && !child.text.includes("Thinking...")) continue;
 				labelComponents.push(child as Text);
 			}
 			if (labelComponents.length === 0) return;
@@ -490,7 +499,7 @@ function installThinkingTimerPatch(): void {
 				const duration = store.durations.get(key);
 				const start = store.starts.get(key);
 				const ms = duration ?? (start === undefined ? undefined : Date.now() - start);
-				if (ms !== undefined) label.setText(thinkingTimerLabel(store.theme, ms));
+				if (ms !== undefined) label.setText(thinkingTimerLabel(store.theme, ms, store.cwd));
 			}
 		} catch {
 			// Rendering must never break because of this optional monkey-patch.
@@ -3735,7 +3744,7 @@ export default function qol(pi: ExtensionAPI): void {
 		}
 		for (const [key, start] of thinkingTimerStore.starts.entries()) {
 			const label = thinkingTimerStore.labels.get(key);
-			if (label) label.setText(thinkingTimerLabel(thinkingTimerStore.theme, Date.now() - start));
+			if (label) label.setText(thinkingTimerLabel(thinkingTimerStore.theme, Date.now() - start, thinkingTimerStore.cwd));
 		}
 	};
 
@@ -3750,11 +3759,13 @@ export default function qol(pi: ExtensionAPI): void {
 		thinkingTimerStore.starts.clear();
 		thinkingTimerStore.durations.clear();
 		thinkingTimerStore.labels.clear();
+		thinkingTimerStore.cwd = ctx?.cwd;
 		thinkingTimerStore.theme = ctx?.ui.theme;
 		thinkingTimerStore.enabled = !!ctx?.hasUI && settingBoolean("thinkingTimer.enabled", true, ctx?.cwd);
 	};
 
 	const updateThinkingTimerEnabled = (ctx: ExtensionContext): boolean => {
+		thinkingTimerStore.cwd = ctx.cwd;
 		thinkingTimerStore.theme = ctx.ui.theme;
 		const enabled = ctx.hasUI && settingBoolean("thinkingTimer.enabled", true, ctx.cwd);
 		if (thinkingTimerStore.enabled && !enabled) resetThinkingTimer(ctx);
@@ -3769,7 +3780,7 @@ export default function qol(pi: ExtensionAPI): void {
 		thinkingTimerStore.starts.delete(key);
 		thinkingTimerStore.durations.set(key, duration);
 		const label = thinkingTimerStore.labels.get(key);
-		if (label) label.setText(thinkingTimerLabel(thinkingTimerStore.theme, duration));
+		if (label) label.setText(thinkingTimerLabel(thinkingTimerStore.theme, duration, thinkingTimerStore.cwd));
 		if (thinkingTimerStore.starts.size === 0) stopThinkingTimerTicker();
 	};
 
@@ -3972,6 +3983,7 @@ export default function qol(pi: ExtensionAPI): void {
 		installAutocompleteHintStyling(ctx);
 		installPendingQueueThemePatch(ctx);
 		if (ctx.hasUI) {
+			ctx.ui.setHiddenThinkingLabel(thinkingLabel(ctx.cwd));
 			gitState = makeFallbackGitState(ctx.cwd);
 			void refreshStatusline(ctx);
 			installSessionTitle(ctx);
