@@ -35,7 +35,8 @@ Per-call arguments can be flat, as above, or `{ "tool": "read", "args": { "path"
 Enable through `pi-extension-manager` settings:
 
 - `renderMutationTools=true`: compact `edit`/`write` renderers with rich red/green diff summaries, hunk counts, syntax highlighting, and optional side-by-side previews (`splitDiffs`).
-- `renderBashDiffs=true`: render unified/git diffs found in bash output with the same diff preview.
+- `renderBashDiffs=false`: keep read-only bash commands that output unified/git patches to a single compact summary line by default; enable to render those outputs with the rich Shiki diff UI.
+- `renderGitDiffCommandDiffs=false`: keep explicit `git diff` bash commands to a single compact summary line by default; enable to restore the rich Shiki diff UI for those commands.
 - `applyPatchRenderer` / `applyPatchPreview`: render `apply_patch` calls/results with parsed file patch previews.
 - Generic OpenAI-style tool renderers for names such as `web_search`, `webfetch`, `fetch_content`, `Agent`, and `Task*`.
 - MCP-looking tool renderers (`mcp`, `mcp__server__tool`, etc.) with `mcpOutputMode`.

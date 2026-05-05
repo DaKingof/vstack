@@ -167,9 +167,18 @@
         {
           "key": "renderBashDiffs",
           "label": "Render bash diffs",
-          "description": "Detect unified/git diff output from bash and render it with the rich split diff view.",
+          "description": "Detect unified/git diff output from read-only bash commands and render it with the rich split diff view. Disabled by default so only tools that actually mutate files show diff UI automatically.",
           "type": "boolean",
-          "default": true,
+          "default": false,
+          "category": "Bash",
+          "apply": "live"
+        },
+        {
+          "key": "renderGitDiffCommandDiffs",
+          "label": "Render git diff command diffs",
+          "description": "Show rich Shiki diff UI for explicit git diff bash commands. Disabled by default so git diff commands render only the compact bash summary line and are not mistaken for edits.",
+          "type": "boolean",
+          "default": false,
           "category": "Bash",
           "apply": "live"
         },

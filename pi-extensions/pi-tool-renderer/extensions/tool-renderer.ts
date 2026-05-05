@@ -450,6 +450,14 @@ function bashCallText(args: any, theme: any, cwd?: string): string {
 	return `${toolLabel(theme, "Bash $ ")}${theme.fg("accent", command ?? "")}`;
 }
 
+function isGitDiffCommand(command: unknown): boolean {
+	if (typeof command !== "string" || !command.trim()) return false;
+	const normalized = command.replace(/\\\r?\n/g, " ").replace(/\s+/g, " ").trim();
+	// Match common shell forms such as `git diff`, `git --no-pager diff`,
+	// `git -C repo diff`, `env GIT_PAGER=cat git diff`, and chained commands.
+	return /(?:^|[;&|()]\s*)(?:(?:env\s+(?:-\S+\s+)*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*)|(?:command\s+))*git(?:\s+(?!--?diff\b)(?:-[A-Za-z]\S*|--\S+)(?:\s+(?!diff(?:\s|$))\S+)*)*\s+diff(?:\s|$)/.test(normalized);
+}
+
 function readOnlyCallText(toolName: string, args: any, theme: any, cwd?: string): string {
 	const query = args?.pattern ?? args?.glob ?? args?.path ?? args?.query ?? "";
 	return `${toolLabel(theme, `${toolName} `)}${theme.fg("accent", clipLine(String(query), cwd))}`;
@@ -1378,8 +1386,24 @@ function parseUnifiedDiffOutput(output: string): UnifiedDiffFile[] | null {
 	return files.length > 0 ? files : null;
 }
 
-function renderBashDiffOutput(output: string, theme: any, expanded: boolean, cwd?: string): string | null {
-	if (!settingBoolean("renderBashDiffs", true, cwd)) return null;
+function bashDiffRenderingEnabled(cwd?: string): boolean {
+	return settingBoolean("renderBashDiffs", false, cwd);
+}
+
+function shouldRenderBashDiffsForCommand(args: any, cwd?: string): boolean {
+	return isGitDiffCommand(args?.command) ? settingBoolean("renderGitDiffCommandDiffs", false, cwd) : bashDiffRenderingEnabled(cwd);
+}
+
+function outputContainsUnifiedDiff(output: string): boolean {
+	return Boolean(parseUnifiedDiffOutput(output)?.length);
+}
+
+function suppressReadOnlyBashDiffOutput(args: any, output: string, cwd?: string): boolean {
+	return !shouldRenderBashDiffsForCommand(args, cwd) && outputContainsUnifiedDiff(output);
+}
+
+function renderBashDiffOutput(output: string, theme: any, expanded: boolean, cwd?: string, enabled = bashDiffRenderingEnabled(cwd)): string | null {
+	if (!enabled) return null;
 	const files = parseUnifiedDiffOutput(output);
 	if (!files?.length) return null;
 	const totalAdditions = files.reduce((sum, file) => sum + file.diff.additions, 0);
@@ -1396,10 +1420,11 @@ function renderBashDiffOutput(output: string, theme: any, expanded: boolean, cwd
 	let renderedFiles = 0;
 	for (const file of files) {
 		if (remainingRows !== null && remainingRows <= 0) break;
-		// For multi-file diffs, keep per-file summaries under the aggregate header.
+		// For multi-file diffs, keep per-file summaries under the aggregate header
+		// with a blank separator before each file so file boundaries are obvious.
 		// For one-file diffs, the top line already has path/stat/hunk metadata, so
 		// avoid repeating the same summary directly above the table.
-		if (!singleFile) rendered.push(`${theme.fg("accent", file.path)} ${diffSummary(file.diff, theme, cwd)}`);
+		if (!singleFile) rendered.push("", `${theme.fg("accent", file.path)} ${diffSummary(file.diff, theme, cwd)}`);
 		const fileLimit = remainingRows === null ? null : remainingRows;
 		const diffText = renderStructuredDiff(file.diff, theme, expanded, cwd, fileLimit, file.path);
 		// Keep the actual split/unified table flush with the Bash diff block. Prefixing
@@ -1585,7 +1610,11 @@ function stackItemSummary(item: StackItem, theme: any): string {
 function stackItemPreview(item: StackItem, theme: any, expanded: boolean, cwd?: string): string {
 	if (!item.resultText || item.status === "running") return "";
 	if (item.toolName === "find" || item.toolName === "ls") return renderPathListPreview(item.resultText, item.toolName, theme, expanded, cwd);
-	if (item.toolName === "bash") return renderBashDiffOutput(item.resultText, theme, expanded, cwd) ?? preview(item.resultText, Math.max(1, Math.floor(settingNumber("bashPreviewLines", 80, cwd))), "tail", cwd);
+	if (item.toolName === "bash") {
+		const renderDiffs = shouldRenderBashDiffsForCommand(item.args, cwd);
+		if (!renderDiffs && suppressReadOnlyBashDiffOutput(item.args, item.resultText, cwd)) return "";
+		return renderBashDiffOutput(item.resultText, theme, expanded, cwd, renderDiffs) ?? preview(item.resultText, Math.max(1, Math.floor(settingNumber("bashPreviewLines", 80, cwd))), "tail", cwd);
+	}
 	if (item.toolName === "read") return preview(item.resultText, Math.max(1, Math.floor(settingNumber("readPreviewLines", 80, cwd))), "head", cwd);
 	return preview(item.resultText, Math.max(1, Math.floor(settingNumber("searchPreviewLines", 80, cwd))), "head", cwd);
 }
@@ -2466,7 +2495,8 @@ function registerBash(pi: ExtensionAPI, agent: any, cwd: string): void {
 		renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
 			const stacked = stackToolCalls(context?.cwd ?? cwd);
 			if (stacked) return renderStackedToolResult("bash", result, isPartial, expanded, theme, context, cwd);
-			const call = bashCallText(context?.args ?? {}, theme, context?.cwd ?? cwd);
+			const effectiveCwd = context?.cwd ?? cwd;
+			const call = bashCallText(context?.args ?? {}, theme, effectiveCwd);
 			const output = textContent(result);
 			if (isPartial) {
 				const count = output.trim() ? output.split(/\r?\n/).filter((line) => line.trim().length > 0).length : 0;
@@ -2480,22 +2510,24 @@ function registerBash(pi: ExtensionAPI, agent: any, cwd: string): void {
 			let summary = exit !== null && exit !== 0 ? theme.fg("error", exitLabel) : theme.fg("success", exitLabel);
 			summary += theme.fg("dim", ` · ${count} line${count === 1 ? "" : "s"}`);
 			if (resultTruncated(result)) summary += theme.fg("warning", " · truncated");
-			const mode = bashOutputMode(context?.cwd ?? cwd);
+			const mode = bashOutputMode(effectiveCwd);
 			if (mode === "hidden") return makeEmpty();
 			let text = `${stackPrefix(theme)}${call}${theme.fg("dim", " · ")}${summary}`;
-			const diffPreview = output && mode !== "summary" ? renderBashDiffOutput(output, theme, expanded, context?.cwd ?? cwd) : null;
+			const renderDiffs = shouldRenderBashDiffsForCommand(context?.args ?? {}, effectiveCwd);
+			const suppressDiffOutput = output ? suppressReadOnlyBashDiffOutput(context?.args ?? {}, output, effectiveCwd) : false;
+			const diffPreview = output && mode !== "summary" ? renderBashDiffOutput(output, theme, expanded, effectiveCwd, renderDiffs) : null;
 			if (diffPreview) {
 				text += `\n${diffPreview}`;
-			} else if (mode === "preview" && output) {
-				const limit = Math.max(1, Math.floor(settingNumber(expanded ? "bashPreviewLines" : "bashCollapsedLines", expanded ? 80 : 10, context?.cwd)));
-				text += `\n${preview(output, limit, "tail", context?.cwd)
+			} else if (!suppressDiffOutput && mode === "preview" && output) {
+				const limit = Math.max(1, Math.floor(settingNumber(expanded ? "bashPreviewLines" : "bashCollapsedLines", expanded ? 80 : 10, effectiveCwd)));
+				text += `\n${preview(output, limit, "tail", effectiveCwd)
 					.split(/\r?\n/)
 					.map((line) => `${treeConnector(theme, "│")}${theme.fg("dim", line)}`)
 					.join("\n")}`;
 				if (count > limit) text += `\n${treeConnector(theme, "│")}${theme.fg("muted", `… ${count - limit} older line(s)`)}`;
-			} else if (mode === "opencode" && expanded && output) {
-				const limit = Math.max(1, Math.floor(settingNumber("bashPreviewLines", 80, context?.cwd)));
-				text += `\n${preview(output, limit, "tail", context?.cwd)
+			} else if (!suppressDiffOutput && mode === "opencode" && expanded && output) {
+				const limit = Math.max(1, Math.floor(settingNumber("bashPreviewLines", 80, effectiveCwd)));
+				text += `\n${preview(output, limit, "tail", effectiveCwd)
 					.split(/\r?\n/)
 					.map((line) => `${treeConnector(theme, "│")}${theme.fg("dim", line)}`)
 					.join("\n")}`;
