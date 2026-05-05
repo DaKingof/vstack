@@ -23,13 +23,9 @@ Write a package once as a harness-agnostic skill, agent, or hook, then install i
 1. A Rust CLI and TUI for discovering, selecting, installing, updating, and removing AI coding packages.
 2. A maintained package catalog in this repo containing reusable agents, skills, and hooks.
 
-The key idea is simple:
-
 - Packages are authored once in canonical, harness-agnostic formats.
 - `vstack` translates them into each harness's native representation at install time.
 - Repos can be swapped. The built-in catalog is just the default source, not the only one.
-
-This makes `vstack` closer to a package manager than a static dotfiles repo.
 
 ## Features
 
@@ -74,8 +70,6 @@ Two config files live at the project root:
 - `pi-extensions/*/package.json`: optional npm-shaped Pi extension packages
 - `vstack.toml`: mapping and attribution rules
 
-At install time, the CLI discovers those packages, lets the user choose what to install, then emits harness-specific files in the correct destination.
-
 ### Dependencies And Mapping
 
 Package dependencies are currently skill-to-skill dependencies. A skill can declare them in `SKILL.md` frontmatter:
@@ -106,9 +100,7 @@ reviewer = ["issue-lifecycle", "linear"]
 
 ### Project Customization
 
-`vstack add` auto-creates a `vstack.toml` at your project root with commented placeholders for every installed agent and skill. Edit the values, then run `vstack refresh` to apply.
-
-All sections survive upstream updates — they're re-applied from the config on every install and refresh.
+`vstack add` auto-creates a `vstack.toml` at your project root with commented placeholders for every installed agent and skill. Edit the values, then run `vstack refresh` to apply. All sections survive upstream updates — they're re-applied from the config on every install and refresh.
 
 ```toml
 # What the agent should do when first invoked
@@ -141,10 +133,6 @@ agents = "all"     # "all", a role ("engineer"), or a list ["rust", "iced"]
 ```
 
 If you edit a generated agent or skill file directly (e.g., add an "Additional Instructions" section), vstack extracts your edits and saves them to `vstack.toml` before the next regeneration — so both approaches work.
-
-### Skill Instructions
-
-Project-specific skill guidance lives in the project root `vstack.toml` under `[skill-instructions]`. vstack injects that text into the installed `SKILL.md` during `vstack add` and `vstack refresh`, so project guidance survives upstream package updates without editing source skills directly.
 
 ### Architecture
 
@@ -243,7 +231,7 @@ Windows note:
 
 ### Skills
 
-Each skill name links to its skill directory (GitHub renders `README.md` when present; otherwise the file list shows `SKILL.md`). `*` marks skills that need project-local setup before first use (`.env.local`, decision directories, or command aliases) — see that skill's `README.md` for bootstrap steps.
+`*` marks skills that need project-local setup before first use — see that skill's `README.md` for bootstrap steps.
 
 #### Rust
 
@@ -307,7 +295,7 @@ Each skill name links to its skill directory (GitHub renders `README.md` when pr
 
 ### Pi Extensions
 
-All vstack Pi packages declare `vstack.extensionManager.settings` metadata, including an `enabled` feature toggle. Install `pi-extension-manager` to browse inventory, toggle resources, and edit those settings from Pi. Each extension name links to its `README.md` for the full feature list, settings reference, and behavior notes.
+All Pi packages declare `vstack.extensionManager.settings` metadata including an `enabled` toggle. Install `pi-extension-manager` to browse and edit them from Pi.
 
 | Extension | Purpose |
 |---|---|
@@ -341,10 +329,6 @@ pi-extensions/
    └─ THIRD_PARTY_NOTICES.md  optional attribution for vendored/base code
 ```
 
-Authoring a new Pi extension package: write a `package.json` with `keywords: ["pi-package"]`, `pi.extensions`, and any `bin` scripts. vstack will pick it up automatically the next time you run `vstack add` against a source repo containing it.
-
-Updates: edit files under `pi-extensions/<name>/` in the vstack repo, then run `vstack refresh` (or `vstack add` again) — installed Pi scopes pick up the change. Users never edit the deployed copy directly.
-
 #### Settings layout
 
 vstack writes Pi's `packages` array using the relative form Pi resolves against the settings file directory:
@@ -363,9 +347,7 @@ vstack writes Pi's `packages` array using the relative form Pi resolves against 
 | Global | `~/.pi/agent/settings.json` | `~/.pi/agent/packages/<name>/` |
 | Project | `.pi/settings.json` | `.pi/packages/<name>/` |
 
-Other entries in `settings.json` are preserved across installs and refreshes; vstack only mutates the `packages` array, dedupes the entries it owns, and writes the file back. A legacy absolute-path entry (from earlier vstack versions) is replaced with the canonical relative form on the next `vstack add`/`refresh`.
-
-The `pi-extension-manager` package stores its own disabled lists and extension setting values under `vstack.extensionManager` in Pi settings. That namespace is intentionally separate from Pi's top-level `extensions` resource-path setting.
+Other `settings.json` keys are preserved; legacy absolute-path entries auto-rewrite to the relative form on the next `vstack add`/`refresh`. `pi-extension-manager` stores disabled lists and extension setting values under `vstack.extensionManager`, separate from Pi's top-level `extensions` resource-path setting.
 
 ## License
 

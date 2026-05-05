@@ -127,7 +127,7 @@ reviewer = ["issue-lifecycle", "linear"]
 
 ### Project customization (`vstack.toml` at project root)
 
-The same `vstack.toml` (or a separate one in the target project) can include per-agent customization sections. These survive `vstack add` updates — they are re-applied from config on every install/reconciliation.
+Per-agent customization sections survive `vstack add` — re-applied on every install/reconciliation.
 
 ```toml
 # Skills always loaded into each agent's context — single source of truth.
@@ -177,7 +177,7 @@ trading-design = "Focus on dark theme with green/red accent colors for this proj
 
 ## Updating Skills
 
-All skill content lives in `skills/<name>/SKILL.md` — there are no separate `rules/` directories or per-skill `AGENTS.md` files. To add or modify a rule, edit the relevant section directly in SKILL.md.
+Edit `skills/<name>/SKILL.md` directly. No separate `rules/` directories or per-skill `AGENTS.md` files.
 
 ## Updating Pi Extensions
 
