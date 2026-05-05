@@ -283,58 +283,58 @@ Windows note:
 
 ### Skills
 
+Each skill name links to its `SKILL.md`. `*` marks skills that need project-local setup before first use (`.env.local`, decision directories, or command aliases) — see that skill's `README.md` for bootstrap steps.
+
 #### Rust
 
 | Skill | Brief |
 |---|---|
-| `rust-arch` | Rust architecture rules, anti-patterns, and review heuristics. |
-| `rust-async` | Async internals, runtime patterns, cancellation, and concurrency composition. |
-| `rust-cargo` | Cargo workflows, workspaces, feature flags, and build/release config. |
-| `rust-conventions` | Style, layout, tests, and definition-of-done conventions. |
-| `rust-cross` | Cross-compilation, target setup, and multi-platform builds. |
-| `rust-debugging` | GDB/LLDB, tracing, panic triage, and async runtime debugging. |
-| `rust-ffi` | Safe C interop and FFI wrapper patterns. |
-| `rust-no-std` | `no_std` design, alloc boundaries, and embedded-friendly structure. |
-| `rust-safety` | Unsafe code review, SAFETY comments, and safety audit patterns. |
+| [`rust-arch`](skills/rust-arch/SKILL.md) | Rust architecture rules, anti-patterns, and review heuristics. |
+| [`rust-async`](skills/rust-async/SKILL.md) | Async internals, runtime patterns, cancellation, and concurrency composition. |
+| [`rust-cargo`](skills/rust-cargo/SKILL.md) | Cargo workflows, workspaces, feature flags, and build/release config. |
+| [`rust-conventions`](skills/rust-conventions/SKILL.md) | Style, layout, tests, and definition-of-done conventions. |
+| [`rust-cross`](skills/rust-cross/SKILL.md) | Cross-compilation, target setup, and multi-platform builds. |
+| [`rust-debugging`](skills/rust-debugging/SKILL.md) | GDB/LLDB, tracing, panic triage, and async runtime debugging. |
+| [`rust-ffi`](skills/rust-ffi/SKILL.md) | Safe C interop and FFI wrapper patterns. |
+| [`rust-no-std`](skills/rust-no-std/SKILL.md) | `no_std` design, alloc boundaries, and embedded-friendly structure. |
+| [`rust-safety`](skills/rust-safety/SKILL.md) | Unsafe code review, SAFETY comments, and safety audit patterns. |
 
 #### Performance
 
 | Skill | Brief |
 |---|---|
-| `perf-cache` | Cache locality, false sharing, and data layout optimization. |
-| `perf-ebpf` | Aya/eBPF instrumentation and kernel-level observability. |
-| `perf-latency` | Benchmarking and percentile-focused latency measurement. |
-| `perf-lock-free` | Atomics, loom verification, and lock-free correctness. |
-| `perf-profiling` | Flamegraphs, hotspot analysis, NUMA, and jitter investigation. |
-| `perf-simd` | SIMD, auto-vectorization, intrinsics, and runtime dispatch. |
-| `perf-threading` | Pinning, topology-aware concurrency, and jitter reduction. |
-| `perf-zero-alloc` | Eliminating allocations in hot paths. |
+| [`perf-cache`](skills/perf-cache/SKILL.md) | Cache locality, false sharing, and data layout optimization. |
+| [`perf-ebpf`](skills/perf-ebpf/SKILL.md) | Aya/eBPF instrumentation and kernel-level observability. |
+| [`perf-latency`](skills/perf-latency/SKILL.md) | Benchmarking and percentile-focused latency measurement. |
+| [`perf-lock-free`](skills/perf-lock-free/SKILL.md) | Atomics, loom verification, and lock-free correctness. |
+| [`perf-profiling`](skills/perf-profiling/SKILL.md) | Flamegraphs, hotspot analysis, NUMA, and jitter investigation. |
+| [`perf-simd`](skills/perf-simd/SKILL.md) | SIMD, auto-vectorization, intrinsics, and runtime dispatch. |
+| [`perf-threading`](skills/perf-threading/SKILL.md) | Pinning, topology-aware concurrency, and jitter reduction. |
+| [`perf-zero-alloc`](skills/perf-zero-alloc/SKILL.md) | Eliminating allocations in hot paths. |
 
 #### UI / Domain
 
-| Skill | Brief | Arguments |
-|---|---|---|
-| `iced-rs` | Iced 0.14 patterns, reactive UI rules, and Elm-style structure. | — |
-| `iced-shadcn` | shadcn Base UI component planning, family decomposition, and parity audits for Iced. | — |
-| `price-handling` | Price rounding, epsilon comparison, and market-price handling. | — |
-| `trading-design` | Dense, professional trading-style interface design guidance. | — |
+| Skill | Brief |
+|---|---|
+| [`iced-rs`](skills/iced-rs/SKILL.md) | Iced 0.14 patterns, reactive UI rules, and Elm-style structure. |
+| [`iced-shadcn`](skills/iced-shadcn/SKILL.md) | shadcn Base UI component planning, family decomposition, and parity audits for Iced. |
+| [`price-handling`](skills/price-handling/SKILL.md) | Price rounding, epsilon comparison, and market-price handling. |
+| [`trading-design`](skills/trading-design/SKILL.md) | Dense, professional trading-style interface design guidance. |
 
 #### Workflow / Platform
 
-| Skill | Brief | Arguments |
+| Skill | Brief | Commands |
 |---|---|---|
-| `decider*` | Architectural decision document management and indexing. | — |
-| `deep-research` | Exa-powered deep research and portable findings report generation. | <ul><li><code>scripts/deep-research report "question" --output findings.md</code></li><li><code>scripts/deep-research doctor</code></li></ul> |
-| `github*` | GitHub PR, thread, review, CI, and merge workflows. | — |
-| `issue-lifecycle*` | Delegated implementation/review/QA issue workflows. | — |
-| `linear*` | Linear issue, cycle, milestone, and project workflows with fully custom API scripts. | — |
-| `flightdeck*` | Master session lifecycle for multi-issue parallel dev work: dashboard, spawn, oversee tmux panes, plan merges. Tmux-only. | <ul><li><code>/flightdeck start [ISSUE_ID]</code></li><li><code>/flightdeck start new [title]</code></li><li><code>/flightdeck start self</code></li><li><code>/flightdeck parallel-check [ISSUE_IDS|"Project Name"]</code></li><li><code>/flightdeck watch [ISSUE_IDS]</code></li><li><code>/flightdeck status</code></li></ul> |
-| `orchestration*` | Per-issue inside-worktree lifecycle: dev → review → submit → merge. Loaded by per-issue agents in spawned panes. | <ul><li><code>/orchestration start [ISSUE_ID]</code> (from worktree only — from main, use <code>/flightdeck start</code>)</li><li><code>/orchestration initialize [ISSUE_ID]</code></li><li><code>/orchestration dev-start [ISSUE_ID]</code></li><li><code>/orchestration dev-fix [ISSUE_ID]</code></li><li><code>/orchestration ci-fix &lt;PR_NUMBER|queue&gt;</code></li><li><code>/orchestration review-pr [PR_NUMBER]</code></li><li><code>/orchestration review-pr-comments &lt;PR_NUMBER|BRANCH&gt;</code></li><li><code>/orchestration submit-pr [PR_NUMBER]</code></li><li><code>/orchestration merge-pr &lt;PR_NUMBER|all&gt;</code></li><li><code>/orchestration post-summary [ISSUE_ID]</code></li></ul> |
-| `project-management*` | TPM-orchestrated planning, audit, roadmap, research-driven decomposition. | <ul><li><code>/project-management cycle-plan</code></li><li><code>/project-management audit-issues &lt;project | project "Name" | issue [IDs] | --issues [file]&gt;</code></li><li><code>/project-management roadmap plan [feature] [@research-path]</code></li><li><code>/project-management roadmap create @plan-file</code></li><li><code>/project-management research-spike</code></li><li><code>/project-management research-complete [ISSUE_ID]</code></li></ul> |
-| `second-opinion` | Cross-model review via external AI CLI — auto-detects harness and calls the opposite (Claude ↔ Codex). | <ul><li><code>/second-opinion review [--range &lt;base..head&gt;]</code></li><li><code>/second-opinion challenge &lt;description&gt;</code></li><li><code>/second-opinion audit &lt;path&gt;</code></li><li><code>/second-opinion quick &lt;question&gt;</code></li></ul> |
-| `worktree*` | Git worktree creation, env/config linkage, and isolated workflows. | <ul><li><code>/worktree create &lt;ID&gt; [--base &lt;branch&gt;] [--from &lt;ref&gt;] [--pr &lt;N&gt;]</code></li><li><code>/worktree list</code></li><li><code>/worktree remove &lt;ID|path&gt;</code></li><li><code>/worktree cleanup</code></li><li><code>/worktree path &lt;ID&gt;</code></li><li><code>/worktree exists &lt;ID&gt;</code></li><li><code>/worktree check</code></li><li><code>/worktree push [ID|/path] [--set-upstream|-u] [--no-rebase]</code></li></ul> |
-
-`*` Requires project-local setup before first use, such as `.env.local`, decision directories, or command aliases. Check that skill's `README.md` for the exact bootstrap steps.
+| [`decider`](skills/decider/SKILL.md)* | Architectural decision document management and indexing. | — |
+| [`deep-research`](skills/deep-research/SKILL.md) | Exa-powered deep research and portable findings report generation. | `scripts/deep-research report "question" --output findings.md`, `scripts/deep-research doctor` |
+| [`github`](skills/github/SKILL.md)* | GitHub PR, thread, review, CI, and merge workflows. | — |
+| [`issue-lifecycle`](skills/issue-lifecycle/SKILL.md)* | Delegated implementation/review/QA issue workflows. | — |
+| [`linear`](skills/linear/SKILL.md)* | Linear issue, cycle, milestone, and project workflows. | — |
+| [`flightdeck`](skills/flightdeck/SKILL.md)* | Master session lifecycle for multi-issue parallel dev work; tmux-only. | `/flightdeck start [ISSUE_ID]`, `/flightdeck parallel-check`, `/flightdeck watch`, `/flightdeck status` |
+| [`orchestration`](skills/orchestration/SKILL.md)* | Per-issue inside-worktree lifecycle: dev → review → submit → merge. | `/orchestration start`, `/orchestration dev-start`, `/orchestration ci-fix`, `/orchestration review-pr`, `/orchestration submit-pr`, `/orchestration merge-pr` |
+| [`project-management`](skills/project-management/SKILL.md)* | TPM-orchestrated planning, audit, roadmap, research-driven decomposition. | `/project-management cycle-plan`, `/project-management audit-issues`, `/project-management roadmap plan`, `/project-management roadmap create`, `/project-management research-spike`, `/project-management research-complete` |
+| [`second-opinion`](skills/second-opinion/SKILL.md) | Cross-model review via external AI CLI; auto-detects harness and calls the opposite (Claude ↔ Codex). | `/second-opinion review`, `/second-opinion challenge`, `/second-opinion audit`, `/second-opinion quick` |
+| [`worktree`](skills/worktree/SKILL.md)* | Git worktree creation, env/config linkage, and isolated workflows. | `/worktree create`, `/worktree list`, `/worktree remove`, `/worktree push`, `/worktree check` |
 
 ### Hooks
 
@@ -347,117 +347,25 @@ Windows note:
 
 ### Pi Extensions
 
-All vstack Pi packages declare `vstack.extensionManager.settings` metadata, including an `enabled` feature toggle. Install `pi-extension-manager` to browse inventory, toggle resources, and edit those settings from Pi.
+All vstack Pi packages declare `vstack.extensionManager.settings` metadata, including an `enabled` feature toggle. Install `pi-extension-manager` to browse inventory, toggle resources, and edit those settings from Pi. Each extension name links to its `README.md` for the full feature list, settings reference, and behavior notes.
 
-#### `pi-extension-manager`
-
-- **Purpose:** Pi-styled extension inventory, full settings shell, and quick inline settings editor.
-- **Commands:** `/extensions` for the full popup and `/extensions settings` for quick inline edits.
-- **Notes:** Pi has no public native API for third-party `/settings` tabs or live module unloads; package/module toggles apply after `/reload` or restart.
-- **More:** [pi-extensions/pi-extension-manager/README.md](pi-extensions/pi-extension-manager/README.md).
-
-#### `pi-skills-manager`
-
-- **Purpose:** Dedicated `/skills` shell for browsing, previewing, inserting, creating, editing, renaming, deleting, and enabling/disabling Pi skills.
-- **Behavior:** hides native `/skill:*` commands and the startup `[Skills]` block by default, then expands inserted `[skill] <name>` markers into full skill content before prompts are sent.
-- **Settings:** native command/startup hiding, AI generation toggle, default create location, marker cleanup, popup dimensions, visible list rows.
-- **More:** [pi-extensions/pi-skills-manager/README.md](pi-extensions/pi-skills-manager/README.md).
-
-#### `pi-background-tasks`
-
-- **Purpose:** Adds explicit non-blocking shell task management to Pi so long-running commands do not block the current turn.
-- **Tools:** `bg_task` for spawn/list/log/stop/clear; `bg_status` compatibility tool for PID-based status/log/stop.
-- **Commands:** `/bg`, `/bg run <cmd>`, `/bg list`, `/bg log <id>`, `/bg watch <id>`, `/bg stop <id>`, `/bg clear`.
-- **UI:** configurable dashboard shortcut opens a task overlay; a compact task widget appears while tasks are tracked.
-- **Settings:** timeout, output caps, wakeup tail size, widget placement, dashboard shortcut, log directory.
-- **More:** [pi-extensions/pi-background-tasks/README.md](pi-extensions/pi-background-tasks/README.md).
-
-#### `pi-questions`
-
-- **Purpose:** Structured multi-tab popup questions for the model and bridge-driven replies.
-- **Tools/commands:** `question` tool.
-- **Settings:** popup dimensions, visible option rows, default header, bridge reply enablement; large free-form answers are truncated with temp-file preservation.
-- **More:** [pi-extensions/pi-questions/README.md](pi-extensions/pi-questions/README.md).
-
-#### `pi-session-bridge`
-
-- **Purpose:** Keeps the normal interactive Pi TUI visible while exposing a Unix-socket JSONL side channel for external control and event streaming.
-- **Enables:** send prompts, steer/follow-up, abort, inspect state/history, subscribe to live events, and answer pending `pi-questions` prompts.
-- **CLI:** `pi-bridge` for list/state/commands/stream/send/steer/follow-up/history/emit; vstack installs a scope-local `bin/pi-bridge` symlink for package installs.
-- **Settings:** bridge dir, history limit, line cap, heartbeat, status badge, startup notifications.
-- **More:** [pi-extensions/session-bridge/README.md](pi-extensions/session-bridge/README.md).
-
-#### `pi-subagents-tmux`
-
-- **Purpose:** Delegates work to `.pi/agents`, `.claude/agents`, and user agents with isolated Pi context; supports persistent tmux panes.
-- **Tools/commands:** `subagent`, `get_subagent_result`, `steer_subagent`, `/agents` browser plus `/agents start|send|attach|stop|status|collect|transcripts|trace|toggle`.
-- **Behavior:** persistent pane tasks keep a durable task registry; `steer_subagent` only sends through `pi-session-bridge` when it can target the exact child pane session file, otherwise it queues an explicit inbox fallback rather than matching by cwd.
-- **Settings:** parallel task limit, concurrency, dashboard display, result truncation/full-output preservation, pane polling intervals, forced session-bridge loading for panes.
-- **More:** [pi-extensions/pi-subagents-tmux/README.md](pi-extensions/pi-subagents-tmux/README.md).
-
-#### `pi-prompt-stash`
-
-- **Purpose:** Per-session prompt stash history with a stash/pop editor workflow.
-- **Commands/UI:** `/prompt-stash`; configurable stash shortcut (`Alt+S` by default).
-- **Settings:** store file, shortcut, popup dimensions, visible rows, deduplication.
-- **More:** [pi-extensions/pi-prompt-stash/README.md](pi-extensions/pi-prompt-stash/README.md).
-
-#### `pi-qol`
-
-- **Purpose:** Compact statusline/`π` prompt, reliable multiline input, styled image placeholder chips, manual/auto session naming, session search/context import, handoff, permission prompts, terminal/tmux notifications, custom compaction, and collapsed-thinking timer.
-- **Commands:** `/qol status`, `/qol rename`, `/qol rename full`, `/qol notify-test`, `/rename [name]`, `/context`, `/search [query]`, `/search refresh`, `/handoff <goal>`.
-- **Settings:** statusline/footer replacement, compact prompt, git/dirty marker display, image chips/status, auto session rename, session search/import, context display, handoff, permission gate, notification triggers/channels, custom/remote/idle compaction, branch summary override, thinking timer.
-- **More:** [pi-extensions/pi-qol/README.md](pi-extensions/pi-qol/README.md).
-
-#### `pi-session-manager`
-
-- **Purpose:** Polished Pi session browser for searching, threaded lineage review, resuming, renaming, and safely deleting one or all shown sessions.
-- **Commands/UI:** `/sessions`; Current/All scope is switched in the popup, with a configurable idle shortcut (`Ctrl+Shift+R` by default).
-- **Settings:** enablement, shortcut, default scope/sort, overlay width, visible rows, trash-before-unlink deletion.
-- **More:** [pi-extensions/pi-session-manager/README.md](pi-extensions/pi-session-manager/README.md).
-
-#### `pi-codex-minimal-tools`
-
-- **Purpose:** Adds Codex-style `view_image`, `apply_patch`, native OpenAI `image_generation`, and diagnostics without replacing Pi's native file/shell/edit tools. Web search moved to `pi-web-tools`.
-- **Commands/tools:** `/codex-minimal-tools`, `/codex-minimal-tools doctor`, `/codex-minimal-tools settings`; `view_image`, `apply_patch`, and supported provider tools.
-- **Settings:** auto-enable, native provider tool shim, image toggles, image output directory/model, direct Images API fallback, patch-mode controls.
-- **More:** [pi-extensions/pi-codex-minimal-tools/README.md](pi-extensions/pi-codex-minimal-tools/README.md).
-
-#### `pi-web-tools`
-
-- **Purpose:** First-party Pi web stack: provider-toggled `web_search`, Exa deep research, and content extraction with smart fallbacks for blocked pages, GitHub repos, scanned PDFs, YouTube/local video, and code context.
-- **Search providers:** Exa (search + Deep Search), Perplexity Sonar, Gemini API (Google Search grounding), Gemini Web (Firefox/Zen/Chrome/Edge cookie auth on Linux/macOS/Windows), and OpenAI native web_search rewrite for OpenAI/Codex models.
-- **Fetch fallbacks:** HTTP extraction with Wikipedia-style chrome stripping; Jina Reader auto-fallback on blocked/cookie-walled pages and 403/429/5xx; GitHub URLs clone shallow into `~/.pi/agent/cache/github/<owner>__<repo>` (size-gated, 24h refresh) and serve repo root / blob / tree from cache; URL + local PDF text via `pdftotext` with vision OCR fallback (rasterizes scanned pages with `pdftoppm` and returns image content blocks for the host LLM); YouTube + local video understanding via Gemini Web/API with auto-applied transcript-mode prompt directive when the caller asks for transcripts/lyrics/captions.
-- **Code search:** `code_search` defaults to the Exa Code `/context` endpoint and falls back to classic Exa search with code-focused domain hints; renderer surfaces token + source counts and parsed source URLs (Ctrl+O to expand).
-- **Commands/tools:** `/web-tools doctor`, `/web-tools provider ...`; `web_search`, `web_fetch`, `web_research`, `web_answer`, `web_find_similar`, `code_search`, `get_web_content`.
-- **Key settings:** default provider, enabled providers, OpenAI external web access, Exa deep research + per-mode overrides, advanced/compatibility tools, `htmlExtraction.jinaFallback`, `pdfOcr.{enabled,maxPages,dpi}`, `githubClone.{enabled,maxRepoSizeMB,cloneTimeoutSeconds,cacheMaxAgeHours}`, `browserCookieAccess` + `browserCookies.preferredBrowser`, `video.enabled`. Curator UI is staged for a follow-up phase.
-- **More:** [pi-extensions/pi-web-tools/README.md](pi-extensions/pi-web-tools/README.md), [pi-extensions/pi-web-tools/EXA.md](pi-extensions/pi-web-tools/EXA.md).
-
-#### `pi-output-policy`
-
-- **Purpose:** OMP-style large-output policy: shell minimization, head/tail truncation, spill-file preservation, UI-safe caps.
-- **Settings:** spill threshold, inline tail budgets, UI safety caps, full-output preservation, shell minimizer controls.
-- **More:** [pi-extensions/pi-output-policy/README.md](pi-extensions/pi-output-policy/README.md).
-
-#### `pi-tool-renderer`
-
-- **Purpose:** Compact Claude/opencode-style built-in tool renderers while preserving original tool execution.
-- **Behavior:** individual `read`/`bash`/search calls render as compact bullet rows with no padded box; mutation tools show stats and bounded expanded previews via Pi's normal `Ctrl+O` model; `tool_batch` is preferred for independent read/search/list/diagnostic bash calls as one compact renderable unit.
-- **Settings:** read/search/bash/MCP output modes, mutation renderer toggles, diff preview budgets, batch tool toggle/limit, global tool chrome, working indicator, renderer safety caps.
-- **More:** [pi-extensions/pi-tool-renderer/README.md](pi-extensions/pi-tool-renderer/README.md).
-
-#### `pi-task-panel`
-
-- **Purpose:** Persistent structured task panel above the status line/editor plus `/tasks` commands and `tasks_write` tool.
-- **Settings:** default panel state, Ctrl+T takeover opt-in, Alt+T tri-state toggle, compact count, auto-show/hide, compact tool output, sequential task updates, model-facing workflow context/reminders.
-- **More:** [pi-extensions/pi-task-panel/README.md](pi-extensions/pi-task-panel/README.md).
-
-#### `pi-caveman`
-
-- **Purpose:** Native Pi caveman communication mode via `before_agent_start` prompt injection.
-- **Commands:** `/caveman [lite|full|ultra|micro|toggle|off|status]`.
-- **Settings:** enable/default mode, status badge, clarity escape, session override, code/commit/review boundaries.
-- **More:** [pi-extensions/pi-caveman/README.md](pi-extensions/pi-caveman/README.md).
+| Extension | Purpose |
+|---|---|
+| [`pi-extension-manager`](pi-extensions/pi-extension-manager/README.md) | Pi-styled extension inventory, full settings shell, and quick inline settings editor (`/extensions`). |
+| [`pi-skills-manager`](pi-extensions/pi-skills-manager/README.md) | Dedicated `/skills` shell for browsing, creating, editing, and toggling Pi skills; expands `[skill] <name>` markers before sending prompts. |
+| [`pi-background-tasks`](pi-extensions/pi-background-tasks/README.md) | Non-blocking shell tasks via `bg_task`/`bg_status` plus a `/bg` dashboard so long-running commands do not block the turn. |
+| [`pi-questions`](pi-extensions/pi-questions/README.md) | Structured multi-tab popup questions for the model with bridge-driven replies. |
+| [`pi-session-bridge`](pi-extensions/session-bridge/README.md) | Unix-socket JSONL side channel + `pi-bridge` CLI for external control, event streaming, prompt sending, and answering `pi-questions`. |
+| [`pi-subagents-tmux`](pi-extensions/pi-subagents-tmux/README.md) | Delegate work to `.pi/agents` / `.claude/agents` with isolated context and persistent tmux panes (`subagent`, `get_subagent_result`, `steer_subagent`, `/agents`). |
+| [`pi-prompt-stash`](pi-extensions/pi-prompt-stash/README.md) | Per-session prompt stash history with stash/pop editor (`Alt+S`). |
+| [`pi-qol`](pi-extensions/pi-qol/README.md) | Compact statusline/`π` prompt, multiline input, image chips, session naming/search/handoff, custom compaction, thinking timer. |
+| [`pi-session-manager`](pi-extensions/pi-session-manager/README.md) | Polished session browser (`/sessions`) for searching, resuming, renaming, and deleting Pi sessions. |
+| [`pi-codex-minimal-tools`](pi-extensions/pi-codex-minimal-tools/README.md) | Adds Codex-style `view_image`, `apply_patch`, native OpenAI `image_generation` without replacing Pi's native file/shell/edit tools. |
+| [`pi-web-tools`](pi-extensions/pi-web-tools/README.md) | First-party web stack: provider-toggled `web_search`, Exa deep research, and `web_fetch` extraction with HTML chrome strip + Jina fallback, GitHub clone cache, scanned-PDF vision OCR, YouTube/local video understanding, and Exa Code `/context` for `code_search`. See also [`EXA.md`](pi-extensions/pi-web-tools/EXA.md). |
+| [`pi-output-policy`](pi-extensions/pi-output-policy/README.md) | OMP-style large-output policy: shell minimization, head/tail truncation, spill-file preservation, UI-safe caps. |
+| [`pi-tool-renderer`](pi-extensions/pi-tool-renderer/README.md) | Compact Claude/opencode-style renderers for built-in `read`/`bash`/search/mutation tools while preserving original execution. |
+| [`pi-task-panel`](pi-extensions/pi-task-panel/README.md) | Persistent structured task panel above the status line plus `/tasks` commands and `tasks_write` tool. |
+| [`pi-caveman`](pi-extensions/pi-caveman/README.md) | Native Pi caveman communication mode via `before_agent_start` prompt injection (`/caveman`). |
 
 See also: [Pi extension settings audit](docs/pi-extension-settings-audit.md).
 
