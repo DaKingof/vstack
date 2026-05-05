@@ -1795,6 +1795,18 @@ function wrappedText(text: string): Component {
 	};
 }
 
+function framedComponent(inner: Component, theme: Theme): Component {
+	return {
+		invalidate() {
+			inner.invalidate?.();
+		},
+		render(width: number): string[] {
+			const rule = toolChromeRule(theme, width);
+			return [rule, ...inner.render(width), rule];
+		},
+	};
+}
+
 function framedMessage(content: string, theme: Theme): Component {
 	return {
 		invalidate() {},
@@ -2738,7 +2750,7 @@ function renderPaneCompletionMessage(message: { content: string; details?: unkno
 			);
 			lines.push(`${subagentBranch(theme, "└")}${theme.fg("toolOutput", oneLinePreview(detail.summary, 120) || "No summary provided.")}`);
 		}
-		return wrappedText(lines.join("\n"));
+		return framedMessage(lines.join("\n"), theme);
 	}
 
 	const container = new Container();
@@ -2774,7 +2786,7 @@ function renderPaneCompletionMessage(message: { content: string; details?: unkno
 			),
 		);
 	}
-	return container;
+	return framedComponent(container, theme);
 }
 
 function formatTaskRecordResult(record: PaneTaskRecord, verbose = false): string {
@@ -3766,24 +3778,17 @@ export default function (pi: ExtensionAPI) {
 		renderCall(_args, _theme, _context) {
 			return new Container();
 		},
-		renderResult(result, { expanded }, theme, context) {
+		renderResult(result, _options, theme, context) {
 			const raw = result.content?.find?.((part: any) => part?.type === "text")?.text ?? "";
 			const details = result.details as GetSubagentResultDetails | undefined;
 			const status = details?.status ? theme.fg(details.status === "completed" ? "success" : details.status === "failed" ? "error" : "warning", details.status) : undefined;
 			if (context?.isError) return wrappedText(`${theme.fg("error", ICONS.times)} ${theme.fg("toolTitle", "Subagent result lookup failed")}\n${theme.fg("muted", raw)}`);
-			if (expanded && raw.trim()) return new Markdown(raw, 0, 0, getMarkdownTheme());
 			const target = details?.agent ? details.agent : "subagent";
 			const suffix = status;
-			if (quietInline(context?.cwd) && dashboardEnabled(context?.cwd)) {
-				return wrappedText(`${theme.fg("success", ICONS.check)} ${theme.fg("toolTitle", theme.bold(`result ${target}`))}${suffix ? ` ${theme.fg("dim", "·")} ${suffix}` : ""}`);
-			}
-			const lines = [`${theme.fg("success", ICONS.check)} ${theme.fg("toolTitle", theme.bold(target))}${suffix ? ` ${theme.fg("dim", "·")} ${suffix}` : ""}`];
-			if (details?.summary) lines.push(`  ${theme.fg("toolOutput", oneLinePreview(details.summary, 120))}`);
-			if (details?.notes) {
-				const marker = details.notes.split(/\r?\n/).find((line) => /(?:PANE_|STEER_|_OK\b)/.test(line));
-				if (marker) lines.push(`  ${theme.fg("toolOutput", oneLinePreview(marker, 120))}`);
-			}
-			return wrappedText(lines.join("\n"));
+			// One-liner only, expanded or not. The full task record is reachable
+			// via `/agents trace <ref>` and is also surfaced as the subagent-
+			// completion message - rendering it again here just duplicates output.
+			return wrappedText(`${theme.fg("success", ICONS.check)} ${theme.fg("toolTitle", theme.bold(`result ${target}`))}${suffix ? ` ${theme.fg("dim", "·")} ${suffix}` : ""}`);
 		},
 	});
 
