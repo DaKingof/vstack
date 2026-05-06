@@ -44,6 +44,7 @@ const DEFAULT_SESSION_SEARCH_SHORTCUT = "f3";
 const DEFAULT_SESSION_SEARCH_SUMMARY_INPUT_CHARS = 180_000;
 const DEFAULT_SESSION_SEARCH_SUMMARY_MAX_TOKENS = 4096;
 const DEFAULT_SESSION_SEARCH_CACHE_TTL_SECONDS = 0;
+const SESSION_SEARCH_OVERLAY_HEIGHT_RATIO = 0.9;
 const DEFAULT_AUTO_RENAME_MODEL = "openai-codex/gpt-5.4-mini";
 const DEFAULT_AUTO_RENAME_FALLBACK_MODEL = "current";
 const DEFAULT_AUTO_RENAME_INPUT_CHARS = 2000;
@@ -3071,7 +3072,7 @@ class QolSessionSearchComponent {
 
 	constructor(
 		private readonly done: (action: QolSessionPaletteAction) => void,
-		private readonly tui: { requestRender(): void },
+		private readonly tui: { requestRender(): void; terminal?: { rows?: number } },
 		private readonly theme: Theme,
 		private readonly sessions: QolSessionSearchSession[],
 		private readonly cwd: string,
@@ -3088,6 +3089,30 @@ class QolSessionSearchComponent {
 	}
 
 	invalidate(): void {}
+
+	private maxOverlayRows(): number {
+		const terminalRows = Number(this.tui.terminal?.rows ?? process.stdout.rows ?? 30);
+		const safeRows = Number.isFinite(terminalRows) && terminalRows > 0 ? terminalRows : 30;
+		return Math.max(8, Math.floor(safeRows * SESSION_SEARCH_OVERLAY_HEIGHT_RATIO));
+	}
+
+	private searchMaxVisibleRows(): number {
+		const configured = Math.max(1, Math.floor(settingNumber("sessionSearch.maxVisible", 8, this.cwd)));
+		// Search results render as 3 content rows plus a divider between rows.
+		// The remaining chrome is title, search box, help text, scroll status,
+		// footer, and frame. Keep the rendered line count within overlay maxHeight
+		// so Pi does not clip the bottom of the popup on short terminals.
+		const responsive = Math.max(1, Math.floor((this.maxOverlayRows() - 12) / 4));
+		return Math.max(1, Math.min(configured, responsive));
+	}
+
+	private messageMaxVisibleRows(): number {
+		const configured = Math.max(1, Math.floor(settingNumber("sessionSearch.messageMaxVisible", 12, this.cwd)));
+		// Message rows are one line each; reserve space for session metadata,
+		// optional scroll status, footer, and frame.
+		const responsive = Math.max(1, this.maxOverlayRows() - 14);
+		return Math.max(1, Math.min(configured, responsive));
+	}
 
 	render(width: number): string[] {
 		const configured = Math.max(70, Math.floor(settingNumber("sessionSearch.overlayWidth", 104, this.cwd)));
@@ -3165,11 +3190,11 @@ class QolSessionSearchComponent {
 			return;
 		}
 		if (matchesKey(data, "-") || matchesKey(data, "pageup")) {
-			state.selected = Math.max(0, state.selected - 10);
+			state.selected = Math.max(0, state.selected - this.searchMaxVisibleRows());
 			return;
 		}
 		if (matchesKey(data, "=") || matchesKey(data, "pagedown")) {
-			state.selected = Math.min(state.results.length - 1, state.selected + 10);
+			state.selected = Math.min(state.results.length - 1, state.selected + this.searchMaxVisibleRows());
 			return;
 		}
 		if (matchesKey(data, "left")) {
@@ -3239,11 +3264,11 @@ class QolSessionSearchComponent {
 			return;
 		}
 		if (matchesKey(data, "-") || matchesKey(data, "pageup")) {
-			state.selected = Math.max(0, state.selected - 10);
+			state.selected = Math.max(0, state.selected - this.messageMaxVisibleRows());
 			return;
 		}
 		if (matchesKey(data, "=") || matchesKey(data, "pagedown")) {
-			state.selected = Math.min(state.messages.length - 1, state.selected + 10);
+			state.selected = Math.min(state.messages.length - 1, state.selected + this.messageMaxVisibleRows());
 			return;
 		}
 		if (matchesKey(data, "home") || matchesKey(data, "ctrl+a")) {
@@ -3365,7 +3390,7 @@ class QolSessionSearchComponent {
 		if (state.results.length === 0) {
 			lines.push(row(muted(state.query.trim() ? "No sessions match your search" : "No sessions found")), empty());
 		} else {
-			const maxVisible = Math.max(3, Math.floor(settingNumber("sessionSearch.maxVisible", 8, this.cwd)));
+			const maxVisible = this.searchMaxVisibleRows();
 			const start = Math.max(0, Math.min(state.selected - Math.floor(maxVisible / 2), state.results.length - maxVisible));
 			const end = Math.min(start + maxVisible, state.results.length);
 			const rowBudget = Math.max(10, inner);
@@ -3419,7 +3444,7 @@ class QolSessionSearchComponent {
 		lines.push(row(dim(`${state.messages.length} user prompt${state.messages.length === 1 ? "" : "s"} · enter opens prompt actions · r resumes latest session state`)));
 		lines.push(empty(), divider(), empty());
 
-		const maxVisible = Math.max(6, Math.floor(settingNumber("sessionSearch.messageMaxVisible", 12, this.cwd)));
+		const maxVisible = this.messageMaxVisibleRows();
 		const start = Math.max(0, Math.min(state.selected - Math.floor(maxVisible / 2), state.messages.length - maxVisible));
 		const end = Math.min(start + maxVisible, state.messages.length);
 		for (let i = start; i < end; i++) {
