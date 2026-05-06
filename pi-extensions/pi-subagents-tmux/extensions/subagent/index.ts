@@ -855,84 +855,129 @@ interface ChatMessage {
 	timestamp: number;
 	agent: string;
 	taskId?: string;
-	kind: "delegation" | "completion" | "steering" | "self";
+	kind: "delegation" | "completion" | "steering";
 	from: string;
 	to: string;
-	text: string;
+	body: string;
+	status?: string;
+	filesChanged?: string[];
+	notes?: string;
 }
 
 function deriveTaskIdFromFile(file: string): string | undefined {
 	const base = path.basename(file, path.extname(file));
-	// Archive filenames look like '<archiveTs>-<taskId>'; strip the archive
-	// prefix so the taskId resolves back to the original delegation.
 	const stripped = base.replace(/^\d{10,}-/, "");
 	return stripped || base || undefined;
 }
 
-function trimMessage(text: string, max = 4_000): string {
+function trimChatBody(text: string, max = 4_000): string {
 	const compact = text.trim();
 	if (compact.length <= max) return compact;
-	return `${compact.slice(0, max)}\n…(truncated)`;
+	return `${compact.slice(0, max)}\n\u2026(truncated)`;
 }
 
-function readChatTextFile(filePath: string): string {
-	try {
-		return trimMessage(fs.readFileSync(filePath, "utf-8"));
-	} catch {
-		return "";
+function extractDelegationBody(raw: string): string {
+	// buildDelegation wraps the actual task in Task-for / Task-ID / schema /
+	// "Do not complete before..." boilerplate. Strip that so the chat shows
+	// just the user-meaningful instructions.
+	const lines = raw.split(/\r?\n/);
+	const out: string[] = [];
+	let started = false;
+	for (const line of lines) {
+		if (!started) {
+			if (/^Task for /.test(line) || /^Task ID:/.test(line)) continue;
+			if (line.trim() === "") continue;
+			started = true;
+		}
+		if (/^When done, /.test(line)) break;
+		if (/^If complete_subagent is unavailable/.test(line)) break;
+		if (/^Do not complete before the work is actually done/.test(line)) break;
+		out.push(line);
 	}
+	while (out.length > 0 && out[out.length - 1].trim() === "") out.pop();
+	return out.join("\n").trim();
+}
+
+function extractSteeringBody(raw: string): string {
+	const lines = raw.split(/\r?\n/);
+	const out: string[] = [];
+	let started = false;
+	for (const line of lines) {
+		if (!started) {
+			if (/^Steering update for /.test(line)) continue;
+			if (line.trim() === "") continue;
+			started = true;
+		}
+		out.push(line);
+	}
+	return out.join("\n").trim();
 }
 
 function loadChatMessages(runtimeRoot: string, agentNames: string[]): ChatMessage[] {
 	const messages: ChatMessage[] = [];
 	const seen = new Set<string>();
-	const pushFile = (filePath: string, agent: string, kind: ChatMessage["kind"]): void => {
-		const dedupeKey = `${kind}:${filePath}`;
-		if (seen.has(dedupeKey)) return;
-		seen.add(dedupeKey);
+	const pushMd = (filePath: string, agent: string): void => {
+		const key = `md:${filePath}`;
+		if (seen.has(key)) return;
+		seen.add(key);
 		let stat: fs.Stats;
 		try { stat = fs.statSync(filePath); } catch { return; }
-		const taskId = deriveTaskIdFromFile(filePath);
-		if (kind === "completion") {
-			let parsed: Record<string, unknown> | undefined;
-			try { parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>; } catch { return; }
-			const summary = typeof parsed?.summary === "string" ? parsed.summary : "(no summary)";
-			const status = typeof parsed?.status === "string" ? parsed.status : undefined;
-			const notes = typeof parsed?.notes === "string" ? parsed.notes : undefined;
-			const text = [`status: ${status ?? "?"}`, `summary: ${summary}`, notes ? `notes: ${notes}` : ""].filter(Boolean).join("\n");
-			messages.push({ timestamp: stat.mtimeMs, agent, taskId, kind, from: agent, to: "@orch", text });
-			return;
-		}
-		const raw = readChatTextFile(filePath);
-		if (!raw) return;
-		const isSteer = /^Steering update for /.test(raw) || /^STEER:/i.test(raw);
-		const effectiveKind: ChatMessage["kind"] = isSteer ? "steering" : kind;
-		messages.push({ timestamp: stat.mtimeMs, agent, taskId, kind: effectiveKind, from: "@orch", to: agent, text: raw });
+		let raw: string;
+		try { raw = fs.readFileSync(filePath, "utf-8"); } catch { return; }
+		const isSteer = /^Steering update for /m.test(raw) || /^STEER:/im.test(raw);
+		const body = trimChatBody(isSteer ? extractSteeringBody(raw) : extractDelegationBody(raw));
+		if (!body) return;
+		messages.push({
+			timestamp: stat.mtimeMs,
+			agent,
+			taskId: deriveTaskIdFromFile(filePath),
+			kind: isSteer ? "steering" : "delegation",
+			from: "@orch",
+			to: `@${agent}`,
+			body,
+		});
 	};
-	const dirs: Array<{ rel: string; kind: ChatMessage["kind"] }> = [
-		{ rel: "inbox", kind: "delegation" },
-		{ rel: "processing", kind: "delegation" },
-		{ rel: "done", kind: "delegation" },
-	];
+	const pushJson = (filePath: string, agent: string): void => {
+		const key = `json:${filePath}`;
+		if (seen.has(key)) return;
+		seen.add(key);
+		let stat: fs.Stats;
+		try { stat = fs.statSync(filePath); } catch { return; }
+		let parsed: Record<string, unknown> | undefined;
+		try { parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>; } catch { return; }
+		const summary = typeof parsed?.summary === "string" ? parsed.summary : "(no summary)";
+		const status = typeof parsed?.status === "string" ? parsed.status : undefined;
+		const notes = typeof parsed?.notes === "string" ? parsed.notes : undefined;
+		const filesChanged = Array.isArray(parsed?.filesChanged)
+			? (parsed.filesChanged as unknown[]).filter((entry): entry is string => typeof entry === "string")
+			: undefined;
+		messages.push({
+			timestamp: stat.mtimeMs,
+			agent,
+			taskId: deriveTaskIdFromFile(filePath),
+			kind: "completion",
+			from: `@${agent}`,
+			to: "@orch",
+			body: summary,
+			status,
+			filesChanged,
+			notes,
+		});
+	};
+	const mdDirs = ["inbox", "processing", "done"];
+	const jsonDirs = ["outbox", "processed"];
 	for (const agent of agentNames) {
-		for (const { rel, kind } of dirs) {
+		for (const rel of mdDirs) {
 			const dir = path.join(runtimeRoot, rel, safeFileName(agent));
 			let entries: string[];
 			try { entries = fs.readdirSync(dir); } catch { continue; }
-			for (const name of entries) {
-				if (!name.endsWith(".md")) continue;
-				pushFile(path.join(dir, name), agent, kind);
-			}
+			for (const name of entries) if (name.endsWith(".md")) pushMd(path.join(dir, name), agent);
 		}
-		// Outbox JSON (live + archived) becomes the agent's response.
-		for (const dirRel of ["outbox", "processed"]) {
-			const dir = path.join(runtimeRoot, dirRel, safeFileName(agent));
+		for (const rel of jsonDirs) {
+			const dir = path.join(runtimeRoot, rel, safeFileName(agent));
 			let entries: string[];
 			try { entries = fs.readdirSync(dir); } catch { continue; }
-			for (const name of entries) {
-				if (!name.endsWith(".json")) continue;
-				pushFile(path.join(dir, name), agent, "completion");
-			}
+			for (const name of entries) if (name.endsWith(".json")) pushJson(path.join(dir, name), agent);
 		}
 	}
 	messages.sort((a, b) => a.timestamp - b.timestamp);
@@ -947,33 +992,72 @@ function chatTimestamp(ms: number): string {
 	return `${hh}:${mm}:${ss}`;
 }
 
+function chatRoleColor(name: string, theme: Theme): string {
+	// Orchestrator gets accent (matches the "this is you" framing). Subagents
+	// share the success token so they read consistently green across rows.
+	if (name === "@orch") return theme.fg("accent", theme.bold(name));
+	return theme.fg("success", theme.bold(name));
+}
+
+function chatKindBadge(kind: ChatMessage["kind"], theme: Theme): string {
+	if (kind === "completion") return theme.fg("success", "completion");
+	if (kind === "steering") return theme.fg("warning", "steer");
+	return theme.fg("muted", "delegation");
+}
+
+function chatStatusIcon(status: string | undefined, theme: Theme): string | undefined {
+	if (!status) return undefined;
+	if (status === "completed") return theme.fg("success", ICONS.check);
+	if (status === "failed") return theme.fg("error", ICONS.times);
+	if (status === "blocked") return theme.fg("error", ICONS.times);
+	return theme.fg("warning", ICONS.warning);
+}
+
+function wrapWithHangingIndent(text: string, indent: string, width: number): string[] {
+	const innerWidth = Math.max(1, width - visibleWidth(indent));
+	const out: string[] = [];
+	for (const line of text.split(/\r?\n/)) {
+		const wrapped = wrapTextWithAnsi(line, innerWidth);
+		if (wrapped.length === 0) {
+			out.push(indent);
+			continue;
+		}
+		for (const sub of wrapped) out.push(`${indent}${sub}`);
+	}
+	return out;
+}
+
 function renderChatRoomDetail(runtimeRoot: string, agentNames: string[], ui: AgentBrowserUiState, width: number, rows: number, theme: Theme): string[] {
 	const safeWidth = Math.max(8, width);
-	const wrap = (text: string): string[] => {
-		const wrapped = wrapTextWithAnsi(text, safeWidth);
-		return wrapped.length > 0 ? wrapped : [""];
-	};
 	const titleLine = `${agentPaneTitle(theme, "Chat", ui.pane === "inspector")} ${theme.fg("dim", `(${agentNames.length} agent${agentNames.length === 1 ? "" : "s"})`)}`;
 	const messages = loadChatMessages(runtimeRoot, agentNames);
 	const body: string[] = [];
 	if (messages.length === 0) {
-		body.push(...wrap(theme.fg("dim", "No messages yet. Delegations and completions will appear here as agents work.")));
+		body.push(...wrapTextWithAnsi(theme.fg("dim", "No messages yet. Delegations and completions will appear here as agents work."), safeWidth));
 	} else {
-		for (const msg of messages) {
+		for (let i = 0; i < messages.length; i += 1) {
+			const msg = messages[i];
 			const time = theme.fg("dim", chatTimestamp(msg.timestamp));
 			const arrow = theme.fg("dim", "\u2192");
-			const fromLabel = msg.from === "@orch" ? theme.fg("accent", theme.bold("@orch")) : theme.fg("success", theme.bold(`@${msg.agent}`));
-			const toLabel = msg.to === "@orch" ? theme.fg("accent", theme.bold("@orch")) : theme.fg("success", theme.bold(`@${msg.agent}`));
-			const kindBadge = msg.kind === "completion"
-				? theme.fg("success", "[completion]")
-				: msg.kind === "steering"
-					? theme.fg("warning", "[steer]")
-					: theme.fg("dim", "[delegation]");
-			body.push(...wrap(`${time} ${fromLabel} ${arrow} ${toLabel} ${kindBadge}`));
-			for (const line of msg.text.split(/\r?\n/)) {
-				body.push(...wrap(`  ${theme.fg("toolOutput", line)}`));
+			const fromLabel = chatRoleColor(msg.from, theme);
+			const toLabel = chatRoleColor(msg.to, theme);
+			const sep = theme.fg("dim", "\u00b7");
+			const kindBadge = chatKindBadge(msg.kind, theme);
+			const statusIcon = chatStatusIcon(msg.status, theme);
+			const headerParts = [time, fromLabel, arrow, toLabel, sep, kindBadge];
+			if (statusIcon) headerParts.push(sep, statusIcon);
+			body.push(...wrapTextWithAnsi(headerParts.join(" "), safeWidth));
+			const indent = theme.fg("dim", "\u2502 ");
+			const bodyText = msg.body || theme.fg("dim", "(empty)");
+			body.push(...wrapWithHangingIndent(theme.fg("toolOutput", bodyText), indent, safeWidth));
+			if (msg.filesChanged && msg.filesChanged.length > 0) {
+				body.push(...wrapWithHangingIndent(theme.fg("muted", `files: ${msg.filesChanged.join(", ")}`), indent, safeWidth));
 			}
-			body.push("");
+			if (msg.notes) {
+				body.push(...wrapWithHangingIndent(theme.fg("muted", `notes: ${msg.notes}`), indent, safeWidth));
+			}
+			// Spacer between messages (skip after last).
+			if (i < messages.length - 1) body.push("");
 		}
 	}
 	const allLines: string[] = [titleLine];
@@ -1159,6 +1243,20 @@ function createAgentsBrowserComponent(
 				requestRender();
 				return;
 			}
+			// '-' and '=' are page-step alternates for terminals (tmux, ghostty,
+			// etc) that capture PageUp/PageDown for their own scrollback.
+			if (data === "-") {
+				if (ui.pane === "inspector") ui.inspectorScroll = Math.max(0, ui.inspectorScroll - Math.max(1, layout.bodyRows));
+				else { ui.activeSelected -= layout.listRows; ui.inspectorScroll = 0; clampActive(); }
+				requestRender();
+				return;
+			}
+			if (data === "=") {
+				if (ui.pane === "inspector") ui.inspectorScroll += Math.max(1, layout.bodyRows);
+				else { ui.activeSelected += layout.listRows; ui.inspectorScroll = 0; clampActive(); }
+				requestRender();
+				return;
+			}
 			if (matchesKey(data, "home")) { if (ui.pane === "inspector") ui.inspectorScroll = 0; else { ui.activeSelected = 0; ui.activeScroll = 0; } requestRender(); return; }
 			if (matchesKey(data, "end")) { if (ui.pane === "inspector") ui.inspectorScroll = Number.MAX_SAFE_INTEGER; else { ui.activeSelected = Math.max(0, totalRows - 1); clampActive(); } requestRender(); return; }
 			return;
@@ -1209,7 +1307,7 @@ function createAgentsBrowserComponent(
 		if (ui.tab === "active" && !hasActive) ui.tab = ui.scope;
 		const tabLine = renderAgentBrowserTabs(ui.tab, hasActive, bodyWidth, theme);
 		if (ui.tab === "active") {
-			const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("↑↓")} ${theme.fg("dim", "navigate · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane · ")}${ansiYellow("ctrl+e")} ${theme.fg("dim", "view in editor · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
+			const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("↑↓")} ${theme.fg("dim", "step · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane · ")}${ansiYellow("ctrl+e")} ${theme.fg("dim", "view in editor · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
 			const lines = [tabLine, "", ...renderActiveTabBody(activeItems, runtimeRoot, ui, bodyWidth, theme, layout), agentDivider(bodyWidth, theme), footer];
 			return agentFrame(lines, safeWidth, theme, layout.innerRows, "Subagents");
 		}
