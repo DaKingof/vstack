@@ -406,14 +406,16 @@ const AGENTS_POPUP_PADDING_X = 2;
 const AGENTS_POPUP_PADDING_Y = 1;
 const AGENTS_POPUP_FRAME_ROWS = 2 + AGENTS_POPUP_PADDING_Y * 2;
 const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
-type AgentBrowserTabId = "active" | AgentScope;
+type AgentBrowserTabId = "active" | "history" | AgentScope;
 type AgentBrowserTabDef = { id: AgentBrowserTabId; label: string };
 const ACTIVE_BROWSER_TAB: AgentBrowserTabDef = { id: "active", label: "Active" };
+const HISTORY_BROWSER_TAB: AgentBrowserTabDef = { id: "history", label: "History" };
 const AGENT_SCOPE_TABS: Array<{ id: AgentScope; label: string }> = [
 	{ id: "project", label: "Project" },
 	{ id: "user", label: "User" },
 	{ id: "both", label: "Both" },
 ];
+const HISTORY_SUBTAB_LABELS = ["Summary", "Transcript", "Completion", "Task"] as const;
 
 type AgentBrowserAction =
 	| { type: "attach"; agentName: string }
@@ -436,7 +438,12 @@ interface AgentBrowserUiState {
 	scroll: number;
 	activeSelected: number;
 	activeScroll: number;
+	historySelected: number;
+	historyScroll: number;
+	historySubtab: number;
 }
+
+type HistoryDetailEntry = { items?: TraceViewerItem[]; loading?: boolean; error?: string };
 
 interface AgentBrowserLayout {
 	bodyRows: number;
@@ -508,8 +515,8 @@ function scopeNext(scope: AgentScope, delta: number): AgentScope {
 
 function tabNext(current: AgentBrowserTabId, hasActive: boolean, delta: number): AgentBrowserTabId {
 	const tabs: AgentBrowserTabId[] = hasActive
-		? ["active", "project", "user", "both"]
-		: ["project", "user", "both"];
+		? ["active", "project", "user", "both", "history"]
+		: ["project", "user", "both", "history"];
 	const index = Math.max(0, tabs.indexOf(current));
 	return tabs[(index + delta + tabs.length) % tabs.length]!;
 }
@@ -598,8 +605,8 @@ function renderAgentScopeTabs(active: AgentScope, width: number, theme: Theme): 
 
 function renderAgentBrowserTabs(active: AgentBrowserTabId, hasActive: boolean, width: number, theme: Theme): string {
 	const tabs: AgentBrowserTabDef[] = hasActive
-		? [ACTIVE_BROWSER_TAB, ...AGENT_SCOPE_TABS]
-		: AGENT_SCOPE_TABS;
+		? [ACTIVE_BROWSER_TAB, ...AGENT_SCOPE_TABS, HISTORY_BROWSER_TAB]
+		: [...AGENT_SCOPE_TABS, HISTORY_BROWSER_TAB];
 	const partFor = (tab: AgentBrowserTabDef): string => {
 		const label = ` ${truncateToWidth(tab.label, 18, "…")} `;
 		if (tab.id === active) return agentActivePill(theme, label);
@@ -2517,12 +2524,12 @@ function agentWord(theme: Theme): string {
 	return theme.fg("accent", theme.bold("Agent"));
 }
 
-function agentStatus(theme: Theme, label: string, tone: "success" | "warning" | "error" | "muted" = "muted"): string {
+function agentStatusBadge(theme: Theme, label: string, tone: "success" | "warning" | "error" | "muted" = "muted"): string {
 	return theme.fg(tone, label);
 }
 
 function agentStatusLine(theme: Theme, agent: string, label: string, tone: "success" | "warning" | "error" | "muted", suffix = ""): string {
-	return `${agentsCommandBullet(theme)}${agentWord(theme)} ${ansiMagenta(theme.bold(agent))} ${agentStatus(theme, label, tone)}${suffix}`;
+	return `${agentsCommandBullet(theme)}${agentWord(theme)} ${ansiMagenta(theme.bold(agent))} ${agentStatusBadge(theme, label, tone)}${suffix}`;
 }
 
 function agentsCommandArtifactLine(theme: Theme, branch: "├" | "└", label: string, filePath: string | undefined, width: number): string {
