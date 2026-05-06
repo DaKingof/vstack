@@ -280,7 +280,7 @@ async function parseTranscriptUsage(transcriptPath: string | undefined): Promise
 	} catch {
 		return undefined;
 	}
-	const total: UsageStats = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+	const total: UsageStats = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
 	let model: string | undefined;
 	let bestPerTurn: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number } | undefined;
 	for (const line of content.split(/\r?\n/)) {
@@ -1497,13 +1497,13 @@ function createAgentsBrowserComponent(
 				requestRender();
 				return;
 			}
-			if (matchesKey(data, "pageup")) {
+			if (matchesKey(data, "pageup" as any)) {
 				if (ui.pane === "inspector") ui.inspectorScroll = Math.max(0, ui.inspectorScroll - Math.max(1, layout.bodyRows));
 				else { ui.activeSelected -= layout.listRows; ui.inspectorScroll = 0; clampActive(); }
 				requestRender();
 				return;
 			}
-			if (matchesKey(data, "pagedown")) {
+			if (matchesKey(data, "pagedown" as any)) {
 				if (ui.pane === "inspector") ui.inspectorScroll += Math.max(1, layout.bodyRows);
 				else { ui.activeSelected += layout.listRows; ui.inspectorScroll = 0; clampActive(); }
 				requestRender();
@@ -1527,13 +1527,13 @@ function createAgentsBrowserComponent(
 				requestRender();
 				return;
 			}
-			if (matchesKey(data, "pageup")) {
+			if (matchesKey(data, "pageup" as any)) {
 				if (ui.pane === "inspector") ui.inspectorScroll = Math.max(0, ui.inspectorScroll - Math.max(1, layout.bodyRows));
 				else { ui.historySelected = Math.max(0, ui.historySelected - layout.listRows); ui.historySubtab = 0; ui.inspectorScroll = 0; clampHistory(); loadHistoryRecord(historyRecords[ui.historySelected]); }
 				requestRender();
 				return;
 			}
-			if (matchesKey(data, "pagedown")) {
+			if (matchesKey(data, "pagedown" as any)) {
 				if (ui.pane === "inspector") ui.inspectorScroll += Math.max(1, layout.bodyRows);
 				else { ui.historySelected += layout.listRows; ui.historySubtab = 0; ui.inspectorScroll = 0; clampHistory(); loadHistoryRecord(historyRecords[ui.historySelected]); }
 				requestRender();
@@ -1560,14 +1560,14 @@ function createAgentsBrowserComponent(
 			requestRender();
 			return;
 		}
-		if (matchesKey(data, "pageup")) {
+		if (matchesKey(data, "pageup" as any)) {
 			const layout = getLayout();
 			if (ui.pane === "inspector") ui.inspectorScroll -= Math.max(1, layout.bodyRows);
 			else { ui.selected -= layout.listRows; ui.inspectorScroll = 0; clamp(); }
 			requestRender();
 			return;
 		}
-		if (matchesKey(data, "pagedown")) {
+		if (matchesKey(data, "pagedown" as any)) {
 			const layout = getLayout();
 			if (ui.pane === "inspector") ui.inspectorScroll += Math.max(1, layout.bodyRows);
 			else { ui.selected += layout.listRows; ui.inspectorScroll = 0; clamp(); }
@@ -4395,13 +4395,14 @@ async function openTraceViewer(ctx: ExtensionContext, title: string, items: Trac
 	const state: TraceViewerState = { items: items.length ? items : [{ label: "Empty", text: "No traces found." }], selected: 0, scroll: 0, title };
 	let notice = "";
 	await ctx.ui.custom<void>((tui, theme, _kb, done) => ({
+		invalidate() {},
 		handleInput(data: string) {
 			const tracePageRows = Math.max(1, Math.min(30, Math.max(12, Math.floor(tui.terminal.rows * 0.72))) - 10);
 			if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) return done();
 			if (matchesKey(data, "up")) { state.scroll = Math.max(0, state.scroll - 1); tui.requestRender(); return; }
 			if (matchesKey(data, "down")) { state.scroll += 1; tui.requestRender(); return; }
-			if (matchesKey(data, "-") || matchesKey(data, "pageup") || matchesKey(data, "page_up")) { state.scroll = Math.max(0, state.scroll - tracePageRows); tui.requestRender(); return; }
-			if (matchesKey(data, "=") || matchesKey(data, "pagedown") || matchesKey(data, "page_down")) { state.scroll += tracePageRows; tui.requestRender(); return; }
+			if (matchesKey(data, "-") || matchesKey(data, "pageup" as any) || matchesKey(data, "page_up" as any)) { state.scroll = Math.max(0, state.scroll - tracePageRows); tui.requestRender(); return; }
+			if (matchesKey(data, "=") || matchesKey(data, "pagedown" as any) || matchesKey(data, "page_down" as any)) { state.scroll += tracePageRows; tui.requestRender(); return; }
 			if (matchesKey(data, "left")) { state.selected = (state.selected + state.items.length - 1) % state.items.length; state.scroll = 0; tui.requestRender(); return; }
 			if (matchesKey(data, "right") || matchesKey(data, "tab")) { state.selected = (state.selected + 1) % state.items.length; state.scroll = 0; tui.requestRender(); return; }
 			if (matchesKey(data, "enter") || matchesKey(data, "return")) { notice = openFileInExternalEditor(state.items[state.selected]?.path, ctx.cwd); tui.requestRender(); return; }
@@ -4684,7 +4685,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerMessageRenderer("subagent-trace", (message, _options, theme) => {
-		return framedComponent(new Markdown(message.content, 0, 0, getMarkdownTheme()), theme);
+		const content = typeof message.content === "string" ? message.content : "";
+		return framedComponent(new Markdown(content, 0, 0, getMarkdownTheme()), theme);
 	});
 
 	pi.registerMessageRenderer("subagent-completion", (message, options, theme) => {
@@ -4817,8 +4819,8 @@ export default function (pi: ExtensionAPI) {
 		description: "Child-pane-only helper that writes the persistent agent completion record without exposing outbox JSON mechanics in the visible pane.",
 		parameters: CompleteSubagentParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			if (!childAgentName) return { content: [{ type: "text", text: "complete_subagent is only available inside a persistent agent pane." }], isError: true };
-			if (!childCurrentTaskFile) return { content: [{ type: "text", text: "No active agent task file is being processed." }], isError: true };
+			if (!childAgentName) return { content: [{ type: "text", text: "complete_subagent is only available inside a persistent agent pane." }], details: {}, isError: true };
+			if (!childCurrentTaskFile) return { content: [{ type: "text", text: "No active agent task file is being processed." }], details: {}, isError: true };
 			const taskId = path.basename(childCurrentTaskFile, path.extname(childCurrentTaskFile));
 			const runtimeRoot = runtimeDirForContext(ctx);
 			const outboxFile = completionPath(runtimeRoot, childAgentName, taskId);
@@ -4868,6 +4870,7 @@ export default function (pi: ExtensionAPI) {
 		const task = details?.taskId ? ` · ${shortTaskId(details.taskId)}` : "";
 		const headline = agentStatusLine(theme, agent, "needs completion", "warning", theme.fg("dim", task));
 		if (options?.expanded) {
+			const content = typeof message.content === "string" ? message.content : "Call complete_subagent to finish this task.";
 			const artifacts = [
 				details?.outboxFile ? `Expected outbox: ${compactPath(details.outboxFile)}` : "",
 				details?.processingFile ? `Processing task: ${compactPath(details.processingFile)}` : "",
@@ -4875,7 +4878,7 @@ export default function (pi: ExtensionAPI) {
 				.filter(Boolean)
 				.map((line) => theme.fg("dim", line))
 				.join("\n");
-			return framedMessage(`${headline}\n${theme.fg("toolOutput", message.content || "Call complete_subagent to finish this task.")}${artifacts ? `\n${artifacts}` : ""}`, theme);
+			return framedMessage(`${headline}\n${theme.fg("toolOutput", content)}${artifacts ? `\n${artifacts}` : ""}`, theme);
 		}
 		return framedMessage(`${headline}\n${subagentBranch(theme, "└")}${theme.fg("toolOutput", "Call complete_subagent; task kept active.")}`, theme);
 	});
@@ -5338,11 +5341,11 @@ export default function (pi: ExtensionAPI) {
 	};
 	const shortcut = dashboardShortcut();
 	if (shortcut !== "none") {
-		pi.registerShortcut(shortcut, { description: "Cycle agent dashboard display", handler: async (ctx) => toggleDashboardMode(ctx as ExtensionContext) });
+		pi.registerShortcut(shortcut as any, { description: "Cycle agent dashboard display", handler: async (ctx) => toggleDashboardMode(ctx as ExtensionContext) });
 	}
 	const popup = popupShortcut();
 	if (popup !== "none") {
-		pi.registerShortcut(popup, {
+		pi.registerShortcut(popup as any, {
 			description: "Open the /agents browser popup",
 			handler: async (ctx) => {
 				const extCtx = ctx as ExtensionContext;
@@ -5404,7 +5407,7 @@ export default function (pi: ExtensionAPI) {
 			return new Container();
 		},
 		renderResult(result, _options, theme, context) {
-			const raw = result.content?.find?.((part: any) => part?.type === "text")?.text ?? "";
+			const raw = (result.content as any[] | undefined)?.find?.((part: any) => part?.type === "text" && typeof part.text === "string")?.text ?? "";
 			const details = result.details as GetSubagentResultDetails | undefined;
 			if (context?.isError) return wrappedText(`${theme.fg("error", ICONS.times)} ${theme.fg("toolTitle", "Agent result lookup failed")}\n${theme.fg("muted", raw)}`);
 			const target = details?.agent ? details.agent : "unknown";
@@ -5429,10 +5432,10 @@ export default function (pi: ExtensionAPI) {
 			let record: PaneTaskRecord | undefined;
 			if (params.taskId) {
 				record = records[params.taskId];
-				if (!record && !agentName) return { content: [{ type: "text", text: `No task record found for ${params.taskId}; provide agent to steer directly.` }], isError: true };
+				if (!record && !agentName) return { content: [{ type: "text", text: `No task record found for ${params.taskId}; provide agent to steer directly.` }], details: {}, isError: true };
 				agentName = agentName ?? record?.agent;
 			}
-			if (!agentName) return { content: [{ type: "text", text: "Provide either agent or taskId." }], isError: true };
+			if (!agentName) return { content: [{ type: "text", text: "Provide either agent or taskId." }], details: {}, isError: true };
 			if (params.taskId && record) {
 				const steerKind: DashboardKind = record.paneId ? "pane" : "oneshot";
 				updateDashboard({
@@ -5453,9 +5456,9 @@ export default function (pi: ExtensionAPI) {
 
 			const registry = await readPaneRegistry(runtimeRoot);
 			const entry = registry[agentName];
-			if (!entry) return { content: [{ type: "text", text: `No persistent pane registry entry for ${agentName} in runtime ${runtimeRoot}.` }], isError: true };
-			if (!paneSessionBelongsToRuntime(runtimeRoot, entry)) return { content: [{ type: "text", text: `Refusing to steer ${agentName}: pane session file is outside this runtime. Session: ${entry.sessionFile}. Runtime: ${runtimeRoot}` }], isError: true };
-			if (!(await paneExists(entry.paneId))) return { content: [{ type: "text", text: `Agent ${agentName} is not live.` }], isError: true };
+			if (!entry) return { content: [{ type: "text", text: `No persistent pane registry entry for ${agentName} in runtime ${runtimeRoot}.` }], details: {}, isError: true };
+			if (!paneSessionBelongsToRuntime(runtimeRoot, entry)) return { content: [{ type: "text", text: `Refusing to steer ${agentName}: pane session file is outside this runtime. Session: ${entry.sessionFile}. Runtime: ${runtimeRoot}` }], details: {}, isError: true };
+			if (!(await paneExists(entry.paneId))) return { content: [{ type: "text", text: `Agent ${agentName} is not live.` }], details: {}, isError: true };
 
 			const deliverAs = params.deliverAs ?? "steer";
 			const metadata = await ensurePaneBridgeMetadata(runtimeRoot, entry);
@@ -5544,7 +5547,7 @@ export default function (pi: ExtensionAPI) {
 			return new Container();
 		},
 		renderResult(result, { expanded }, theme, context) {
-			const raw = result.content?.find?.((part: any) => part?.type === "text")?.text ?? "";
+			const raw = (result.content as any[] | undefined)?.find?.((part: any) => part?.type === "text" && typeof part.text === "string")?.text ?? "";
 			const details = result.details as SteerSubagentDetails | undefined;
 			if (context?.isError) return wrappedText(`${theme.fg("error", ICONS.times)} ${theme.fg("toolTitle", "Steer agent failed")}\n${theme.fg("muted", raw)}`);
 			if (!details) return wrappedText(raw);
@@ -5825,7 +5828,7 @@ export default function (pi: ExtensionAPI) {
 				};
 
 				const maxConcurrency = Math.max(1, Math.floor(settingNumber("maxConcurrency", MAX_CONCURRENCY, ctx.cwd)));
-				const results = await mapWithConcurrencyLimit(params.tasks, maxConcurrency, async (t: { agent: string; task: string; cwd?: string }, index) => {
+				const results = await mapWithConcurrencyLimit(params.tasks, maxConcurrency, async (t: { agent: string; task: string; cwd?: string; sessionKey?: string }, index) => {
 					const updateOneshotDashboard = (item: SingleResult) => {
 						updateDashboard({
 							agent: item.agent,

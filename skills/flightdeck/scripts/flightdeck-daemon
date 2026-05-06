@@ -974,7 +974,7 @@ pi_subscriber_loop() {
 
   # Stream bridge events. We emit three classes:
   #   - pi-question: structured pi-questions prompts opened by the child pane.
-  #   - pi-subagent-completion: blocked/failed inner persistent-subagent completions.
+  #   - pi-subagent-completion: blocked/failed/needs-completion inner persistent-subagent completions.
   #   - normal assistant turn-end text events, classified through prompt-classify.
   "$pi_bin" stream "${pi_target_args[@]}" 2>/dev/null \
     | jq --unbuffered -c 'select(
@@ -1027,7 +1027,7 @@ pi_subscriber_loop() {
         [[ -z "$details" || "$details" == "null" ]] && details="{}"
         hash=$(printf '%s' "$details" | sha256sum | awk '{print substr($1,1,12)}')
         [[ "$hash" == "$last_hash" ]] && continue
-        if jq -e '(.completions // []) | any((.status // "") == "blocked" or (.status // "") == "failed")' <<< "$details" >/dev/null 2>&1; then
+        if jq -e '(.completions // []) | any((.status // "") == "blocked" or (.status // "") == "failed" or (.status // "") == "needs_completion")' <<< "$details" >/dev/null 2>&1; then
           has_bad=1
         else
           has_bad=0

@@ -137,7 +137,7 @@ Pane tasks move through `queued → running → completed|blocked|failed`. If a 
 { "taskId": "iced-...", "wait": true }
 ```
 
-Use `get_subagent_result` with either `taskId` or `agent` (latest task for that agent). It reads the durable `tasks.json` registry and can poll pending outbox files until a task reaches `completed`, `blocked`, or `failed`. This is a recovery/status reader for persistent pane tasks; it does not create panes, steer agents, or change Flightdeck/Orchestration ownership rules.
+Use `get_subagent_result` with either `taskId` or `agent` (latest task for that agent). It reads the durable `tasks.json` registry and can poll pending outbox files until a task reaches `completed`, `blocked`, `failed`, or diagnostic `needs_completion`. This is a recovery/status reader for persistent pane tasks; it does not create panes, steer agents, or change Flightdeck/Orchestration ownership rules.
 
 ```json
 { "taskId": "iced-...", "message": "Prioritize the failing layout test.", "deliverAs": "steer" }

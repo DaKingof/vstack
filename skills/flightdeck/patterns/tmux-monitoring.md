@@ -121,7 +121,7 @@ Per-harness adapters live in `pane-respond` (sending), `pane-poll` (reading), an
 |---------|---------|---------------|
 | Claude Code | Tail `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` for assistant `stop_reason` events | `tmux capture-pane -p -S -200` |
 | opencode | `GET /session/<id>/message` → last assistant text. Daemon also polls `GET /question` for the question tool. | `tmux capture-pane -p -S -200` |
-| pi | `pi-bridge history` / `pi-bridge stream` filtered for assistant `turn_end`; `pi-questions` opens emit canonical `pi-question` events; blocked/failed `pi-agents-tmux` inner completions emit advisory `pi-subagent-completion` events for the outer orchestrator only. Flightdeck must not route tools or bridge sends directly to inner agent panes. | `tmux capture-pane -p -S -200` |
+| pi | `pi-bridge history` / `pi-bridge stream` filtered for assistant `turn_end`; `pi-questions` opens emit canonical `pi-question` events; blocked/failed/needs-completion `pi-agents-tmux` inner completions emit advisory `pi-subagent-completion` events for the outer orchestrator only. Flightdeck must not route tools or bridge sends directly to inner agent panes. | `tmux capture-pane -p -S -200` |
 | codex | `codex-bridge turns` / stream filtered for `thread/status/changed → idle` | `tmux capture-pane -p -S -200` |
 
 ### Idle / quiescent indicator (handler: `close-issue.md` § 1)
