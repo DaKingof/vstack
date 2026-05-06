@@ -705,14 +705,11 @@ function renderAgentInspector(agent: AgentConfig | undefined, statuses: Map<stri
 }
 
 function activeDashboardItems(items: SubagentDashboardItem[]): SubagentDashboardItem[] {
-	// Items the popup considers "active": pane agents (whose pane stays
-	// resident across tasks) plus bg agents whose latest task hasn't
-	// finished yet. Sort by startedAt for stable order.
+	// Keep the popup's Active tab consistent with the mini dashboard. The tab is
+	// really a session activity view now: persistent panes stay resident after
+	// completion, and recently completed bg agents remain visible until the
+	// dashboard retention window drops them.
 	return items
-		.filter((item) => {
-			if (item.kind === "pane") return true;
-			return item.status === "running" || item.status === "queued";
-		})
 		.sort((a, b) => {
 			const aKey = a.startedAt ?? a.taskId;
 			const bKey = b.startedAt ?? b.taskId;
@@ -2663,7 +2660,7 @@ function renderDashboardWidgetLines(state: SubagentDashboardState, theme: Theme,
 	const title = `${theme.fg("customMessageLabel", theme.bold("Subagents"))} ${theme.fg("muted", headerParts.join(" · "))}${hint}`;
 	const lines = [title];
 	const aggregateDashboardUsage = (entries: SubagentDashboardItem[]): UsageStats | undefined => {
-		const total: UsageStats = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+		const total: UsageStats = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
 		let any = false;
 		for (const entry of entries) {
 			if (!entry.usage) continue;
@@ -2673,6 +2670,7 @@ function renderDashboardWidgetLines(state: SubagentDashboardState, theme: Theme,
 			total.cacheRead += entry.usage.cacheRead || 0;
 			total.cacheWrite += entry.usage.cacheWrite || 0;
 			total.cost += entry.usage.cost || 0;
+			total.contextTokens = Math.max(total.contextTokens, entry.usage.contextTokens || 0);
 			total.turns = (total.turns ?? 0) + (entry.usage.turns ?? 0);
 		}
 		return any ? total : undefined;
@@ -3308,20 +3306,17 @@ async function runSingleAgent(
 		};
 	}
 
-	// Without sessionKey, bg agents run ephemerally (--no-session). With
-	// sessionKey, route pi to a stable session file under our runtime so the
-	// same key + agent across calls resumes prior conversation context. Pi's
-	// SessionManager.open() handles 'create if missing, continue if existing'.
+	// Bg agents are resumable by default. A caller-provided sessionKey selects a
+	// named lane; otherwise each agent uses its default lane. Route pi to a stable
+	// session file under our runtime so the same key + agent across calls resumes
+	// prior conversation context. Pi's SessionManager.open() handles 'create if
+	// missing, continue if existing'.
 	const args: string[] = ["--mode", "json", "-p"];
-	let resumedSessionPath: string | undefined;
-	if (sessionKey && sessionKey.trim()) {
-		const sessionsDir = path.join(runtimeRoot, "sessions");
-		await fs.promises.mkdir(sessionsDir, { recursive: true, mode: 0o700 }).catch(() => undefined);
-		resumedSessionPath = path.join(sessionsDir, `bg-${safeFileName(agent.name)}-${safeFileName(sessionKey.trim())}.jsonl`);
-		args.push("--session", resumedSessionPath);
-	} else {
-		args.push("--no-session");
-	}
+	const effectiveSessionKey = sessionKey?.trim() || "default";
+	const sessionsDir = path.join(runtimeRoot, "sessions");
+	await fs.promises.mkdir(sessionsDir, { recursive: true, mode: 0o700 }).catch(() => undefined);
+	const resumedSessionPath = path.join(sessionsDir, `bg-${safeFileName(agent.name)}-${safeFileName(effectiveSessionKey)}.jsonl`);
+	args.push("--session", resumedSessionPath);
 	const selectedModel = parentModel ?? agent.model;
 	if (selectedModel) args.push("--model", selectedModel);
 	if (parentThinkingLevel && parentThinkingLevel !== "off") args.push("--thinking", parentThinkingLevel);
@@ -3529,14 +3524,14 @@ const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
-	sessionKey: Type.Optional(Type.String({ description: "Stable id for resuming a bg (non-pane) agent across calls. Same key + agent => same persisted pi session, retains conversation context. Ignored for pane agents." })),
+	sessionKey: Type.Optional(Type.String({ description: "Optional lane id for resuming a bg (non-pane) agent across calls. Omit to use that agent's default resumable lane; same key + agent => same persisted pi session. Ignored for pane agents." })),
 });
 
 const ChainItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
-	sessionKey: Type.Optional(Type.String({ description: "Stable id for resuming a bg (non-pane) agent across calls. Same key + agent => same persisted pi session, retains conversation context. Ignored for pane agents." })),
+	sessionKey: Type.Optional(Type.String({ description: "Optional lane id for resuming a bg (non-pane) agent across calls. Omit to use that agent's default resumable lane; same key + agent => same persisted pi session. Ignored for pane agents." })),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -3557,7 +3552,7 @@ const SubagentParams = Type.Object({
 	sessionKey: Type.Optional(
 		Type.String({
 			description:
-				"For bg (non-pane) agents only, single mode. Stable id used as the resumed pi session file name; the same agent + sessionKey across calls retains conversation context. Use a stable workflow-scoped id like 'review-issue-123' for reviewer-* agents that need memory across multiple delegations. Ignored for pane agents (panes already persist via their own session file).",
+				"For bg (non-pane) agents only, single mode. Optional lane id used as the resumed pi session file name; omit to use that agent's default resumable lane. Use a stable workflow-scoped id like 'review-issue-123' when you want separate memories. Ignored for pane agents (panes already persist via their own session file).",
 		}),
 	),
 	forceSpawn: Type.Optional(
@@ -4051,17 +4046,31 @@ export default function (pi: ExtensionAPI) {
 	// update represents a new lifecycle event the user should see (queued /
 	// started / completed). Patches from the live transcript poller go through
 	// the same helper and must NOT resurrect the widget the user just hid.
+	const dashboardItemKey = (item: Pick<SubagentDashboardItem, "agent" | "kind" | "taskId">) => (item.kind === "pane" ? `pane:${item.agent}` : item.taskId);
+	const dashboardKeyForTask = (taskId: string | undefined): string | undefined => {
+		if (!taskId) return undefined;
+		if (dashboardState.items[taskId]) return taskId;
+		return Object.entries(dashboardState.items).find(([, item]) => item.taskId === taskId)?.[0];
+	};
+
 	const updateDashboard = (item: SubagentDashboardItem) => {
-		dashboardState.items[item.taskId] = item;
+		const key = dashboardItemKey(item);
+		if (item.kind === "pane") {
+			for (const [existingKey, existing] of Object.entries(dashboardState.items)) {
+				if (existingKey !== key && existing.kind === "pane" && existing.agent === item.agent) delete dashboardState.items[existingKey];
+			}
+		}
+		dashboardState.items[key] = item;
 		const maxKeep = Math.max(10, dashboardMaxItems(dashboardCtx?.cwd) * 3);
 		const sorted = Object.values(dashboardState.items).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-		dashboardState.items = Object.fromEntries(sorted.slice(0, maxKeep).map((entry) => [entry.taskId, entry]));
+		dashboardState.items = Object.fromEntries(sorted.slice(0, maxKeep).map((entry) => [dashboardItemKey(entry), entry]));
 		syncDashboard();
 	};
 
 	const patchDashboard = (taskId: string | undefined, patch: Partial<SubagentDashboardItem>) => {
-		if (!taskId) return;
-		const existing = dashboardState.items[taskId];
+		const key = dashboardKeyForTask(taskId);
+		if (!key) return;
+		const existing = dashboardState.items[key];
 		if (!existing) return;
 		updateDashboard({ ...existing, ...patch, updatedAt: new Date().toISOString() });
 	};
@@ -4196,7 +4205,14 @@ export default function (pi: ExtensionAPI) {
 		const agent = typeof event.agent === "string" ? event.agent : undefined;
 		if (!taskId || !agent) return;
 		dashboardState.visible = true;
-		const existing = dashboardState.items[taskId];
+		const existingKey = dashboardKeyForTask(taskId);
+		const paneKey = `pane:${agent}`;
+		const currentPane = dashboardState.items[paneKey];
+		// Pane rows are keyed by agent so they don't duplicate for each task. If a
+		// completion arrives for an older task after a newer task has already been
+		// queued, do not resurrect the stale task into the dashboard.
+		if (!existingKey && currentPane?.kind === "pane" && currentPane.taskId !== taskId) return;
+		const existing = existingKey ? dashboardState.items[existingKey] : currentPane?.taskId === taskId ? currentPane : undefined;
 		const transcriptPath = typeof event.transcriptPath === "string" ? event.transcriptPath : existing?.transcriptPath;
 		const eventUsage = (event.usage as UsageStats | undefined) ?? undefined;
 		const eventModel = typeof event.model === "string" ? event.model : undefined;
@@ -4358,7 +4374,8 @@ export default function (pi: ExtensionAPI) {
 		await migrateLegacyProjectRuntime(ctx.cwd, runtimeRoot);
 		try {
 			const records = await readTaskRegistry(runtimeRoot);
-			for (const record of Object.values(records)) {
+			const sortedRecords = Object.values(records).sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
+			for (const record of sortedRecords) {
 				if (!record.taskId || !record.agent) continue;
 				const rehydrateKind: DashboardKind = record.paneId ? "pane" : "oneshot";
 				updateDashboard({
@@ -5328,10 +5345,11 @@ export default function (pi: ExtensionAPI) {
 			const agentName = args.agent || "...";
 			const preview = args.task ? oneLinePreview(args.task, 56) : "...";
 			let text =
+				theme.fg("accent", "● ") +
 				theme.fg("toolTitle", theme.bold("subagent ")) +
-				theme.fg("accent", agentName) +
-				theme.fg("muted", ` [${scope}]`);
-			text += `\n  ${theme.fg("dim", preview)}`;
+				ansiMagenta(theme.bold(agentName));
+			if (scope !== "project") text += theme.fg("dim", ` · ${scope}`);
+			text += `\n${subagentBranch(theme, "└", _context?.cwd)}${theme.fg("dim", preview)}`;
 			return wrappedText(text);
 		},
 
@@ -5355,13 +5373,8 @@ export default function (pi: ExtensionAPI) {
 			const transcriptLine = (r: SingleResult) => (r.transcriptPath ? theme.fg("dim", `Transcript: ${compactPath(r.transcriptPath)}`) : "");
 			const queuedPaneLine = (r: SingleResult) => {
 				if (!r.taskId || !r.paneId) return "";
-				const hint = quietInline(cwd) && dashboardEnabled(cwd) ? "" : theme.fg("dim", " · Ctrl+O");
-				return `${theme.fg("warning", ICONS.clock)} ${theme.fg("toolTitle", theme.bold(`queued ${r.agent}`))}${hint}`;
-			};
-			const finalOutputPreview = (r: SingleResult, maxChars = 96) => {
-				const finalOutput = getFinalOutput(r.messages).trim();
-				if (r.taskId && r.paneId) return theme.fg("dim", "queued");
-				return finalOutput ? theme.fg("toolOutput", oneLinePreview(finalOutput, maxChars)) : theme.fg("muted", "(no final response)");
+				const hint = theme.fg("dim", " · Ctrl+O");
+				return `${theme.fg("accent", "● ")}${theme.fg("toolTitle", theme.bold("subagent "))}${ansiMagenta(theme.bold(r.agent))}${theme.fg("dim", " · ")}${theme.fg("warning", "queued")}${theme.fg("dim", " · pane")}${hint}`;
 			};
 			const addFinalResponseMarkdown = (container: Container, finalOutput: string, toolCalls: DisplayItem[]) => {
 				if (!finalOutput.trim()) {
@@ -5398,14 +5411,13 @@ export default function (pi: ExtensionAPI) {
 				const r = details.results[0];
 				const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
 				const isQueued = !isError && Boolean(r.taskId && r.paneId);
-				const icon = isError ? theme.fg("error", ICONS.times) : isQueued ? theme.fg("warning", ICONS.clock) : theme.fg("success", ICONS.check);
 				const displayItems = getDisplayItems(r.messages);
 				const finalOutput = getFinalOutput(r.messages);
 				const queued = queuedPaneLine(r);
 
 				if (expanded) {
 					const container = new Container();
-					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+					let header = `${theme.fg("accent", "● ")}${theme.fg("toolTitle", theme.bold("subagent "))}${ansiMagenta(theme.bold(r.agent))}${theme.fg("dim", " · ")}${isQueued ? theme.fg("warning", "queued") : isError ? theme.fg("error", "failed") : theme.fg("success", "completed")}${theme.fg("dim", ` · ${isQueued ? "pane" : "bg"}`)}`;
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 					header += truncationBadge(r);
 					container.addChild(wrappedText(header));
@@ -5440,15 +5452,16 @@ export default function (pi: ExtensionAPI) {
 					return container;
 				}
 
-				let text = queued || `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+				let text = queued || `${theme.fg("accent", "● ")}${theme.fg("toolTitle", theme.bold("subagent "))}${ansiMagenta(theme.bold(r.agent))}${theme.fg("dim", " · ")}${isError ? theme.fg("error", "failed") : theme.fg("success", "completed")}${theme.fg("dim", " · bg")}${theme.fg("dim", " · Ctrl+O")}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 				text += truncationBadge(r);
-				if (queued && !(quietInline(cwd) && dashboardEnabled(cwd))) text += `\n${subagentBranch(theme, "└", cwd)}${theme.fg("dim", "artifacts available in expanded view")}`;
+				if (queued) text += `\n${subagentBranch(theme, "└", cwd)}${theme.fg("dim", r.task ? oneLinePreview(r.task, 120) : "queued task")}`;
 				else if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
-				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+				else if (displayItems.length === 0) text += `\n${subagentBranch(theme, "└", cwd)}${theme.fg("dim", r.task ? oneLinePreview(r.task, 120) : "(no output)")}`;
 				else {
+					if (r.task) text += `\n${subagentBranch(theme, "├", cwd)}${theme.fg("dim", oneLinePreview(r.task, 120))}`;
 					text += `\n${renderDisplayItems(displayItems, collapsedItemCount)}`;
-					if (displayItems.length > collapsedItemCount) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
+					if (displayItems.length > collapsedItemCount) text += `\n${theme.fg("muted", "… more in Ctrl+O")}`;
 				}
 				const outputPath = queued ? "" : fullOutputLine(r);
 				if (outputPath) text += `\n${outputPath}`;
@@ -5458,13 +5471,14 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const aggregateUsage = (results: SingleResult[]) => {
-				const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+				const total: UsageStats = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
 				for (const r of results) {
 					total.input += r.usage.input;
 					total.output += r.usage.output;
 					total.cacheRead += r.usage.cacheRead;
 					total.cacheWrite += r.usage.cacheWrite;
 					total.cost += r.usage.cost;
+					total.contextTokens = Math.max(total.contextTokens, r.usage.contextTokens || 0);
 					total.turns += r.usage.turns;
 				}
 				return total;
