@@ -1,6 +1,6 @@
 {
   "name": "@vanillagreen/pi-agents-tmux",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Pi extension for delegating work to project or user agents, including persistent tmux agent panes.",
   "license": "MIT",
   "keywords": [
@@ -14,7 +14,8 @@
     "extensions": [
       "./extensions/subagent/index.ts"
     ],
-    "image": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-agents-tmux/assets/agents-browser.png"
+    "image": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-agents-tmux/assets/agents-tmux-demo.gif",
+    "video": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-agents-tmux/assets/agents-tmux-demo.mp4"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
@@ -24,7 +25,6 @@
   },
   "files": [
     "extensions/",
-    "assets/",
     "README.md",
     "package.json"
   ],
