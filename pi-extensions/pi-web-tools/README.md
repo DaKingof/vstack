@@ -1,5 +1,6 @@
 # pi-web-tools
-
+![Web Tools settings panel](assets/settings-panel.png)
+![Exa web_search results renderer](assets/web-search.png)
 First-party Pi package for web access tools.
 
 For the Exa-specific API map and tool semantics, see [`EXA.md`](./EXA.md).
