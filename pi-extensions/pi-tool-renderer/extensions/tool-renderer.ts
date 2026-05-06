@@ -1009,6 +1009,12 @@ function applyFullLineBg(theme: any, token: string, text: string, enabled: boole
 	return `${open}${reapplied}${close}`;
 }
 
+function diffLineBgToken(line: StructuredDiffLine | null): string | undefined {
+	if (line?.type === "add") return DIFF_ADD_BG_TOKEN;
+	if (line?.type === "del") return DIFF_DEL_BG_TOKEN;
+	return undefined;
+}
+
 function styleAnsiVisibleRanges(
 	text: string,
 	ranges: Array<[number, number]>,
@@ -1421,9 +1427,7 @@ function renderUnifiedLine(
 	const gutter = `${theme.fg("muted", `${formatNum(line.oldNum, numWidth)} ${formatNum(line.newNum, numWidth)}`)} ${theme.fg(signToken, sign)} `;
 	const contentWidth = Math.max(10, width - visibleLength(gutter));
 	const rendered = `${gutter}${truncateAnsi(colorDiffText(line, highlightedLineBody(line, theme, path, cwd), theme, ranges, cwd), contentWidth)}`;
-	const padded = padVisible(rendered, width);
-	const bgToken = line.type === "add" ? DIFF_ADD_BG_TOKEN : line.type === "del" ? DIFF_DEL_BG_TOKEN : undefined;
-	return bgToken ? applyFullLineBg(theme, bgToken, padded, diffBackgroundEnabled(cwd)) : padded;
+	return padVisible(rendered, width);
 }
 
 function renderUnifiedDiff(diff: StructuredDiff, rows: StructuredDiffLine[], width: number, theme: any, path?: string, cwd?: string): string[] {
@@ -1436,12 +1440,16 @@ function renderUnifiedDiff(diff: StructuredDiff, rows: StructuredDiffLine[], wid
 	const contentWidth = Math.max(1, cellWidth - 2);
 	const ruleSegment = borderMuted(theme, "─".repeat(Math.max(1, cellWidth)));
 	const out: string[] = [`${borderMuted(theme, "┌")}${ruleSegment}${borderMuted(theme, "┐")}`];
-	const pushLine = (line: string) => out.push(`${leftBorder} ${padVisible(line, contentWidth)} ${rightBorder}`);
+	const pushLine = (line: StructuredDiffLine, renderedLine: string) => {
+		const cell = ` ${padVisible(renderedLine, contentWidth)} `;
+		const bgToken = diffLineBgToken(line);
+		out.push(`${leftBorder}${bgToken ? applyFullLineBg(theme, bgToken, cell, diffBackgroundEnabled(cwd)) : cell}${rightBorder}`);
+	};
 	let index = 0;
 	while (index < rows.length) {
 		const line = rows[index]!;
 		if (line.type === "ctx" || line.type === "sep") {
-			pushLine(renderUnifiedLine(line, contentWidth, numWidth, theme, path ?? diff.path, cwd));
+			pushLine(line, renderUnifiedLine(line, contentWidth, numWidth, theme, path ?? diff.path, cwd));
 			index++;
 			continue;
 		}
@@ -1453,8 +1461,8 @@ function renderUnifiedDiff(diff: StructuredDiff, rows: StructuredDiffLine[], wid
 		for (let i = 0; i < count; i++) {
 			const del = dels[i];
 			const add = adds[i];
-			if (del) pushLine(renderUnifiedLine(del, contentWidth, numWidth, theme, path ?? diff.path, cwd, lineWordRanges(del, add ?? null, cwd)));
-			if (add) pushLine(renderUnifiedLine(add, contentWidth, numWidth, theme, path ?? diff.path, cwd, lineWordRanges(add, del ?? null, cwd)));
+			if (del) pushLine(del, renderUnifiedLine(del, contentWidth, numWidth, theme, path ?? diff.path, cwd, lineWordRanges(del, add ?? null, cwd)));
+			if (add) pushLine(add, renderUnifiedLine(add, contentWidth, numWidth, theme, path ?? diff.path, cwd, lineWordRanges(add, del ?? null, cwd)));
 		}
 	}
 	out.push(`${borderMuted(theme, "└")}${ruleSegment}${borderMuted(theme, "┘")}`);
@@ -1498,9 +1506,7 @@ function renderDiffHalf(
 	const prefix = `${formatNum(num, numWidth)} ${sign} `;
 	const raw = `${prefix}${body}`;
 	const shiftedRanges = ranges.map(([start, end]): [number, number] => [start + prefix.length, end + prefix.length]);
-	const padded = padVisible(truncateAnsi(colorDiffText(line, raw, theme, shiftedRanges, cwd), width), width);
-	const bgToken = line.type === "add" ? DIFF_ADD_BG_TOKEN : line.type === "del" ? DIFF_DEL_BG_TOKEN : undefined;
-	return bgToken ? applyFullLineBg(theme, bgToken, padded, diffBackgroundEnabled(cwd)) : padded;
+	return padVisible(truncateAnsi(colorDiffText(line, raw, theme, shiftedRanges, cwd), width), width);
 }
 
 function shouldUseSplitDiff(diff: StructuredDiff, rows: StructuredDiffLine[], width: number): boolean {
@@ -1534,7 +1540,9 @@ function renderDiffCell(
 	ranges: Array<[number, number]> = [],
 ): string {
 	const contentWidth = Math.max(1, cellWidth - 2);
-	return ` ${renderDiffHalf(line, side, contentWidth, numWidth, theme, path, cwd, ranges)} `;
+	const cell = ` ${renderDiffHalf(line, side, contentWidth, numWidth, theme, path, cwd, ranges)} `;
+	const bgToken = diffLineBgToken(line);
+	return bgToken ? applyFullLineBg(theme, bgToken, padVisible(cell, cellWidth), diffBackgroundEnabled(cwd)) : cell;
 }
 
 function renderSplitDiff(diff: StructuredDiff, rows: StructuredDiffLine[], width: number, theme: any, path?: string, cwd?: string): string[] {
