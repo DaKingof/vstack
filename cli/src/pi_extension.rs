@@ -235,11 +235,27 @@ pub fn discover_pi_extensions(dir: &Path) -> Result<Vec<PiExtension>> {
 /// Package renames shipped by vstack. Pi de-duplicates packages by identity,
 /// not by the resources they register, so a renamed package can leave a legacy
 /// package behind that registers the same tool/command and crashes Pi startup.
+///
+/// 1.0.0 release moved every package under the `@vanillagreen/` scope so they
+/// could be published to npm without colliding with unrelated unscoped names.
+/// Stale locks pre-dating the move still key on the unscoped names, so each
+/// scoped name lists its unscoped predecessor (and any earlier aliases).
 const PI_EXTENSION_RENAMES: &[(&str, &[&str])] = &[
-    // `prompt-stash` was renamed to match vstack's Pi package naming convention.
-    ("pi-prompt-stash", &["prompt-stash"]),
-    // The agents package was renamed as its UI standardized on /agents wording.
-    ("pi-agents-tmux", &["pi-subagents-tmux", "pi-subagents"]),
+    ("@vanillagreen/pi-agents-tmux",         &["pi-agents-tmux", "pi-subagents-tmux", "pi-subagents"]),
+    ("@vanillagreen/pi-background-tasks",    &["pi-background-tasks"]),
+    ("@vanillagreen/pi-caveman",             &["pi-caveman"]),
+    ("@vanillagreen/pi-codex-minimal-tools", &["pi-codex-minimal-tools"]),
+    ("@vanillagreen/pi-extension-manager",   &["pi-extension-manager"]),
+    ("@vanillagreen/pi-output-policy",       &["pi-output-policy"]),
+    ("@vanillagreen/pi-prompt-stash",        &["pi-prompt-stash", "prompt-stash"]),
+    ("@vanillagreen/pi-qol",                 &["pi-qol"]),
+    ("@vanillagreen/pi-questions",           &["pi-questions"]),
+    ("@vanillagreen/pi-session-bridge",      &["pi-session-bridge"]),
+    ("@vanillagreen/pi-session-manager",     &["pi-session-manager"]),
+    ("@vanillagreen/pi-skills-manager",      &["pi-skills-manager"]),
+    ("@vanillagreen/pi-task-panel",          &["pi-task-panel"]),
+    ("@vanillagreen/pi-tool-renderer",       &["pi-tool-renderer"]),
+    ("@vanillagreen/pi-web-tools",           &["pi-web-tools"]),
 ];
 
 /// Legacy package names that should be removed from the same scope before the
@@ -803,7 +819,10 @@ mod tests {
 
     #[test]
     fn prompt_stash_rename_has_legacy_name() {
-        assert_eq!(legacy_names_for("pi-prompt-stash"), &["prompt-stash"]);
+        assert_eq!(
+            legacy_names_for("@vanillagreen/pi-prompt-stash"),
+            &["pi-prompt-stash", "prompt-stash"]
+        );
     }
 
     #[test]
@@ -965,20 +984,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&sandbox);
         std::fs::create_dir_all(&sandbox).unwrap();
         let oldest_src = sandbox.join("src").join("pi-subagents");
-        let legacy_src = sandbox.join("src").join("pi-subagents-tmux");
-        let current_src = sandbox.join("src").join("pi-agents-tmux");
+        let mid_src = sandbox.join("src").join("pi-subagents-tmux");
+        let prev_src = sandbox.join("src").join("pi-agents-tmux");
+        let current_src = sandbox.join("src").join("vg-pi-agents-tmux");
         write_mini_source(&oldest_src, "pi-subagents");
-        write_mini_source(&legacy_src, "pi-subagents-tmux");
-        write_mini_source(&current_src, "pi-agents-tmux");
+        write_mini_source(&mid_src, "pi-subagents-tmux");
+        write_mini_source(&prev_src, "pi-agents-tmux");
+        write_mini_source(&current_src, "@vanillagreen/pi-agents-tmux");
         let pi_dir = sandbox.join("agent");
 
         with_pi_dir(&pi_dir, || {
             let oldest = PiExtension::from_dir(&oldest_src).unwrap();
             let oldest_dest = install_pi_extension(&oldest, true).unwrap().unwrap();
             assert!(oldest_dest.exists());
-            let legacy = PiExtension::from_dir(&legacy_src).unwrap();
-            let legacy_dest = install_pi_extension(&legacy, true).unwrap().unwrap();
-            assert!(legacy_dest.exists());
+            let mid = PiExtension::from_dir(&mid_src).unwrap();
+            let mid_dest = install_pi_extension(&mid, true).unwrap().unwrap();
+            assert!(mid_dest.exists());
+            let prev = PiExtension::from_dir(&prev_src).unwrap();
+            let prev_dest = install_pi_extension(&prev, true).unwrap().unwrap();
+            assert!(prev_dest.exists());
 
             let current = PiExtension::from_dir(&current_src).unwrap();
             let current_dest = install_pi_extension(&current, true).unwrap().unwrap();
@@ -988,8 +1012,12 @@ mod tests {
                 "oldest legacy package dir should be removed during rename migration"
             );
             assert!(
-                !legacy_dest.exists(),
-                "legacy package dir should be removed during rename migration"
+                !mid_dest.exists(),
+                "mid legacy package dir should be removed during rename migration"
+            );
+            assert!(
+                !prev_dest.exists(),
+                "previous unscoped legacy package dir should be removed during rename migration"
             );
 
             let settings_path = pi_dir.join("settings.json");
@@ -1002,10 +1030,14 @@ mod tests {
                 .iter()
                 .filter_map(|e| e.as_str())
                 .collect();
-            assert!(pkgs.contains(&"./packages/pi-agents-tmux"));
+            assert!(pkgs.contains(&"./packages/@vanillagreen/pi-agents-tmux"));
+            assert!(
+                !pkgs.contains(&"./packages/pi-agents-tmux"),
+                "previous unscoped settings entry should be removed, got {pkgs:?}"
+            );
             assert!(
                 !pkgs.contains(&"./packages/pi-subagents-tmux"),
-                "legacy settings entry should be removed, got {pkgs:?}"
+                "mid legacy settings entry should be removed, got {pkgs:?}"
             );
             assert!(
                 !pkgs.contains(&"./packages/pi-subagents"),
