@@ -788,7 +788,7 @@ function renderActiveAgentList(items: SubagentDashboardItem[], ui: AgentBrowserU
 		const absoluteIndex = startItemIndex + index + 1; // +1 because Chat is logical 0
 		const selected = absoluteIndex === ui.activeSelected;
 		const icon = dashboardStatusIcon(item.status, theme);
-		const name = theme.fg(selected ? "accent" : "text", theme.bold(item.agent));
+		const name = selected ? ansiMagenta(theme.bold(item.agent)) : ansiMagenta(item.agent);
 		const kind = theme.fg("dim", dashboardKindLabel(item.kind));
 		const row = `${icon} ${name} ${theme.fg("dim", "\u00b7")} ${kind}`;
 		const prefix = selected ? theme.fg("accent", "> ") : "  ";
@@ -811,7 +811,7 @@ function renderActiveAgentDetail(item: SubagentDashboardItem | undefined, ui: Ag
 	// across the whole list so up/down moves the entire viewport - not just
 	// the tail block at the bottom (which is often empty when there is no
 	// transcript or the file is shorter than the viewport).
-	const titleLine = `${agentPaneTitle(theme, "Detail", ui.pane === "inspector")} ${theme.fg("accent", theme.bold(item.agent))} ${dashboardStatusText(item, theme)} ${theme.fg("dim", dashboardKindLabel(item.kind))}`;
+	const titleLine = `${agentPaneTitle(theme, "Detail", ui.pane === "inspector")} ${ansiMagenta(theme.bold(item.agent))} ${dashboardStatusText(item, theme)} ${theme.fg("dim", dashboardKindLabel(item.kind))}`;
 	const body: string[] = [];
 	body.push(...wrap(`${theme.fg("muted", "Task ID")}: ${theme.fg("dim", item.taskId)}`));
 	if (item.task) body.push(...wrap(`${theme.fg("muted", "Task")}: ${item.task}`));
@@ -2602,7 +2602,7 @@ function renderDashboardWidgetLines(state: SubagentDashboardState, theme: Theme,
 	const nameWidth = Math.min(24, Math.max(0, ...shown.map((item) => visibleWidth(item.agent))));
 	for (const [index, item] of shown.entries()) {
 		const branch = subagentBranch(theme, index === shown.length - 1 && items.length <= shown.length ? "└" : "├", cwd);
-		const name = padAnsi(theme.fg("accent", theme.bold(item.agent)), nameWidth);
+		const name = padAnsi(ansiMagenta(theme.bold(item.agent)), nameWidth);
 		const rowParts: string[] = [
 			dashboardStatusText(item, theme),
 			theme.fg("dim", dashboardKindLabel(item.kind)),
@@ -3526,7 +3526,7 @@ function renderPaneCompletionMessage(message: { content: string; details?: unkno
 		const lines: string[] = [];
 		for (const detail of completions) {
 			lines.push(
-				`${paneCompletionIcon(detail.status, theme)} ${theme.fg("accent", theme.bold(detail.agent))} ${paneCompletionStatus(detail.status, theme)} ${theme.fg("dim", `${shortTaskId(detail.taskId)} · Ctrl+O`)}`,
+				`${paneCompletionIcon(detail.status, theme)} ${ansiMagenta(theme.bold(detail.agent))} ${paneCompletionStatus(detail.status, theme)} ${theme.fg("dim", `${shortTaskId(detail.taskId)} · Ctrl+O`)}`,
 			);
 			lines.push(`${subagentBranch(theme, "└")}${theme.fg("toolOutput", oneLinePreview(detail.summary, 120) || "No summary provided.")}`);
 		}
@@ -3539,7 +3539,7 @@ function renderPaneCompletionMessage(message: { content: string; details?: unkno
 		if (index > 0) container.addChild(new Spacer(1));
 		container.addChild(
 			wrappedText(
-				`${paneCompletionIcon(detail.status, theme)} ${theme.fg("accent", theme.bold(detail.agent))} ${theme.fg("muted", detail.taskId)} ${paneCompletionStatus(detail.status, theme)}`,
+				`${paneCompletionIcon(detail.status, theme)} ${ansiMagenta(theme.bold(detail.agent))} ${theme.fg("muted", detail.taskId)} ${paneCompletionStatus(detail.status, theme)}`,
 			),
 		);
 		container.addChild(wrappedText(theme.fg("muted", "─── Summary ───")));
@@ -4049,7 +4049,7 @@ export default function (pi: ExtensionAPI) {
 			if (completions.length === 1) {
 				const detail = completions[0]!;
 				const status = paneCompletionStatus(detail.status, theme);
-				return framedMessage(`${paneCompletionIcon(detail.status, theme)} ${theme.fg("accent", theme.bold(detail.agent))} ${status}`, theme);
+				return framedMessage(`${paneCompletionIcon(detail.status, theme)} ${ansiMagenta(theme.bold(detail.agent))} ${status}`, theme);
 			}
 			if (completions.length > 1) return framedMessage(`${theme.fg("success", ICONS.check)} ${theme.fg("toolTitle", theme.bold(`${completions.length} subagents completed`))}`, theme);
 		}
@@ -5483,7 +5483,7 @@ export default function (pi: ExtensionAPI) {
 				const treeText = details.results
 					.map((r, index) => {
 						const prefix = index === details.results.length - 1 ? "└" : "├";
-						const name = padAnsi(theme.fg("success", theme.bold(r.agent)), nameWidth);
+						const name = padAnsi(ansiMagenta(theme.bold(r.agent)), nameWidth);
 						return `${subagentBranch(theme, prefix, cwd)}${name}${rowTaskPreview(r, 100)}${truncationBadge(r)}`;
 					})
 					.join("\n");
