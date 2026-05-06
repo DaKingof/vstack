@@ -1,6 +1,6 @@
 # pi-caveman
 
-![Caveman mode status](./assets/caveman-mode-status.png)
+![/caveman command autocomplete](assets/command-autocomplete.png)
 
 Native Pi caveman communication mode: fewer output tokens, same technical accuracy.
 
