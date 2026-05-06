@@ -1,5 +1,7 @@
 # pi-codex-minimal-tools
 
+![apply_patch side-by-side diff rendering](assets/apply-patch-rendering.png)
+
 Minimal Codex/OpenAI tool augmentation for Pi. This package adds the useful Codex-style tools without replacing Pi native tools like `read`, `grep`, `find`, `ls`, `bash`, `edit`, or `write`.
 
 Implemented features:
