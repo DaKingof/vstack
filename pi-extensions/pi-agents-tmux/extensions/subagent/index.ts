@@ -50,6 +50,7 @@ const DEFAULT_RESULT_MAX_BYTES = 100 * 1024;
 const DEFAULT_RESULT_MAX_LINES = 4_000;
 const TRACE_VIEWER_WIDTH = "92%";
 const TRACE_VIEWER_MAX_HEIGHT = "88%";
+const MALFORMED_COMPLETION_GRACE_MS = 1_500;
 
 // Nerd Font glyphs (Font Awesome subset). All terminal output uses these
 // instead of unicode geometric/emoji shapes so rendering is consistent
@@ -2015,7 +2016,7 @@ interface PaneRegistryEntry {
 	bridgeSocket?: string;
 }
 
-type PaneTaskStatus = "queued" | "running" | "completed" | "blocked" | "failed" | "unknown";
+type PaneTaskStatus = "queued" | "running" | "completed" | "blocked" | "failed" | "needs_completion" | "unknown";
 
 interface PaneCompletion {
 	agent?: string;
@@ -2068,6 +2069,8 @@ interface PaneTaskRecord {
 	status: PaneTaskStatus;
 	paneId?: string;
 	inboxFile?: string;
+	processingFile?: string;
+	doneFile?: string;
 	outboxFile?: string;
 	completionSourcePath?: string;
 	completionArchivePath?: string;
@@ -2076,7 +2079,9 @@ interface PaneTaskRecord {
 	filesChanged?: string[];
 	validation?: string[];
 	notes?: string;
+	diagnostics?: string[];
 	createdAt: string;
+	updatedAt?: string;
 	completedAt?: string;
 }
 
@@ -2358,8 +2363,40 @@ function inboxDir(runtimeRoot: string, agentName: string): string {
 	return path.join(runtimeRoot, "inbox", safeFileName(agentName));
 }
 
+function processingDir(runtimeRoot: string, agentName: string): string {
+	return path.join(runtimeRoot, "processing", safeFileName(agentName));
+}
+
+function doneDir(runtimeRoot: string, agentName: string): string {
+	return path.join(runtimeRoot, "done", safeFileName(agentName));
+}
+
+function taskMarkdownPath(runtimeRoot: string, dirName: "inbox" | "processing" | "done", agentName: string, taskId: string): string {
+	return path.join(runtimeRoot, dirName, safeFileName(agentName), `${safeFileName(taskId)}.md`);
+}
+
 function completionArchiveDir(runtimeRoot: string, agentName: string): string {
 	return path.join(runtimeRoot, "processed", safeFileName(agentName));
+}
+
+interface TaskArtifactPaths {
+	inboxFile: string;
+	processingFile: string;
+	doneFile: string;
+	outboxFile: string;
+	completionArchivePath?: string;
+	transcriptPath?: string;
+}
+
+function taskArtifactPaths(runtimeRoot: string, record: Pick<PaneTaskRecord, "agent" | "taskId" | "inboxFile" | "processingFile" | "doneFile" | "outboxFile" | "completionArchivePath" | "transcriptPath">): TaskArtifactPaths {
+	return {
+		inboxFile: record.inboxFile ?? taskMarkdownPath(runtimeRoot, "inbox", record.agent, record.taskId),
+		processingFile: record.processingFile ?? taskMarkdownPath(runtimeRoot, "processing", record.agent, record.taskId),
+		doneFile: record.doneFile ?? taskMarkdownPath(runtimeRoot, "done", record.agent, record.taskId),
+		outboxFile: record.outboxFile ?? completionPath(runtimeRoot, record.agent, record.taskId),
+		completionArchivePath: record.completionArchivePath,
+		transcriptPath: record.transcriptPath,
+	};
 }
 
 function legacyProjectRuntimeDirs(cwd: string): string[] {
@@ -2672,15 +2709,179 @@ async function upsertTaskRecord(runtimeRoot: string, record: PaneTaskRecord): Pr
 }
 
 function normalizePaneTaskStatus(status: unknown): PaneTaskStatus {
-	return status === "queued" || status === "running" || status === "completed" || status === "blocked" || status === "failed"
+	return status === "queued" || status === "running" || status === "completed" || status === "blocked" || status === "failed" || status === "needs_completion"
 		? status
 		: "unknown";
+}
+
+function isTerminalTaskStatus(status: PaneTaskStatus | undefined): boolean {
+	return status === "completed" || status === "blocked" || status === "failed";
+}
+
+function appendUniqueDiagnostic(existing: string[] | undefined, diagnostic: string): string[] {
+	const compact = diagnostic.replace(/\s+/g, " ").trim();
+	if (!compact) return existing ?? [];
+	const diagnostics = [...(existing ?? [])];
+	if (!diagnostics.includes(compact)) diagnostics.push(compact);
+	return diagnostics.slice(-8);
+}
+
+function completionParseErrorMessage(filePath: string, error: unknown): string {
+	return `Malformed completion JSON at ${filePath}: ${stringifyError(error)}. Replace it with one valid completion object or call complete_subagent again.`;
+}
+
+async function fileExists(filePath: string | undefined): Promise<boolean> {
+	if (!filePath) return false;
+	try {
+		await fs.promises.access(filePath, fs.constants.F_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function readPaneCompletionFile(filePath: string): Promise<{ completion?: PaneCompletion; error?: unknown; exists: boolean }> {
+	let raw: string;
+	try {
+		raw = await fs.promises.readFile(filePath, "utf-8");
+	} catch (error) {
+		const code = typeof error === "object" && error && "code" in error ? (error as { code?: unknown }).code : undefined;
+		if (code === "ENOENT") return { exists: false };
+		return { error, exists: true };
+	}
+	try {
+		const parsed = JSON.parse(raw);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("completion must be a JSON object");
+		return { completion: parsed as PaneCompletion, exists: true };
+	} catch (error) {
+		return { error, exists: true };
+	}
+}
+
+async function markTaskNeedsCompletion(
+	runtimeRoot: string,
+	agentName: string,
+	taskId: string,
+	options: {
+		diagnostic: string;
+		doneFile?: string;
+		outboxFile?: string;
+		processingFile?: string;
+		transcriptPath?: string;
+	},
+): Promise<PaneTaskRecord | undefined> {
+	let updated: PaneTaskRecord | undefined;
+	const now = new Date().toISOString();
+	await updateTaskRegistry(runtimeRoot, (records) => {
+		const existing = records[taskId];
+		if (isTerminalTaskStatus(existing?.status)) {
+			updated = existing;
+			return;
+		}
+		const outboxFile = options.outboxFile ?? existing?.outboxFile ?? completionPath(runtimeRoot, agentName, taskId);
+		updated = {
+			...existing,
+			taskId,
+			agent: existing?.agent ?? agentName,
+			task: existing?.task ?? "",
+			status: "needs_completion",
+			inboxFile: existing?.inboxFile,
+			processingFile: options.processingFile ?? existing?.processingFile,
+			doneFile: options.doneFile ?? existing?.doneFile,
+			outboxFile,
+			transcriptPath: options.transcriptPath ?? existing?.transcriptPath,
+			createdAt: existing?.createdAt ?? now,
+			updatedAt: now,
+			diagnostics: appendUniqueDiagnostic(existing?.diagnostics, options.diagnostic),
+		};
+		records[taskId] = updated;
+	});
+	return updated;
+}
+
+async function refreshTaskDiagnostics(runtimeRoot: string, record: PaneTaskRecord): Promise<{ record: PaneTaskRecord; diagnostics: string[] }> {
+	const paths = taskArtifactPaths(runtimeRoot, record);
+	const [inboxExists, processingExists, doneExists, outboxExists, archiveExists, transcriptExists] = await Promise.all([
+		fileExists(paths.inboxFile),
+		fileExists(paths.processingFile),
+		fileExists(paths.doneFile),
+		fileExists(paths.outboxFile),
+		fileExists(paths.completionArchivePath),
+		fileExists(paths.transcriptPath),
+	]);
+
+	let nextStatus = record.status;
+	let diagnostics = [...(record.diagnostics ?? [])];
+	const add = (message: string) => {
+		diagnostics = appendUniqueDiagnostic(diagnostics, message);
+	};
+
+	if (!isTerminalTaskStatus(record.status)) {
+		if (processingExists && record.status === "queued") {
+			nextStatus = "running";
+			add(`Task file was claimed by the child pane: ${paths.processingFile}`);
+		}
+		if (doneExists && !outboxExists && !archiveExists) {
+			nextStatus = "needs_completion";
+			add(`Task turn ended but no completion record was found. Expected outbox: ${paths.outboxFile}`);
+		}
+		if (outboxExists) {
+			const parsed = await readPaneCompletionFile(paths.outboxFile);
+			if (parsed.error) {
+				nextStatus = "needs_completion";
+				add(completionParseErrorMessage(paths.outboxFile, parsed.error));
+			}
+		}
+		if (!inboxExists && !processingExists && !doneExists && !outboxExists && !archiveExists) {
+			if (record.status === "queued" || record.status === "running") nextStatus = "unknown";
+			add(`No task handoff or completion artifacts are present for ${record.taskId}; the pane may have been reset or the runtime was cleaned.`);
+		}
+	}
+
+	const artifactDiagnostics = [
+		`Expected outbox: ${paths.outboxFile} (${outboxExists ? "present" : "missing"})`,
+		`Inbox file: ${paths.inboxFile} (${inboxExists ? "present" : "missing"})`,
+		`Processing file: ${paths.processingFile} (${processingExists ? "present" : "missing"})`,
+		`Done file: ${paths.doneFile} (${doneExists ? "present" : "missing"})`,
+		paths.completionArchivePath ? `Archived completion: ${paths.completionArchivePath} (${archiveExists ? "present" : "missing"})` : "Archived completion: (none recorded)",
+		paths.transcriptPath ? `Transcript: ${paths.transcriptPath} (${transcriptExists ? "present" : "missing"})` : "Transcript: (none recorded)",
+	];
+
+	const pathPatch = {
+		inboxFile: record.inboxFile ?? paths.inboxFile,
+		processingFile: record.processingFile ?? (processingExists ? paths.processingFile : undefined),
+		doneFile: record.doneFile ?? (doneExists ? paths.doneFile : undefined),
+		outboxFile: record.outboxFile ?? paths.outboxFile,
+	};
+	const changed =
+		nextStatus !== record.status ||
+		diagnostics.join("\n") !== (record.diagnostics ?? []).join("\n") ||
+		pathPatch.inboxFile !== record.inboxFile ||
+		pathPatch.processingFile !== record.processingFile ||
+		pathPatch.doneFile !== record.doneFile ||
+		pathPatch.outboxFile !== record.outboxFile;
+
+	if (!changed) return { record, diagnostics: [...diagnostics, ...artifactDiagnostics] };
+
+	let updated = record;
+	await updateTaskRegistry(runtimeRoot, (records) => {
+		const existing = records[record.taskId] ?? record;
+		updated = {
+			...existing,
+			...pathPatch,
+			status: nextStatus,
+			diagnostics,
+			updatedAt: new Date().toISOString(),
+		};
+		records[record.taskId] = updated;
+	});
+	return { record: updated, diagnostics: [...diagnostics, ...artifactDiagnostics] };
 }
 
 function latestTaskRecord(records: PaneTaskRegistry, agent?: string): PaneTaskRecord | undefined {
 	return Object.values(records)
 		.filter((record) => !agent || record.agent === agent)
-		.sort((a, b) => (b.completedAt ?? b.createdAt).localeCompare(a.completedAt ?? a.createdAt))[0];
+		.sort((a, b) => (b.updatedAt ?? b.completedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.completedAt ?? a.createdAt))[0];
 }
 
 function delay(ms: number): Promise<void> {
@@ -2716,6 +2917,7 @@ function dashboardStatusIcon(status: SubagentDashboardItem["status"], theme: The
 	if (status === "completed") return theme.fg("success", ICONS.check);
 	if (status === "failed") return theme.fg("error", ICONS.times);
 	if (status === "blocked") return theme.fg("error", ICONS.times);
+	if (status === "needs_completion") return theme.fg("warning", ICONS.warning);
 	if (status === "running") return theme.fg("warning", ICONS.cog);
 	if (status === "waiting") return theme.fg("warning", ICONS.clock);
 	if (status === "queued") return theme.fg("warning", ICONS.clock);
@@ -2726,6 +2928,7 @@ function dashboardStatusText(item: SubagentDashboardItem, theme: Theme): string 
 	if (item.status === "completed") return theme.fg("success", "done");
 	if (item.status === "failed") return theme.fg("error", "failed");
 	if (item.status === "blocked") return theme.fg("warning", "blocked");
+	if (item.status === "needs_completion") return theme.fg("warning", "needs completion");
 	if (item.status === "running") return theme.fg("warning", "working");
 	if (item.status === "waiting") return theme.fg("warning", "waiting");
 	if (item.status === "queued") return theme.fg("warning", "queued");
@@ -3370,8 +3573,15 @@ async function pollPaneCompletions(runtimeRoot: string, pi: ExtensionAPI, trigge
 
 		for (const file of files) {
 			const filePath = path.join(dir, file);
+			let parseFailure = false;
 			try {
-				const completion = JSON.parse(await fs.promises.readFile(filePath, "utf-8")) as PaneCompletion;
+				const parsed = await readPaneCompletionFile(filePath);
+				if (parsed.error) {
+					parseFailure = true;
+					throw parsed.error;
+				}
+				if (!parsed.completion) continue;
+				const completion = parsed.completion;
 				const agentName = completion.agent || agentDir.name;
 				const archivePath = await archiveCompletion(runtimeRoot, agentName, filePath);
 				const detail = paneCompletionDetailsFromCompletion(completion, agentDir.name, filePath, archivePath, registry, tasks);
@@ -3393,6 +3603,7 @@ async function pollPaneCompletions(runtimeRoot: string, pi: ExtensionAPI, trigge
 						filesChanged: detail.filesChanged,
 						validation: detail.validation,
 						notes: detail.notes,
+						updatedAt: detail.completedAt,
 						completedAt: detail.completedAt,
 					};
 				});
@@ -3407,8 +3618,40 @@ async function pollPaneCompletions(runtimeRoot: string, pi: ExtensionAPI, trigge
 					transcriptPath: detail.transcriptPath,
 					completionPath: detail.archivePath ?? detail.sourcePath,
 				});
-			} catch {
-				// Leave malformed or concurrently-written files in place for the agent/user to fix.
+			} catch (error) {
+				// Leave malformed or concurrently-written files in place for the agent/user to fix,
+				// but surface stable parse failures in the task registry and dashboard.
+				let oldEnough = true;
+				try {
+					const stat = await fs.promises.stat(filePath);
+					oldEnough = Date.now() - stat.mtimeMs >= MALFORMED_COMPLETION_GRACE_MS;
+				} catch {
+					oldEnough = true;
+				}
+				if (!oldEnough) continue;
+				const taskId = path.basename(filePath, path.extname(filePath));
+				const diagnostic = parseFailure
+					? completionParseErrorMessage(filePath, error)
+					: `Unable to collect completion JSON at ${filePath}: ${stringifyError(error)}. The file was left in place for retry.`;
+				const updated = await markTaskNeedsCompletion(runtimeRoot, agentDir.name, taskId, {
+					diagnostic,
+					outboxFile: filePath,
+					transcriptPath: registry[agentDir.name]?.sessionFile,
+				});
+				if (updated) {
+					tasks = { ...tasks, [taskId]: updated };
+					emitSubagentEvent(pi, "subagents:needs_completion", {
+						mode: "pane",
+						agent: updated.agent,
+						paneId: updated.paneId ?? registry[updated.agent]?.paneId,
+						taskId,
+						status: "needs_completion",
+						summary: diagnostic,
+						runtimeRoot,
+						transcriptPath: updated.transcriptPath,
+						completionPath: filePath,
+					});
+				}
 			}
 		}
 	}
@@ -3480,6 +3723,7 @@ async function queuePersistentPaneTask(
 		outboxFile,
 		transcriptPath: pane.sessionFile,
 		createdAt: now,
+		updatedAt: now,
 	});
 	emitSubagentEvent(pi, "subagents:queued", {
 		mode: "pane",
@@ -3888,12 +4132,14 @@ function paneCompletionIcon(status: PaneTaskStatus, theme: Theme): string {
 	if (status === "completed") return theme.fg("success", ICONS.check);
 	if (status === "blocked") return theme.fg("error", ICONS.times);
 	if (status === "failed") return theme.fg("error", ICONS.times);
+	if (status === "needs_completion") return theme.fg("warning", ICONS.warning);
 	if (status === "queued") return theme.fg("warning", ICONS.clock);
 	return theme.fg("muted", ICONS.dotSmall);
 }
 
 function paneCompletionStatus(status: PaneTaskStatus, theme: Theme): string {
 	if (status === "completed") return theme.fg("success", status);
+	if (status === "needs_completion") return theme.fg("warning", "needs completion");
 	if (status === "blocked") return theme.fg("warning", status);
 	if (status === "failed") return theme.fg("error", status);
 	return theme.fg("muted", status);
@@ -3901,7 +4147,7 @@ function paneCompletionStatus(status: PaneTaskStatus, theme: Theme): string {
 
 function paneCompletionTone(status: PaneTaskStatus): "success" | "warning" | "error" | "muted" {
 	if (status === "completed") return "success";
-	if (status === "blocked" || status === "queued") return "warning";
+	if (status === "blocked" || status === "queued" || status === "needs_completion") return "warning";
 	if (status === "failed") return "error";
 	return "muted";
 }
@@ -3955,16 +4201,17 @@ function renderPaneCompletionMessage(message: { content: string; details?: unkno
 function formatTaskRecordResult(record: PaneTaskRecord, verbose = false): string {
 	const files = record.filesChanged?.length ? record.filesChanged.map((file) => `- ${file}`).join("\n") : "None reported";
 	const validation = record.validation?.length ? record.validation.map((item) => `- ${item}`).join("\n") : "None reported";
+	const diagnostics = record.diagnostics?.length ? record.diagnostics.map((item) => `- ${item}`).join("\n") : "";
 	const metaParts = [
 		`Status: **${record.status}**`,
-		record.completedAt ? `Completed: ${record.completedAt}` : `Created: ${record.createdAt}`,
+		record.completedAt ? `Completed: ${record.completedAt}` : record.updatedAt ? `Updated: ${record.updatedAt}` : `Created: ${record.createdAt}`,
 	];
 	const lines = [
 		`## ${record.agent} · ${record.taskId}`,
 		metaParts.join(" · "),
 		"",
 		"### Summary",
-		record.summary || "No summary yet.",
+		record.summary || (record.status === "needs_completion" ? "Task turn ended without a valid completion record; see diagnostics." : "No summary yet."),
 		"",
 		"### Files Changed",
 		files,
@@ -3972,10 +4219,15 @@ function formatTaskRecordResult(record: PaneTaskRecord, verbose = false): string
 		"### Validation",
 		validation,
 		record.notes ? `\n### Notes\n${record.notes}` : "",
+		diagnostics ? `\n### Diagnostics\n${diagnostics}` : "",
 	];
 	if (verbose) {
 		lines.push("", "### Task", record.task || "(task text unavailable)");
 		const artifactLines = [
+			record.inboxFile ? `Inbox: ${record.inboxFile}` : "",
+			record.processingFile ? `Processing: ${record.processingFile}` : "",
+			record.doneFile ? `Done: ${record.doneFile}` : "",
+			record.outboxFile ? `Expected outbox: ${record.outboxFile}` : "",
 			record.completionArchivePath ? `Archive: ${record.completionArchivePath}` : record.completionSourcePath ? `Source: ${record.completionSourcePath}` : "",
 			record.transcriptPath ? `Transcript: ${record.transcriptPath}` : "",
 		].filter(Boolean);
@@ -4206,6 +4458,7 @@ interface GetSubagentResultDetails {
 	status?: PaneTaskStatus;
 	taskId?: string;
 	notes?: string;
+	diagnostics?: string[];
 }
 
 interface SteerSubagentDetails {
@@ -4332,6 +4585,35 @@ export default function (pi: ExtensionAPI) {
 		const existing = dashboardState.items[key];
 		if (!existing) return;
 		updateDashboard({ ...existing, ...patch, updatedAt: new Date().toISOString() });
+	};
+
+	const updateDashboardFromTaskRecord = (record: PaneTaskRecord) => {
+		const kind: DashboardKind = record.paneId ? "pane" : "oneshot";
+		updateDashboard({
+			agent: record.agent,
+			artifacts: Boolean(record.completionArchivePath || record.outboxFile || record.transcriptPath || record.processingFile || record.doneFile),
+			completedAt: record.completedAt,
+			kind,
+			message: record.summary || record.diagnostics?.at(-1) || record.task,
+			paneId: record.paneId,
+			startedAt: record.createdAt,
+			status: dashboardStatusFor(record.status, kind),
+			task: record.task,
+			taskId: record.taskId,
+			transcriptPath: record.transcriptPath,
+			updatedAt: record.updatedAt ?? record.completedAt ?? record.createdAt,
+		});
+	};
+
+	const syncDashboardFromTaskRegistry = async (runtimeRoot: string) => {
+		const records = await readTaskRegistry(runtimeRoot);
+		const sorted = Object.values(records).sort((a, b) => (a.updatedAt ?? a.completedAt ?? a.createdAt).localeCompare(b.updatedAt ?? b.completedAt ?? b.createdAt));
+		for (const record of sorted) {
+			if (!record.taskId || !record.agent) continue;
+			const refreshed = await refreshTaskDiagnostics(runtimeRoot, record);
+			if (refreshed.record.status === "needs_completion") dashboardState.visible = true;
+			updateDashboardFromTaskRecord(refreshed.record);
+		}
 	};
 
 	const refreshAgentCommandCompletions = (ctx: ExtensionContext) => {
@@ -4481,7 +4763,9 @@ export default function (pi: ExtensionAPI) {
 		const eventUsage = (event.usage as UsageStats | undefined) ?? undefined;
 		const eventModel = typeof event.model === "string" ? event.model : undefined;
 		const kind = existing?.kind ?? (event.mode === "oneshot" ? "oneshot" : "pane");
-		const effectiveStatus = dashboardStatusFor(status, kind);
+		const payloadStatus = normalizePaneTaskStatus(event.status);
+		const eventStatus = payloadStatus === "unknown" ? status : payloadStatus;
+		const effectiveStatus = dashboardStatusFor(eventStatus, kind);
 		updateDashboard({
 			agent,
 			artifacts: true,
@@ -4515,6 +4799,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.events.on("subagents:completed", (payload: unknown) => completeDashboardFromEvent(payload, "completed"));
 	pi.events.on("subagents:failed", (payload: unknown) => completeDashboardFromEvent(payload, "failed"));
+	pi.events.on("subagents:needs_completion", (payload: unknown) => completeDashboardFromEvent(payload, "needs_completion"));
 
 	pi.events.on("subagents:steered", (payload: unknown) => {
 		if (!payload || typeof payload !== "object") return;
@@ -4577,6 +4862,24 @@ export default function (pi: ExtensionAPI) {
 		return framedMessage(headline, theme);
 	});
 
+	pi.registerMessageRenderer("subagent-missing-completion", (message, options, theme) => {
+		const details = message.details as { agent?: string; taskId?: string; outboxFile?: string; processingFile?: string } | undefined;
+		const agent = details?.agent ?? "unknown";
+		const task = details?.taskId ? ` · ${shortTaskId(details.taskId)}` : "";
+		const headline = agentStatusLine(theme, agent, "needs completion", "warning", theme.fg("dim", task));
+		if (options?.expanded) {
+			const artifacts = [
+				details?.outboxFile ? `Expected outbox: ${compactPath(details.outboxFile)}` : "",
+				details?.processingFile ? `Processing task: ${compactPath(details.processingFile)}` : "",
+			]
+				.filter(Boolean)
+				.map((line) => theme.fg("dim", line))
+				.join("\n");
+			return framedMessage(`${headline}\n${theme.fg("toolOutput", message.content || "Call complete_subagent to finish this task.")}${artifacts ? `\n${artifacts}` : ""}`, theme);
+		}
+		return framedMessage(`${headline}\n${subagentBranch(theme, "└")}${theme.fg("toolOutput", "Call complete_subagent; task kept active.")}`, theme);
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		dashboardCtx = ctx;
 		dashboardState = { collapsed: dashboardDefaultCollapsed(ctx.cwd), mode: dashboardDefaultCollapsed(ctx.cwd) ? "compact" : "normal", visible: true, items: {} };
@@ -4595,7 +4898,7 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.setStatus("agent", `${childAgentName} idle`);
 			if (ctx.hasUI) ctx.ui.setWidget("subagent-marker", undefined);
 			const pollInbox = () => {
-				if (childPollInFlight || !ctx.isIdle()) return;
+				if (childPollInFlight || childCurrentTaskFile || !ctx.isIdle()) return;
 				childPollInFlight = true;
 				(async () => {
 					const inbox = inboxDir(runtimeRoot, childAgentName);
@@ -4609,7 +4912,7 @@ export default function (pi: ExtensionAPI) {
 					if (!file) return;
 
 					const source = path.join(inbox, file);
-					const processing = path.join(runtimeRoot, "processing", safeFileName(childAgentName), file);
+					const processing = path.join(processingDir(runtimeRoot, childAgentName), file);
 					await fs.promises.mkdir(path.dirname(processing), { recursive: true, mode: 0o700 });
 					try {
 						await fs.promises.rename(source, processing);
@@ -4619,6 +4922,33 @@ export default function (pi: ExtensionAPI) {
 
 					const prompt = await fs.promises.readFile(processing, "utf-8");
 					childCurrentTaskFile = processing;
+					const taskId = path.basename(processing, path.extname(processing));
+					const now = new Date().toISOString();
+					await updateTaskRegistry(runtimeRoot, (records) => {
+						const existing = records[taskId];
+						records[taskId] = {
+							...existing,
+							taskId,
+							agent: existing?.agent ?? childAgentName,
+							task: existing?.task ?? "",
+							status: "running",
+							inboxFile: existing?.inboxFile ?? source,
+							processingFile: processing,
+							outboxFile: existing?.outboxFile ?? completionPath(runtimeRoot, childAgentName, taskId),
+							transcriptPath: existing?.transcriptPath ?? ctx.sessionManager.getSessionFile() ?? undefined,
+							createdAt: existing?.createdAt ?? now,
+							updatedAt: now,
+						};
+					});
+					emitSubagentEvent(pi, "subagents:started", {
+						mode: "pane",
+						agent: childAgentName,
+						taskId,
+						status: "running",
+						runtimeRoot,
+						transcriptPath: ctx.sessionManager.getSessionFile() ?? undefined,
+						completionPath: completionPath(runtimeRoot, childAgentName, taskId),
+					});
 					ctx.ui.setStatus("agent", `${childAgentName} running ${file}`);
 					pi.sendUserMessage(prompt);
 				})().finally(() => {
@@ -4637,24 +4967,11 @@ export default function (pi: ExtensionAPI) {
 			const sortedRecords = Object.values(records).sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
 			for (const record of sortedRecords) {
 				if (!record.taskId || !record.agent) continue;
-				const rehydrateKind: DashboardKind = record.paneId ? "pane" : "oneshot";
-				updateDashboard({
-					agent: record.agent,
-					artifacts: Boolean(record.completionArchivePath || record.outboxFile || record.transcriptPath),
-					completedAt: record.completedAt,
-					kind: rehydrateKind,
-					message: record.summary || record.task,
-					paneId: record.paneId,
-					startedAt: record.createdAt,
-					status: dashboardStatusFor(record.status, rehydrateKind),
-					task: record.task,
-					taskId: record.taskId,
-					transcriptPath: record.transcriptPath,
-					updatedAt: record.completedAt ?? record.createdAt,
-				});
-				if (record.transcriptPath && (record.status === "completed" || record.status === "failed" || record.status === "blocked")) {
-					const capturedTaskId = record.taskId;
-					parseTranscriptUsage(record.transcriptPath)
+				const refreshed = await refreshTaskDiagnostics(runtimeRoot, record);
+				updateDashboardFromTaskRecord(refreshed.record);
+				if (refreshed.record.transcriptPath && (refreshed.record.status === "completed" || refreshed.record.status === "failed" || refreshed.record.status === "blocked")) {
+					const capturedTaskId = refreshed.record.taskId;
+					parseTranscriptUsage(refreshed.record.transcriptPath)
 						.then((parsed) => {
 							if (parsed) patchDashboard(capturedTaskId, { usage: parsed.usage, model: parsed.model });
 						})
@@ -4687,7 +5004,10 @@ export default function (pi: ExtensionAPI) {
 			if (completionPollInFlight) return;
 			completionPollInFlight = true;
 			pollPaneCompletions(runtimeRoot, pi)
-				.then(() => refreshLiveUsage())
+				.then(async () => {
+					await syncDashboardFromTaskRegistry(runtimeRoot);
+					await refreshLiveUsage();
+				})
 				.finally(() => {
 					completionPollInFlight = false;
 				});
@@ -4699,12 +5019,65 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_end", async (_event, ctx) => {
 		if (!childAgentName) return;
 		if (childCurrentTaskFile) {
-			const doneFile = path.join(runtimeDirForContext(ctx), "done", safeFileName(childAgentName), path.basename(childCurrentTaskFile));
+			const runtimeRoot = runtimeDirForContext(ctx);
+			const activeTaskFile = childCurrentTaskFile;
+			const taskId = path.basename(activeTaskFile, path.extname(activeTaskFile));
+			const outboxFile = completionPath(runtimeRoot, childAgentName, taskId);
+			const pendingMatches = pendingChildCompletion?.taskId === taskId;
+			let manualCompletionOk = false;
+			let missingDiagnostic = `Task turn ended but ${childAgentName} did not call complete_subagent. Expected completion outbox: ${outboxFile}`;
+			if (!pendingMatches) {
+				const parsed = await readPaneCompletionFile(outboxFile);
+				if (parsed.completion) manualCompletionOk = true;
+				else if (parsed.exists && parsed.error) missingDiagnostic = completionParseErrorMessage(outboxFile, parsed.error);
+			}
+
+			if (!pendingMatches && !manualCompletionOk) {
+				await markTaskNeedsCompletion(runtimeRoot, childAgentName, taskId, {
+					diagnostic: missingDiagnostic,
+					outboxFile,
+					processingFile: activeTaskFile,
+					transcriptPath: ctx.sessionManager.getSessionFile() ?? undefined,
+				});
+				ctx.ui.setStatus("agent", `${childAgentName} needs completion ${shortTaskId(taskId, 18)}`);
+				pi.sendMessage({
+					customType: "subagent-missing-completion",
+					content: missingDiagnostic,
+					details: { agent: childAgentName, taskId, outboxFile, processingFile: activeTaskFile },
+					display: true,
+				});
+				return;
+			}
+
+			const doneFile = path.join(doneDir(runtimeRoot, childAgentName), path.basename(activeTaskFile));
 			try {
 				await fs.promises.mkdir(path.dirname(doneFile), { recursive: true, mode: 0o700 });
-				await fs.promises.rename(childCurrentTaskFile, doneFile);
-			} catch {
+				await fs.promises.rename(activeTaskFile, doneFile);
+				await updateTaskRegistry(runtimeRoot, (records) => {
+					const existing = records[taskId];
+					if (!existing) return;
+					records[taskId] = {
+						...existing,
+						doneFile,
+						processingFile: existing.processingFile ?? activeTaskFile,
+						outboxFile: existing.outboxFile ?? outboxFile,
+						updatedAt: new Date().toISOString(),
+					};
+				});
+			} catch (error) {
 				// Keep the processing file as evidence if archival fails.
+				await updateTaskRegistry(runtimeRoot, (records) => {
+					const existing = records[taskId];
+					if (!existing) return;
+					records[taskId] = {
+						...existing,
+						processingFile: existing.processingFile ?? activeTaskFile,
+						outboxFile: existing.outboxFile ?? outboxFile,
+						transcriptPath: existing.transcriptPath ?? ctx.sessionManager.getSessionFile() ?? undefined,
+						updatedAt: new Date().toISOString(),
+						diagnostics: appendUniqueDiagnostic(existing.diagnostics, `Task completion was recorded, but processing-file archival failed for ${activeTaskFile}: ${stringifyError(error)}`),
+					};
+				});
 			}
 			childCurrentTaskFile = undefined;
 		}
@@ -5001,11 +5374,17 @@ export default function (pi: ExtensionAPI) {
 			const runtimeRoot = sessionRuntimeDir(runtimeSessionId(ctx));
 			const deadline = Date.now() + Math.max(0, Math.floor(params.timeoutMs ?? 30000));
 			let record: PaneTaskRecord | undefined;
+			let diagnostics: string[] = [];
 			do {
 				await pollPaneCompletions(runtimeRoot, pi, false);
 				const records = await readTaskRegistry(runtimeRoot);
 				record = params.taskId ? records[params.taskId] : latestTaskRecord(records, params.agent);
-				if (!params.wait || (record && ["completed", "blocked", "failed"].includes(record.status))) break;
+				if (record) {
+					const refreshed = await refreshTaskDiagnostics(runtimeRoot, record);
+					record = refreshed.record;
+					diagnostics = refreshed.diagnostics;
+				}
+				if (!params.wait || (record && (isTerminalTaskStatus(record.status) || record.status === "needs_completion"))) break;
 				if (Date.now() >= deadline) break;
 				await delay(500);
 			} while (true);
@@ -5014,24 +5393,11 @@ export default function (pi: ExtensionAPI) {
 				const selector = params.taskId ? `taskId ${params.taskId}` : `agent ${params.agent}`;
 				return { content: [{ type: "text", text: `No persistent agent task record found for ${selector}.` }], details: { agent: params.agent, taskId: params.taskId } satisfies GetSubagentResultDetails, isError: true };
 			}
-			const recordKind: DashboardKind = record.paneId ? "pane" : "oneshot";
-			updateDashboard({
-				agent: record.agent,
-				artifacts: Boolean(record.completionArchivePath || record.outboxFile || record.transcriptPath),
-				completedAt: record.completedAt,
-				kind: recordKind,
-				message: record.summary || record.task,
-				paneId: record.paneId,
-				startedAt: record.createdAt,
-				status: dashboardStatusFor(record.status, recordKind),
-				task: record.task,
-				taskId: record.taskId,
-				transcriptPath: record.transcriptPath,
-				updatedAt: new Date().toISOString(),
-			});
+			updateDashboardFromTaskRecord({ ...record, updatedAt: new Date().toISOString() });
+			const diagnosticBlock = params.verbose && diagnostics.length > 0 ? `\n\n### Artifact diagnostics\n${diagnostics.map((line) => `- ${line}`).join("\n")}` : "";
 			return {
-				content: [{ type: "text", text: formatTaskRecordResult(record, params.verbose ?? false) }],
-				details: { agent: record.agent, paneId: record.paneId, summary: record.summary, status: record.status, taskId: record.taskId, notes: record.notes } satisfies GetSubagentResultDetails,
+				content: [{ type: "text", text: `${formatTaskRecordResult(record, params.verbose ?? false)}${diagnosticBlock}` }],
+				details: { agent: record.agent, paneId: record.paneId, summary: record.summary, status: record.status, taskId: record.taskId, notes: record.notes, diagnostics: record.diagnostics } satisfies GetSubagentResultDetails,
 			};
 		},
 		renderCall(_args, _theme, _context) {
@@ -5716,6 +6082,7 @@ export default function (pi: ExtensionAPI) {
 				const displayItems = getDisplayItems(r.messages);
 				const finalOutput = getFinalOutput(r.messages);
 				const queued = queuedPaneLine(r);
+				const quietDashboard = !expanded && dashboardEnabled(cwd) && quietInline(cwd);
 
 				if (expanded) {
 					const container = new Container();
@@ -5752,6 +6119,24 @@ export default function (pi: ExtensionAPI) {
 						container.addChild(wrappedText(theme.fg("dim", usageStr)));
 					}
 					return container;
+				}
+
+				if (quietDashboard && queued) {
+					return wrappedText(agentStatusLine(theme, r.agent, "Queued task", "warning", `${theme.fg("dim", " · pane · dashboard")}${theme.fg("dim", " · Ctrl+O")}`));
+				}
+
+				if (quietDashboard && !queued && !isError) {
+					const toolCalls = displayItems.filter((item) => item.type === "toolCall");
+					const preview = finalOutput && !finalOutputLooksLikeToolEcho(finalOutput, toolCalls)
+						? oneLinePreview(finalOutput, 180)
+						: r.task
+							? oneLinePreview(r.task, 140)
+							: "completed";
+					let text = `${theme.fg("toolTitle", theme.bold("Result from"))} ${ansiMagenta(theme.bold(r.agent))}${theme.fg("dim", " · bg · Ctrl+O")}${truncationBadge(r)}`;
+					if (preview) text += `\n${subagentBranch(theme, "└", cwd)}${theme.fg("toolOutput", preview)}`;
+					const outputPath = fullOutputLine(r);
+					if (outputPath) text += `\n${outputPath}`;
+					return wrappedText(text);
 				}
 
 				let text = queued || agentStatusLine(theme, r.agent, isError ? "failed" : "completed", isError ? "error" : "success", `${theme.fg("dim", " · bg")}${theme.fg("dim", " · Ctrl+O")}`);
@@ -5888,6 +6273,8 @@ export default function (pi: ExtensionAPI) {
 					? ""
 					: queuedPaneCount > 0
 						? theme.fg("muted", " · see dashboard for live status")
+						: dashboardEnabled(cwd) && quietInline(cwd) && !expanded
+							? theme.fg("muted", " · lifecycle in dashboard")
 						: expanded
 							? ""
 							: theme.fg("muted", " (Ctrl+O to inspect)");

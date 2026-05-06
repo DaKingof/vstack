@@ -101,13 +101,15 @@ Arguments support autocomplete, including known agent names for `show`, `start`,
 
 Agent status legend (Nerd Font glyphs): `` live pane, `` pane-ready/startable, `` stale pane, `·` background. Background-mode agents (no `pane: true`) display as `bg` in user-facing labels; the internal kind is still `oneshot`.
 
-Dashboard row status: `` queued, `` working, `` waiting (idle pane, ready for next task), `` done (background only), `` failed / blocked. Live panes that finish a task transition to `waiting`, not `done`, since the pane stays alive for the next delegation.
+Dashboard row status: `` queued, `` working, `` waiting (idle pane, ready for next task), `` done (background only), `` needs completion, `` failed / blocked. Live panes that finish a task transition to `waiting`, not `done`, since the pane stays alive for the next delegation.
 
 Non-interactive mode emits inline list/show output. Management commands remain available.
 
 ## Dashboard widget
 
 The inline agents widget (default toggle `Alt+A`, popup `Alt+Shift+A`) shows live state for every spawned agent. Each row carries the agent name, its kind (`pane` or `bg`), and live usage stats refreshed from the transcript jsonl every poll cycle: ` N` (turns), `↑in ↓out` (tokens), and `$cost`. Compact mode aggregates totals across all agents on the trailing line. Expanded mode adds a `Total · ...` line at the bottom. Rows sort by start time so the order is stable while live updates patch usage in place.
+
+Rendering contract: the dashboard/popup owns live lifecycle (`queued`, `working`, `waiting`, `done`, `needs completion`). Inline tool output stays quieter when the dashboard is enabled: pane calls render as launch breadcrumbs, while bg/one-shot calls render the useful result preview without repeating the dashboard's lifecycle row.
 
 ## Persistent pane agents
 
@@ -126,6 +128,8 @@ pane: true
 The parent Pi session writes tasks to `inbox/<agent>/` and polls `outbox/<agent>/` under the session runtime directory. Sessions, prompt copies, launcher scripts, inbox/outbox, processed files, and pane registries are isolated by Pi session ID and never stored under the project's `.pi/` directory. Completions are surfaced back into the main conversation automatically.
 
 Persistent panes require running Pi inside tmux. Completion files are collected in polling batches and shown as one grouped notification when multiple agents finish together. The notification includes summary, files changed, validation, source/archive paths, and the pane session transcript path.
+
+Pane tasks move through `queued → running → completed|blocked|failed`. If a child pane ends a turn without a valid completion record, the task is kept active and marked `needs_completion` instead of silently remaining queued; the child pane shows a warning asking it to call `complete_subagent`. `get_subagent_result({ "verbose": true })` includes artifact diagnostics for the expected outbox, inbox, processing, done, archive, and transcript paths, and malformed completion JSON is surfaced there instead of being swallowed by the poller.
 
 ## Result retrieval and steering
 
@@ -146,7 +150,7 @@ Use `steer_subagent` for mid-run correction. It targets `pi-session-bridge` (`st
 - One-shot JSON-mode agents write JSONL transcripts under `transcripts/<agent>/`.
 - Persistent panes expose the full visible Pi session JSONL as their transcript path.
 - Oversized one-shot final output can still be preserved under `outputs/<agent>/`.
-- The extension emits best-effort in-process lifecycle events with legacy `subagents:*` names for compatibility: `subagents:ready`, `subagents:created`, `subagents:queued`, `subagents:started`, `subagents:completed`, `subagents:failed`, and `subagents:steered`.
+- The extension emits best-effort in-process lifecycle events with legacy `subagents:*` names for compatibility: `subagents:ready`, `subagents:created`, `subagents:queued`, `subagents:started`, `subagents:completed`, `subagents:failed`, `subagents:needs_completion`, and `subagents:steered`.
 
 ## In-process one-shot sessions (not implemented)
 
