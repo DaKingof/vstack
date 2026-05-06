@@ -1244,14 +1244,15 @@ function createAgentsBrowserComponent(
 				return;
 			}
 			// '-' and '=' are page-step alternates for terminals (tmux, ghostty,
-			// etc) that capture PageUp/PageDown for their own scrollback.
-			if (data === "-") {
+			// etc) that capture PageUp/PageDown for their own scrollback. Use
+			// matchesKey so the kitty / legacy escape sequences both resolve.
+			if (matchesKey(data, "-")) {
 				if (ui.pane === "inspector") ui.inspectorScroll = Math.max(0, ui.inspectorScroll - Math.max(1, layout.bodyRows));
 				else { ui.activeSelected -= layout.listRows; ui.inspectorScroll = 0; clampActive(); }
 				requestRender();
 				return;
 			}
-			if (data === "=") {
+			if (matchesKey(data, "=")) {
 				if (ui.pane === "inspector") ui.inspectorScroll += Math.max(1, layout.bodyRows);
 				else { ui.activeSelected += layout.listRows; ui.inspectorScroll = 0; clampActive(); }
 				requestRender();
