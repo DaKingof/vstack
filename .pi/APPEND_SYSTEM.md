@@ -41,13 +41,15 @@ Publish is the user's call. Do not publish proactively. When asked to publish, f
 ## How to publish a single package
 Token lives only in 1Password (`op://dev/x5lenzv456d5k4avuwmuwmjzdi/TOKEN`), referenced by `.env.npm` at repo root. `op run` resolves it into the spawned npm process for the duration of one command. The token is never written to disk, never logged, never in shell history.
 
+npm only reads `.npmrc` next to the package.json being published, so the repo-root `.npmrc` is passed via `--userconfig`. The npm token must be a Granular Access Token (or Classic Automation token) with **bypass 2FA** — a regular publish token will 403 even though auth succeeds.
+
 ```bash
 cd pi-extensions/<name>
 npm version <patch|minor|major> --no-git-tag-version   # bumps package.json only
 cd ../..
 git add pi-extensions/<name>/package.json && git commit -m "<name>: bump to vX.Y.Z"
 cd pi-extensions/<name>
-op run --env-file=../../.env.npm -- npm publish
+op run --env-file=../../.env.npm -- npm publish --userconfig=../../.npmrc
 ```
 
 After publish:
@@ -66,10 +68,10 @@ Only at intentional batch milestones. Loop the single-package flow:
 ```bash
 cd /mnt/Tertiary/dev/vstack/main
 for d in pi-extensions/*/; do
-  (cd "$d" && op run --env-file=../../.env.npm -- npm publish)
+  (cd "$d" && op run --env-file=../../.env.npm -- npm publish --userconfig=../../.npmrc)
 done
 ```
-Individual failures don't block siblings — review the output and re-run `npm publish` per failed dir.
+Individual failures don't block siblings — review the output and re-run `npm publish --userconfig=../../.npmrc` per failed dir.
 
 ## Don'ts
 - Never put a literal token in any file. `.env.npm` only contains the `op://` reference.

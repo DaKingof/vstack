@@ -8,3 +8,16 @@ HT-AGENTS.md
 ht/
 cli/target/
 tmp/
+
+# npm artifacts (pi-extensions are published to npm)
+node_modules/
+*.tgz
+npm-debug.log*
+yarn-error.log
+.pnpm-debug.log
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
