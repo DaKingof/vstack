@@ -16,7 +16,6 @@ const CONTEXT_USAGE_MESSAGE_TYPE = "qol-context-usage";
 const SESSION_MANAGER_STATUS_KEY = "session-manager";
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"]);
 const IMAGE_PATH_PATTERN = /(^|[\s(\[{<"'`])(@?(?:~|\.\.?|\/)[^\s)\]}>"'`]+?\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif))(?=$|[\s)\]}>"'`,.;:!?])/gi;
-const IMAGE_ALIAS_SYMBOL = Symbol.for("vstack.pi-qol.image-path-aliases");
 const QUESTION_SERVICE_SYMBOL = Symbol.for("vstack.pi-questions.service");
 const QOL_NOTIFICATION_SERVICE_SYMBOL = Symbol.for("vstack.pi-qol.notification-service");
 const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
@@ -101,12 +100,6 @@ interface GitState {
 	branch?: string;
 	dirty: boolean;
 	inLinkedWorktree: boolean;
-}
-
-interface ImageAliasState {
-	next: number;
-	byLabel: Record<string, string>;
-	byPath: Record<string, string>;
 }
 
 function expandHome(input: string): string {
@@ -782,43 +775,6 @@ function imagePathLabels(text: string, cwd: string): string[] {
 	return [...seen].sort();
 }
 
-function aliasState(): ImageAliasState {
-	const host = globalThis as unknown as Record<PropertyKey, unknown>;
-	const existing = host[IMAGE_ALIAS_SYMBOL] as ImageAliasState | undefined;
-	if (existing?.byLabel && existing.byPath) return existing;
-	const created: ImageAliasState = { byLabel: {}, byPath: {}, next: 1 };
-	host[IMAGE_ALIAS_SYMBOL] = created;
-	return created;
-}
-
-function aliasForImagePath(path: string): string {
-	const state = aliasState();
-	const existing = state.byPath[path];
-	if (existing) return existing;
-	const label = `[Image #${state.next++}]`;
-	state.byPath[path] = label;
-	state.byLabel[label] = path;
-	return label;
-}
-
-function collapseImagePathsInText(text: string, cwd: string): string {
-	return text.replace(IMAGE_PATH_PATTERN, (match, prefix: string, rawPath: string) => {
-		const resolved = resolveMaybeImagePath(rawPath, cwd);
-		if (!resolved) return match;
-		return `${prefix}${aliasForImagePath(resolved)}`;
-	});
-}
-
-function aliasedImagePaths(text: string): string[] {
-	const state = aliasState();
-	const paths = new Set<string>();
-	for (const match of text.matchAll(/\[Image\s+#\d+\]/gi)) {
-		const path = state.byLabel[match[0]];
-		if (path) paths.add(path);
-	}
-	return [...paths];
-}
-
 function mimeTypeForPath(path: string): string {
 	const lower = path.toLowerCase();
 	if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
@@ -987,18 +943,30 @@ function handleQolEditorInput(editor: CustomEditor, ctx: ExtensionContext, data:
 	const isShiftEnter = matchesKey(data, "shift+enter") || matchesKey(data, "shift+return");
 	const isFallback = fallback !== "none" && matchesKey(data, fallback);
 	CustomEditor.prototype.handleInput.call(editor, newlineEnabled && (isShiftEnter || isFallback) ? "\n" : data);
-	collapseEditorImagePathsFor(editor, ctx);
-	ctx.ui.setStatus(STATUS_KEY, statusText(ctx, editor.getText()));
 }
 
-function collapseEditorImagePathsFor(editor: CustomEditor, ctx: ExtensionContext): void {
-	if (!settingBoolean("showImageChips", true, ctx.cwd)) return;
-	const text = editor.getText();
-	const collapsed = collapseImagePathsInText(text, ctx.cwd);
-	if (collapsed !== text) editor.setText(collapsed);
+/// Push the latest attachment-count status only when it actually changes.
+/// Called from render() so we follow the rainbow-editor pattern (pull from
+/// render, don't push from every keystroke) and avoid the per-keystroke
+/// setStatus side effect that previously contributed to resize/input races.
+function syncQolEditorStatus(
+	ctx: ExtensionContext,
+	text: string,
+	cache: { last?: string },
+): void {
+	const next = statusText(ctx, text);
+	if (next === cache.last) return;
+	cache.last = next;
+	try {
+		ctx.ui.setStatus(STATUS_KEY, next);
+	} catch {
+		// best-effort visual; don't let a status push break render
+	}
 }
 
 class QolEditor extends CustomEditor {
+	private readonly statusCache: { last?: string } = {};
+
 	constructor(
 		tui: TUI,
 		editorTheme: EditorTheme,
@@ -1013,6 +981,7 @@ class QolEditor extends CustomEditor {
 	}
 
 	render(width: number): string[] {
+		syncQolEditorStatus(this.ctx, this.getText(), this.statusCache);
 		return super.render(width).map((line) => truncateToWidth(styleImageChips(line, this.ctx.cwd, this.ctx.ui.theme), width, ""));
 	}
 }
@@ -1023,6 +992,8 @@ function isEditorBorderLine(line: string): boolean {
 }
 
 class QolCompactPromptEditor extends CustomEditor {
+	private readonly statusCache: { last?: string } = {};
+
 	constructor(
 		tui: TUI,
 		editorTheme: EditorTheme,
@@ -1038,6 +1009,7 @@ class QolCompactPromptEditor extends CustomEditor {
 	}
 
 	render(width: number): string[] {
+		syncQolEditorStatus(this.ctx, this.getText(), this.statusCache);
 		const prompt = this.borderColor("π");
 		const prefix = `${prompt} `;
 		const prefixWidth = visibleWidth("π ");
@@ -1075,15 +1047,17 @@ function currentEditorText(ctx: ExtensionContext): string {
 	}
 }
 
-function collapseEditorImagePaths(ctx: ExtensionContext): boolean {
-	if (!settingBoolean("showImageChips", true, ctx.cwd)) return false;
-	const text = currentEditorText(ctx);
-	if (!text) return false;
-	const collapsed = collapseImagePathsInText(text, ctx.cwd);
-	if (collapsed === text) return false;
-	ctx.ui.setEditorText(collapsed);
-	ctx.ui.setStatus(STATUS_KEY, statusText(ctx, collapsed));
-	return true;
+/// Resolve every image-path-shaped substring in submitted text to an
+/// absolute file path. Used by the `input` event to replace the previous
+/// approach of mutating the editor buffer to `[Image #N]` aliases via a
+/// 250ms polling timer (which raced with resize/input handling).
+function resolveSubmittedImagePaths(text: string, cwd: string): string[] {
+	const paths = new Set<string>();
+	for (const match of text.matchAll(IMAGE_PATH_PATTERN)) {
+		const resolved = resolveMaybeImagePath(match[2] ?? "", cwd);
+		if (resolved) paths.add(resolved);
+	}
+	return [...paths];
 }
 
 function repoNameFromRemote(remote: string): string | undefined {
@@ -3871,13 +3845,11 @@ export default function qol(pi: ExtensionAPI): void {
 	};
 	(globalThis as unknown as Record<PropertyKey, unknown>)[THINKING_TIMER_STORE_SYMBOL] = thinkingTimerStore;
 
-	let editorPollTimer: ReturnType<typeof setInterval> | undefined;
 	let idleCompactionTimer: ReturnType<typeof setTimeout> | undefined;
 	let questionSubscribeTimer: ReturnType<typeof setInterval> | undefined;
 	let sessionSearchWarmupTimer: ReturnType<typeof setTimeout> | undefined;
 	let thinkingTimerTicker: ReturnType<typeof setInterval> | undefined;
 	let questionUnsubscribe: (() => void) | undefined;
-	let lastPolledDraft = "";
 	let lastTaskStats: { completed: number; remaining: number; total: number } | undefined;
 	let autoRenameAttempted = false;
 	let autoRenameInProgress = false;
@@ -4207,21 +4179,6 @@ export default function qol(pi: ExtensionAPI): void {
 				});
 			}
 		}
-		if (editorPollTimer) clearInterval(editorPollTimer);
-		lastPolledDraft = "";
-		if (ctx.hasUI) {
-			editorPollTimer = setInterval(() => {
-				try {
-					const draft = currentEditorText(ctx);
-					if (draft === lastPolledDraft) return;
-					lastPolledDraft = draft;
-					if (collapseEditorImagePaths(ctx)) lastPolledDraft = currentEditorText(ctx);
-				} catch {
-					// Best-effort visual helper only.
-				}
-			}, 250);
-			editorPollTimer.unref?.();
-		}
 		startQuestionSubscription(ctx);
 		void attemptAutoRename(ctx);
 		if (settingBoolean("sessionSearch.enabled", true, ctx.cwd)) {
@@ -4240,8 +4197,6 @@ export default function qol(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		resetAutoRename();
-		if (editorPollTimer) clearInterval(editorPollTimer);
-		editorPollTimer = undefined;
 		clearIdleCompactionTimer();
 		clearQuestionSubscribeTimer();
 		if (sessionSearchWarmupTimer) clearTimeout(sessionSearchWarmupTimer);
@@ -4362,7 +4317,8 @@ export default function qol(pi: ExtensionAPI): void {
 	pi.on("input", async (event) => {
 		clearTmuxWindowMark();
 		if (event.source === "extension") return { action: "continue" };
-		const paths = aliasedImagePaths(event.text ?? "");
+		const text = event.text ?? "";
+		const paths = currentCtx?.cwd ? resolveSubmittedImagePaths(text, currentCtx.cwd) : [];
 		if (paths.length === 0) return { action: "continue" };
 		const images = paths.map(imageContentForPath).filter(Boolean);
 		if (images.length === 0) return { action: "continue" };
