@@ -61,7 +61,7 @@ skill-templates/         Templates for new skills
 - **Pi extensions are npm-shaped packages.** vstack copies them to `~/.pi/agent/packages/<name>` (or `.pi/packages/<name>`) and registers the path in Pi's `settings.json` `packages` array.
 - **Skill/hook attribution is config-driven.** Source `vstack.toml` `[agent-skills]` is authoritative — explicit entries skip prefix matching. `[role-skills]` adds skills to all agents of a role. Project `vstack.toml` also has `[agent-skills]` populated at install time; users can add/remove skills and refresh. Agents get a `skills:` frontmatter field and a "Required Skills" body section.
 - **Reconciliation is automatic.** After every `vstack add`, all installed agents are regenerated with the current full set of installed skills and hooks. Adding a skill after an agent updates that agent.
-- **Project root walks up from CWD.** `config::project_root()` finds `.vstack-lock.json`, `.claude/`, `.cursor/`, `.codex/`, `.opencode/`, or `.agents/` by walking parent dirs — works from subdirectories.
+- **Project root walks up from CWD.** `config::project_root()` finds `.vstack-lock.json`, `.claude/`, `.cursor/`, `.codex/`, `.opencode/`, `.pi/`, or `.agents/` by walking parent dirs — works from subdirectories.
 
 ## Formats
 
@@ -97,10 +97,10 @@ dependencies:
 ```
 
 ### Pi extension package (`pi-extensions/<name>/package.json`)
-Npm-shaped manifest. vstack discovers any subdirectory containing a `package.json`.
+Npm-shaped manifest. vstack discovers any subdirectory containing a `package.json`. Packages in this repo are all published under the `@vanillagreen/` scope on npm; the unscoped names also work as `--pi-extension <name>` filters via the rename table.
 ```json
 {
-  "name": "pi-qol",
+  "name": "@vanillagreen/pi-qol",
   "keywords": ["pi-package"],
   "pi": { "extensions": ["./extensions/qol.ts"] },
   "bin": { "pi-bridge": "./bin/pi-bridge.js" },
@@ -190,7 +190,7 @@ Edit `skills/<name>/SKILL.md` directly. No separate `rules/` directories or per-
 
 `vstack update-pi[ --check][ --scope global|project]` reinstalls only stale Pi packages. Source of truth is `<scope>/.vstack-source.json` plus `npm:` entries in Pi `settings.json`; installed versions are compared against `pi-extensions/<name>/package.json` (vstack repos) or `npm view <name> version` (npm). Different packages can come from different vstack repos — grouped by `(scope, sourceRepo)` and reinstalled independently. Stale index entries (referenced package no longer installed) are dropped. The pi-extension-manager extension reads the same index for its `↑ X.Y.Z` badge.
 
-Pi-specific UI/workflow rules (popup styling, banner conventions, refresh-after-commit) live in [.pi/APPEND_SYSTEM.md](.pi/APPEND_SYSTEM.md).
+Pi-specific UI/workflow rules (popup styling, banner conventions, refresh-after-commit) and the npm publish runbook (`@vanillagreen/<name>` packages, `op run` token flow, `--userconfig`/bypass-2FA notes) live in [.pi/APPEND_SYSTEM.md](.pi/APPEND_SYSTEM.md).
 
 ## Build & Test
 
