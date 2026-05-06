@@ -292,8 +292,12 @@ function formatShortcutHint(shortcut: string): string {
 }
 
 function panelToggleHint(cwd: string): string {
-	const shortcut = settingString("alternateShortcut", "alt+t", cwd);
-	return shortcut === "none" ? "" : `${formatShortcutHint(shortcut)} toggle`;
+	const toggle = settingString("alternateShortcut", "alt+t", cwd);
+	const manager = settingString("managerShortcut", "alt+shift+t", cwd);
+	const parts: string[] = [];
+	if (toggle !== "none") parts.push(`${formatShortcutHint(toggle)} toggle`);
+	if (manager !== "none") parts.push(`${formatShortcutHint(manager)} manage`);
+	return parts.join(" · ");
 }
 
 function activeTask(state: TaskPanelState): TaskItem | undefined {
@@ -500,7 +504,8 @@ function renderPanelHeader(state: TaskPanelState, theme: Theme, active?: TaskIte
 }
 
 function pushTaskGroup(lines: string[], title: string, tasks: TaskItem[], theme: Theme, cwd: string, isLastGroup: boolean): void {
-	if (lines.length > 1) lines.push("");
+	// Spine connector keeps the tree visually unbroken across phase groups.
+	if (lines.length > 1) lines.push(panelBranch(theme, "│", cwd));
 	lines.push(...renderTaskGroup(title, tasks, theme, cwd, isLastGroup));
 }
 
@@ -828,10 +833,7 @@ export default function taskPanel(pi: ExtensionAPI): void {
 						const contentWidth = Math.max(1, width - 2 - POPUP_PADDING_X * 2);
 						syncSelection();
 						const tasks = taskList();
-						const lines = [
-							`${ansiYellow("↑↓")} ${theme.fg("dim", "select · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("enter/s")} ${theme.fg("dim", "start · ")}${ansiYellow("d")} ${theme.fg("dim", "done · ")}${ansiYellow("x")} ${theme.fg("dim", "drop · ")}${ansiYellow("r")} ${theme.fg("dim", "remove · ")}${ansiYellow("c")} ${theme.fg("dim", "clear done · ")}${ansiYellow("e")} ${theme.fg("dim", "edit · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`,
-							"",
-						];
+						const lines: string[] = [];
 						if (tasks.length === 0) {
 							lines.push(theme.fg("dim", "No tasks. Use /tasks add <task> or /tasks edit."));
 						} else {
@@ -848,7 +850,10 @@ export default function taskPanel(pi: ExtensionAPI): void {
 							const below = Math.max(0, tasks.length - (scroll + MANAGE_TASK_ROWS));
 							if (below > 0) lines.push(theme.fg("dim", `↓ ${below} more task(s)`));
 						}
-						return framePopup(lines.map((line) => truncateToWidth(line, contentWidth, "")), width, theme, "Tasks Manager");
+						const body = lines.map((line) => truncateToWidth(line, contentWidth, ""));
+						const footerHint = `${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("enter/s")} ${theme.fg("dim", "start · ")}${ansiYellow("d")} ${theme.fg("dim", "done · ")}${ansiYellow("x")} ${theme.fg("dim", "drop · ")}${ansiYellow("r")} ${theme.fg("dim", "remove · ")}${ansiYellow("c")} ${theme.fg("dim", "clear done · ")}${ansiYellow("e")} ${theme.fg("dim", "edit · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
+						const footer = [mutedRule(theme, contentWidth), ...wrapTextWithAnsi(footerHint, contentWidth)];
+						return framePopup([...body, ...footer], width, theme, "Tasks Manager");
 					},
 				};
 			}, { overlay: true, overlayOptions: { anchor: "center", width: 100, maxHeight: "85%" } });
@@ -1060,5 +1065,9 @@ export default function taskPanel(pi: ExtensionAPI): void {
 	}
 	if (settingBoolean("takeoverCtrlT", false)) {
 		pi.registerShortcut("ctrl+t", { description: "Toggle task panel (vstack takeover)", handler: async (ctx) => toggle(ctx as ExtensionContext) });
+	}
+	const managerShortcut = settingString("managerShortcut", "alt+shift+t");
+	if (managerShortcut !== "none") {
+		pi.registerShortcut(managerShortcut, { description: "Open the task manager popup", handler: async (ctx) => manage(ctx as ExtensionContext) });
 	}
 }

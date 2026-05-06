@@ -63,6 +63,16 @@
           "requiresReload": true
         },
         {
+          "key": "managerShortcut",
+          "label": "Manager popup shortcut",
+          "description": "Keyboard shortcut that opens the interactive task manager popup. Use none to disable.",
+          "type": "string",
+          "default": "alt+shift+t",
+          "category": "Keyboard",
+          "apply": "reload",
+          "requiresReload": true
+        },
+        {
           "key": "maxCompactTasks",
           "label": "Compact task count",
           "description": "Maximum tasks shown in compact mode.",

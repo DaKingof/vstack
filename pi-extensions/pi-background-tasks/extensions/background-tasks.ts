@@ -1437,6 +1437,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 					const right: string[] = [];
 
 					left.push(`${activePane === "tasks" ? activePill(theme, " Tasks ") : inactivePill(theme, " Tasks ")} ${theme.fg("dim", `(${sorted.length})`)}`);
+					left.push("");
 					if (taskScroll > 0) left.push(theme.fg("dim", `↑ ${taskScroll} earlier task(s)`));
 					for (const task of sorted.slice(taskScroll, taskScroll + taskViewportRows)) {
 						const isSelected = task.id === selected?.id;
@@ -1455,6 +1456,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 						const outputLines = getOutputLines(selected);
 						const visibleOutput = outputLines.slice(outputScroll, outputScroll + outputViewportRows);
 						right.push(`${activePane === "output" ? activePill(theme, ` Watch ${selected.id} `) : inactivePill(theme, ` Watch ${selected.id} `)} ${theme.fg("dim", followOutput ? "follow" : `line ${outputScroll + 1}`)}`);
+						right.push("");
 						right.push(`${theme.fg("muted", "Status")}: ${bgStatusText(taskSnapshot(selected), theme)} · pid ${selected.pid}`);
 						right.push(`${theme.fg("muted", "Started")}: ${formatRelativeTime(selected.startedAt)} · ${formatDuration(taskElapsedMs(selected))} elapsed`);
 						if (selected.expiresAt != null) right.push(`${theme.fg("muted", "Expiry")}: ${formatRelativeTime(selected.expiresAt)}`);

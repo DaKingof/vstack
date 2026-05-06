@@ -1772,7 +1772,8 @@ function managerInactivePill(theme: Theme, label: string): string {
 }
 
 function managerPaneTitle(theme: Theme, label: string, active: boolean): string {
-	return active ? managerActivePill(theme, ` ${label} `) : theme.fg("muted", theme.bold(label));
+	const padded = ` ${label} `;
+	return active ? managerActivePill(theme, padded) : managerInactivePill(theme, padded);
 }
 
 function managerEntityTitle(theme: Theme, label: string): string {
@@ -1912,7 +1913,7 @@ function listDisplayName(item: InventoryItem, ui: ManagerUiState): string {
 
 function renderList(items: InventoryItem[], ui: ManagerUiState, width: number, theme: Theme, listRows: number): string[] {
 	const title = packageNameForTab(ui.topTab) ? "Package" : ui.showResources ? "Resources" : "Packages";
-	const lines = [`${managerPaneTitle(theme, title, ui.pane === "list")} ${theme.fg("dim", `(${items.length})`)}`];
+	const lines = [`${managerPaneTitle(theme, title, ui.pane === "list")} ${theme.fg("dim", `(${items.length})`)}`, ""];
 	if (items.length === 0) {
 		lines.push(theme.fg("dim", "No matching items."));
 		return lines;
@@ -1988,7 +1989,7 @@ function renderInspector(inventory: Inventory, item: InventoryItem | undefined, 
 	detailLines.push(...packageResourceLines(inventory, item, width, theme));
 
 	const schemas = item.settingsSchema ?? [];
-	const settingsHeader = ["", managerPaneTitle(theme, "Settings", ui.pane === "settings")];
+	const settingsHeader = ["", managerPaneTitle(theme, "Settings", ui.pane === "settings"), ""];
 	const safeViewportRows = Math.max(1, viewportRows);
 	const minimumSettingsRows = schemas.length > 0 ? Math.min(safeViewportRows, ui.pane === "settings" ? 6 : 3) : 1;
 	const maxDetailRows = Math.max(0, safeViewportRows - settingsHeader.length - minimumSettingsRows);
