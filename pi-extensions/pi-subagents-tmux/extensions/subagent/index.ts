@@ -391,10 +391,8 @@ function formatUsageStats(
 }
 
 const AGENTS_BROWSER_WIDTH = "92%";
-const AGENTS_BROWSER_MAX_HEIGHT = "85%";
-const AGENTS_BROWSER_HEIGHT_RATIO = 0.85;
-const AGENTS_BROWSER_INNER_ROWS = 30;
-const AGENTS_BROWSER_LIST_ROWS = 18;
+const AGENTS_BROWSER_MAX_HEIGHT = "90%";
+const AGENTS_BROWSER_HEIGHT_RATIO = 0.9;
 const AGENTS_LEFT_MIN_WIDTH = 34;
 const AGENTS_LEFT_MAX_WIDTH = 48;
 const AGENTS_POPUP_PADDING_X = 2;
@@ -522,13 +520,16 @@ function agentFrameContentWidth(width: number): number {
 }
 
 function agentBrowserLayout(terminalRows: number): AgentBrowserLayout {
-	const maxInnerRows = Math.max(1, Math.floor(Math.max(1, terminalRows) * AGENTS_BROWSER_HEIGHT_RATIO) - AGENTS_POPUP_FRAME_ROWS);
-	const innerRows = Math.max(1, Math.min(AGENTS_BROWSER_INNER_ROWS, maxInnerRows));
+	// Flex with the terminal height up to ~90% of available rows; no fixed
+	// cap on inner / list rows so a tall terminal renders a tall popup and
+	// the right detail pane can show more transcript without forcing the
+	// user to scroll.
+	const innerRows = Math.max(1, Math.floor(Math.max(1, terminalRows) * AGENTS_BROWSER_HEIGHT_RATIO) - AGENTS_POPUP_FRAME_ROWS);
 	const bodyRows = Math.max(0, innerRows - 8);
 	return {
 		bodyRows,
 		innerRows,
-		listRows: Math.max(1, Math.min(AGENTS_BROWSER_LIST_ROWS, Math.max(1, bodyRows - 3))),
+		listRows: Math.max(1, bodyRows - 3),
 	};
 }
 
@@ -536,7 +537,7 @@ function agentDivider(width: number, theme: Theme): string {
 	return theme.fg("dim", "─".repeat(Math.max(1, width)));
 }
 
-function agentFrame(lines: string[], width: number, theme: Theme, fixedInnerRows = AGENTS_BROWSER_INNER_ROWS, title = ""): string[] {
+function agentFrame(lines: string[], width: number, theme: Theme, fixedInnerRows = 30, title = ""): string[] {
 	const safeWidth = Math.max(1, width);
 	const inner = Math.max(1, safeWidth - 2);
 	const contentWidth = agentFrameContentWidth(safeWidth);
@@ -818,6 +819,9 @@ function renderActiveAgentDetail(item: SubagentDashboardItem | undefined, ui: Ag
 	const visibleBodyRows = Math.max(1, rows - 1);
 	const maxOffset = Math.max(0, body.length - visibleBodyRows);
 	const offset = Math.max(0, Math.min(ui.inspectorScroll, maxOffset));
+	// Write the clamped value back so the next key press starts moving
+	// immediately instead of having to bleed off a runaway counter.
+	ui.inspectorScroll = offset;
 	const slice = body.slice(offset, offset + visibleBodyRows);
 	allLines.push(...slice);
 	if (offset > 0 || maxOffset > 0) {
