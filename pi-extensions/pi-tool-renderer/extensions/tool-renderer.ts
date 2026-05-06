@@ -2260,12 +2260,13 @@ const ToolBatchParams = {
 			items: {
 				type: "object",
 				additionalProperties: true,
-				description: "One tool call. Prefer { tool, args }, but flat fields such as { tool: 'read', path: 'README.md' } are also accepted.",
+				description: "One tool call. Prefer { tool, args } (e.g. { tool: 'read', args: { path: 'README.md' } }). MCP-style { name, arguments } and flat shorthand { tool: 'read', path: 'README.md' } are also accepted. The 'tool' / 'name' field must be one of read | grep | find | ls | bash.",
 				properties: {
-					tool: { type: "string", enum: ["read", "grep", "find", "ls", "bash"], description: "Tool to run inside the batch." },
+					tool: { type: "string", enum: ["read", "grep", "find", "ls", "bash"], description: "Tool to run inside the batch (or pass 'name' instead)." },
+					name: { type: "string", enum: ["read", "grep", "find", "ls", "bash"], description: "Alias for 'tool' (MCP-style shape)." },
 					args: { type: "object", additionalProperties: true, description: "Arguments for the selected tool. Optional; flat sibling fields are folded into args." },
+					arguments: { type: "object", additionalProperties: true, description: "Alias for 'args' (MCP-style shape)." },
 				},
-				required: ["tool"],
 			},
 		},
 		concurrency: { type: "number", description: "Maximum calls to run at once. Defaults to all calls, capped by settings." },
@@ -2278,13 +2279,15 @@ function normalizeBatchCalls(value: unknown): BatchToolCall[] {
 	const calls: BatchToolCall[] = [];
 	for (const raw of value) {
 		if (!raw || typeof raw !== "object") continue;
-		const tool = (raw as any).tool;
+		const tool = (raw as any).tool ?? (raw as any).name;
 		if (!isStackableToolName(tool)) continue;
 		const flatArgs: Record<string, unknown> = {};
 		for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
-			if (key !== "tool" && key !== "args") flatArgs[key] = val;
+			if (key === "tool" || key === "name" || key === "args" || key === "arguments") continue;
+			flatArgs[key] = val;
 		}
-		const nestedArgs = (raw as any).args && typeof (raw as any).args === "object" && !Array.isArray((raw as any).args) ? (raw as any).args : {};
+		const nestedArgsRaw = (raw as any).args ?? (raw as any).arguments;
+		const nestedArgs = nestedArgsRaw && typeof nestedArgsRaw === "object" && !Array.isArray(nestedArgsRaw) ? nestedArgsRaw : {};
 		calls.push({ args: { ...flatArgs, ...nestedArgs }, tool });
 	}
 	return calls;
