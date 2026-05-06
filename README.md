@@ -2,7 +2,7 @@
 
 Cross-harness package manager for AI coding systems.
 
-Write a package once as a harness-agnostic skill, agent, or hook, then install it into Claude Code, Cursor, OpenCode, Codex, or Pi through one Rust CLI.
+Author skills, agents, and hooks once. Install into Claude Code, Cursor, OpenCode, Codex, and Pi from one Rust CLI.
 
 [![Rust](https://img.shields.io/badge/Rust-%20-000000?style=flat-square&logo=rust)](./cli/Cargo.toml)
 [![Ratatui](https://img.shields.io/badge/TUI-ratatui-5D3FD3?style=flat-square)](https://ratatui.rs)
@@ -18,56 +18,35 @@ Write a package once as a harness-agnostic skill, agent, or hook, then install i
 
 ## What Is vstack?
 
-`vstack` is two things:
-
-1. A Rust CLI and TUI for discovering, selecting, installing, updating, and removing AI coding packages.
-2. A maintained package catalog in this repo containing reusable agents, skills, and hooks.
-
-- Packages are authored once in canonical, harness-agnostic formats.
-- `vstack` translates them into each harness's native representation at install time.
-- Repos can be swapped. The built-in catalog is just the default source, not the only one.
+- Rust CLI/TUI for discovering, installing, updating, and removing AI coding packages.
+- Maintained catalog in this repo (agents, skills, hooks, Pi extensions).
+- Packages authored harness-agnostic; vstack translates per harness at install.
+- Source repo is swappable — this catalog is the default, not the only one.
 
 ## Features
 
-- **Cross-harness install**: Claude Code, Cursor, OpenCode, Codex, and Pi from one CLI.
-- **Package source management**: switch between repos, add/remove sources from the TUI.
-- **Global and project scope**: install once per user, or per project.
-- **Dependency resolution**: skills declare required/optional dependencies in `SKILL.md`; required deps are auto-included transitively.
-- **Config-driven attribution**: `vstack.toml` maps extra skills to agents, role-wide skills to agent roles, and hook events to roles.
-- **Project customization**: per-agent guidance, instructions, custom skills, per-skill instructions, and custom hooks via project-level `vstack.toml` — survives upstream updates.
-- **Reconciliation**: installed agents and skills regenerate when packages change, preserving user edits.
-- **`vstack refresh`**: reinstall all locked items (agents, skills, hooks, Pi packages) from current source. Defaults to all scopes; narrow with `--scope project|global|all` (or shorthand `-g`).
-- **Version-based update check**: notifies when the CLI version changes, not on every repo push. `vstack update --force` to rebuild from source.
-- **Source registry**: previously used package repos are remembered and reusable from the TUI.
-- **Fast terminal UX**: native Rust TUI with mouse support, built with `ratatui` and `crossterm`.
+- **Cross-harness install** — Claude Code, Cursor, OpenCode, Codex, Pi from one CLI.
+- **Global or project scope** — install per user or per project.
+- **Skill dependencies** — required deps install transitively; optional deps stay documentation-only.
+- **Config-driven attribution** — `vstack.toml` maps skills/hooks to agents and roles.
+- **Project customization** — per-agent guidance, custom skills, per-skill instructions, custom hooks. Survives upstream updates.
+- **Reconciliation** — agents/skills regenerate on changes, preserving user edits.
+- **Lockfile refresh** — `vstack refresh` reinstalls all locked items; `--scope project|global|all` narrows.
+- **Source switching** — multiple package repos persisted in a global registry, swappable from the TUI.
+- **Fast TUI** — native Rust + mouse, built on `ratatui`/`crossterm`.
 
 ## Quick Start
 
 ```bash
-# Install the CLI
 cargo install --git https://github.com/vanillagreencom/vstack.git vstack
-
-# Open the interactive installer with the default package catalog
-vstack add vanillagreencom/vstack
+vstack add vanillagreencom/vstack   # interactive installer
 ```
-
-### Non-interactive installs
-
-Four item filters narrow `vstack add` — `--agent`, `--skill`, `--hook`, `--pi-extension`. Passing any filter restricts the install to only the kinds you name; kinds without an explicit filter install nothing. To install across multiple kinds, list each. To install everything, pass `--all`.
-
-```bash
-vstack add vanillagreencom/vstack --pi-extension pi-web-tools --harness pi -y   # one Pi package
-vstack add vanillagreencom/vstack --global --skill decider -y                    # one skill, global
-vstack add vanillagreencom/vstack --global --all -y                              # everything, global
-```
-
-Every run prints a summary with scope (`PROJECT (...)` vs `GLOBAL (...)`), method, and each item's destination path — read it before claiming success. `--global` without an item filter or `--all` is refused, since it would otherwise install the entire catalog into `~/.config/vstack`, `~/.claude`, `~/.pi`.
 
 ### Commands
 
 | Command | Default scope | What it does |
 |---|---|---|
-| `vstack add <source>` | project | Install items (TUI by default; non-interactive with `-y` or filters) |
+| `vstack add <source>` | project | Install items (TUI by default; non-interactive with `-y` and item filters) |
 | `vstack remove <names>` | project | Uninstall items |
 | `vstack list` (alias `ls`) | all | Show installed items grouped by scope |
 | `vstack check` | all | Validate install state (outdated, orphaned, missing) |
@@ -77,30 +56,38 @@ Every run prints a summary with scope (`PROJECT (...)` vs `GLOBAL (...)`), metho
 | `vstack update` | n/a | Self-update the CLI binary |
 | `vstack init <name> --kind <agent\|skill\|hook>` | n/a | Scaffold a new template in a vstack source repo |
 
-All scope-aware commands accept `--scope project|global|all`. `-g`/`--global` is the shorthand for `--scope global` and stays supported. When both are passed, `--scope` wins.
+All scope-aware commands accept `--scope project|global|all`. `-g`/`--global` is shorthand for `--scope global`. When both are passed, `--scope` wins.
+
+Non-interactive `add` examples (item filters `--agent`, `--skill`, `--hook`, `--pi-extension` restrict the install; `--all` includes everything; `-y` skips the TUI):
+
+```bash
+vstack add vanillagreencom/vstack --pi-extension pi-web-tools --harness pi -y
+vstack add vanillagreencom/vstack --global --skill decider -y
+vstack add vanillagreencom/vstack --global --all -y
+```
 
 ## Project-Local Config
 
-Two config files live at the project root:
+Two files at the project root:
 
-- **`vstack.toml`** — agent customization (guidance, instructions, custom skills, custom hooks). Auto-created on first install. Edit and run `vstack refresh` to apply. See [Project Customization](#project-customization).
-- **`.env.local`** — workflow config for skills that need it (worktree behavior, issue-tracker tokens, bot auth). Copy [.env.local.example](./.env.local.example) and fill only the variables your project uses. The `worktree` skill symlinks this into created worktrees.
+- **`vstack.toml`** — agent customization. Auto-created by `vstack add`. Edit, then `vstack refresh`. See [Project Customization](#project-customization).
+- **`.env.local`** — skill config (tokens, paths, auth). Copy from [.env.local.example](./.env.local.example). Symlinked into worktrees by the `worktree` skill.
 
 ## How It Works
 
 ### Mental Model
 
-`vstack` treats a source repo as a package registry:
+A source repo is a package registry:
 
-- `agents/*.md`: canonical agent definitions
-- `skills/*/SKILL.md`: canonical skills, rules, scripts, workflows
-- `hooks/*.sh`: canonical safety hooks
-- `pi-extensions/*/package.json`: optional npm-shaped Pi extension packages
-- `vstack.toml`: mapping and attribution rules
+- `agents/*.md` — agent definitions
+- `skills/*/SKILL.md` — skill packages (rules, scripts, workflows alongside)
+- `hooks/*.sh` — safety hooks
+- `pi-extensions/*/package.json` — npm-shaped Pi extension packages
+- `vstack.toml` — mapping and attribution rules
 
 ### Dependencies And Mapping
 
-Package dependencies are currently skill-to-skill dependencies. A skill can declare them in `SKILL.md` frontmatter:
+**Skill dependencies.** A skill lists the other skills it needs in its `SKILL.md` frontmatter:
 
 ```yaml
 dependencies:
@@ -108,14 +95,18 @@ dependencies:
   optional: []
 ```
 
-`vstack` builds a dependency graph from installed skills and auto-adds only `required` dependencies. `optional` dependencies are preserved as metadata/documentation, but are not auto-installed.
+`required` deps install transitively whenever the skill installs. `optional` deps are documentation only — they're not auto-installed.
 
-`vstack.toml` in the source repo is the mapping layer. `[agent-skills]` is the single source of truth for which skills appear in each agent's frontmatter — when an agent has an explicit entry, prefix matching is skipped. `[role-skills]` adds skills to all agents of a role. `[hook-events]` assigns hooks by event/matcher to roles.
+**Agent attribution.** The source repo's `vstack.toml` decides which skills and hooks attach to which agents:
+
+- `[agent-skills]` — explicit skills per agent.
+- `[role-skills]` — skills added to every agent of a role (`engineer`, `reviewer`, `manager`).
+- `[hook-events]` — hooks attached by event/matcher, scoped to roles or `"all"`.
 
 ```toml
 [agent-skills]
-rust = ["rust-arch", "rust-async", "rust-cargo", "rust-conventions", "rust-cross", "rust-debugging", "rust-ffi", "rust-no-std", "rust-safety"]
-iced = ["iced-rs", "iced-shadcn", "trading-design", "price-handling"]
+rust = ["rust-arch", "rust-async", "rust-cargo"]
+iced = ["iced-rs", "iced-shadcn"]
 
 [role-skills]
 engineer = ["issue-lifecycle", "github", "worktree", "decider", "linear"]
@@ -128,39 +119,37 @@ reviewer = ["issue-lifecycle", "linear"]
 
 ### Project Customization
 
-`vstack add` auto-creates a `vstack.toml` at your project root with commented placeholders for every installed agent and skill. Edit the values, then run `vstack refresh` to apply. All sections survive upstream updates — they're re-applied from the config on every install and refresh.
+`vstack add` auto-creates `vstack.toml` with placeholders for each installed agent and skill. Edit, then `vstack refresh`. All sections survive upstream updates — re-applied on every install/refresh.
 
 ```toml
-# What the agent should do when first invoked
+# Launch instruction per agent.
 [agent-launch-instructions]
-rust = "Read open issues and begin working on the highest-priority backend task."
-generalist = ""    # empty = no section generated
+rust = "Read open issues, pick up the highest-priority backend task."
+generalist = ""    # empty = no section
 
-# Project-specific rules appended to the bottom of agent files
+# Extra rules appended to the agent file.
 [agent-additional-instructions]
 rust = "Always run clippy before committing."
 
-# Skills attached to each agent's frontmatter — single source of truth.
-# Populated automatically at install time. Add your own skills to any
-# agent's list; remove skills you don't want. Run `vstack refresh` to apply.
+# Skills per agent. Auto-populated; edit freely.
 [agent-skills]
-rust = ["rust-arch", "rust-async", "rust-cargo", "rust-conventions", "rust-cross", "rust-debugging", "rust-ffi", "rust-no-std", "rust-safety", "decider", "github", "issue-lifecycle", "linear", "worktree"]
-iced = ["iced-rs", "iced-shadcn", "trading-design", "price-handling", "decider", "github", "issue-lifecycle", "linear", "worktree"]
+rust = ["rust-arch", "rust-cargo", "decider", "github", "worktree"]
+iced = ["iced-rs", "trading-design", "decider", "github", "worktree"]
 
-# Project instructions appended at the bottom of each skill's SKILL.md (won't overwrite the skill author's own)
+# Project instructions appended to a skill's SKILL.md.
 [skill-instructions]
-trading-design = "Focus on dark theme with green/red accent colors."
+trading-design = "Dark theme, green/red accents."
 
-# Project-local hooks (Claude Code runs the command; other harnesses get the description as inline instructions)
+# Custom hooks. Claude Code runs the command; others use description as inline rules.
 [[custom-hooks]]
 event = "PreToolUse"
 matcher = "Bash"
 command = "./scripts/no-force-push.sh"
-description = "Never run git push --force on main or master."
-agents = "all"     # "all", a role ("engineer"), or a list ["rust", "iced"]
+description = "Never `git push --force` on main or master."
+agents = "all"     # "all" | role | [agent names]
 ```
 
-If you edit a generated agent or skill file directly (e.g., add an "Additional Instructions" section), vstack extracts your edits and saves them to `vstack.toml` before the next regeneration — so both approaches work.
+Direct edits to generated agent/skill files are extracted into `vstack.toml` before the next regeneration — both approaches work.
 
 ### Architecture
 
@@ -187,25 +176,17 @@ source repo
 
 ### Repo Sources
 
-The default source is this repo: `vanillagreencom/vstack`.
+Default: `vanillagreencom/vstack`. The TUI switches between remembered repos or adds new ones (GitHub shorthand or URL).
 
-The TUI also supports:
-
-- switching between remembered package repos
-- adding a new package repo by GitHub shorthand or URL
-- persisting known sources in a small registry under vstack's global state
-
-Compatible repos follow the same content model:
+Compatible repos:
 
 ```text
 agents/
 skills/
 hooks/
-pi-extensions/
+pi-extensions/   # optional
 vstack.toml
 ```
-
-`pi-extensions/` is optional — only include it if your repo ships Pi extension packages.
 
 ## Supported Harnesses
 
@@ -227,15 +208,12 @@ Global install behavior:
 
 ### Pi notes
 
-- **Agents.** Pi has no built-in subagent mechanism, so `.pi/agents/*.md` files are inert until a loader extension is installed. `pi-agents-tmux` provides that loader; `pi-session-bridge` is a separate TUI side-channel for external controllers.
-- **Hooks.** No native Pi hook runtime, so safety hook prose is appended to the agent body instead of running as commands.
-- **Extensions.** `vstack add` copies the package into `<scope>/packages/<name>`, registers `./packages/<name>` in that scope's `settings.json` (preserving unrelated entries), and symlinks each `package.json` `bin` entry to `<scope>/bin/<cli-name>`. Add `<scope>/bin` to `PATH` for bare-name invocation. `vstack remove` cleans all three.
-- **Extension scope is exclusive.** Pi loads global + project scopes simultaneously, so duplicate registration would crash startup. Installing into one scope when the other already has it is skipped with a notice — `vstack remove [--global]` first to switch.
+- **Agents.** `.pi/agents/*.md` are inert without a loader extension (`pi-agents-tmux`). `pi-session-bridge` is a separate TUI side-channel for external controllers.
+- **Hooks.** No native runtime; safety prose is appended to the agent body.
+- **Extensions.** `vstack add` copies to `<scope>/packages/<name>`, registers in `settings.json`, symlinks each `bin` entry to `<scope>/bin/<cli>`. Add `<scope>/bin` to `PATH`. `vstack remove` cleans all three.
+- **Scope is exclusive.** Pi loads global + project together — duplicate registration crashes startup. vstack skips duplicates with a notice; use `vstack remove [-g]` to switch.
 
-Windows note:
-
-- The CLI should run natively.
-- “Symlink” mode falls back to copy on non-Unix targets.
+Windows: CLI runs natively; symlink mode falls back to copy on non-Unix targets.
 
 ## Package Catalog In This Repo
 
@@ -259,7 +237,7 @@ Windows note:
 
 ### Skills
 
-`*` marks skills that need project-local setup before first use — see that skill's `README.md` for bootstrap steps.
+`*` = needs project-local setup; see that skill's README.
 
 #### Rust
 
@@ -323,7 +301,7 @@ Windows note:
 
 ### Pi Extensions
 
-All Pi packages declare `vstack.extensionManager.settings` metadata including an `enabled` toggle. Install `pi-extension-manager` to browse and edit them from Pi.
+All Pi packages declare `vstack.extensionManager.settings` (including an `enabled` toggle). Install `pi-extension-manager` to browse/edit from Pi.
 
 | Extension | Purpose |
 |---|---|
@@ -358,7 +336,7 @@ pi-extensions/
 
 #### Settings layout
 
-vstack writes Pi's `packages` array using the relative form Pi resolves against the settings file directory:
+vstack writes Pi's `packages` as relative paths (resolved against the settings file dir):
 
 ```json
 {
@@ -374,7 +352,7 @@ vstack writes Pi's `packages` array using the relative form Pi resolves against 
 | Global | `~/.pi/agent/settings.json` | `~/.pi/agent/packages/<name>/` |
 | Project | `.pi/settings.json` | `.pi/packages/<name>/` |
 
-Other `settings.json` keys are preserved; legacy absolute-path entries auto-rewrite to the relative form on the next `vstack add`/`refresh`. `pi-extension-manager` stores disabled lists and extension setting values under `vstack.extensionManager`, separate from Pi's top-level `extensions` resource-path setting.
+Other keys are preserved. Legacy absolute paths auto-rewrite on next `add`/`refresh`. `pi-extension-manager` writes its disabled list + setting values under `vstack.extensionManager`.
 
 ## License
 

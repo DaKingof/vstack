@@ -133,32 +133,25 @@ reviewer = ["issue-lifecycle", "linear"]
 Per-agent customization sections survive `vstack add` — re-applied on every install/reconciliation.
 
 ```toml
-# Skills always loaded into each agent's context — single source of truth.
-# Populated at install time. Add your own skills or remove ones you don't want.
+# Skills loaded into each agent's context.
 [agent-skills]
-rust = ["rust-arch", "rust-cargo", "rust-conventions", "rust-safety"]
+rust = ["rust-arch", "rust-cargo"]
 
-# Specialist skills loaded on demand — agent gets a "when to load" table.
+# Specialist skills loaded on demand with "when to load" hints.
 [agent-skills-optional]
-rust = [
-  { skill = "rust-async", when = "Async code, tokio, futures, channels" },
-  { skill = "rust-ffi", when = "FFI boundaries, C interop, bindgen" },
-]
+rust = [{ skill = "rust-async", when = "Async, tokio, channels" }]
 
-# "Launch Instructions" — what the agent should do when first invoked
+# What the agent should do when first invoked.
 [agent-launch-instructions]
-rust = "Read open issues and begin working on the highest-priority backend task."
+rust = "Pick up the highest-priority backend issue."
 
-# Additional instructions appended at the bottom of the agent file
+# Project guidance appended to the agent file.
 [agent-additional-instructions]
-rust = """
-Always run clippy before committing.
-Prefer zero-copy APIs in hot paths.
-"""
+rust = "Always run clippy before committing."
 
-# Project instructions added at the top of each skill's SKILL.md
+# Project instructions prepended to a skill's SKILL.md.
 [skill-instructions]
-trading-design = "Focus on dark theme with green/red accent colors for this project."
+trading-design = "Dark theme, green/red accents."
 ```
 
 ## Per-Harness Model Mapping
