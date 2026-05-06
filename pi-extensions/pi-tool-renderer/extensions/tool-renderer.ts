@@ -768,12 +768,18 @@ interface StructuredDiff {
 	removals: number;
 }
 
+interface AnsiParts {
+	close: string;
+	open: string;
+}
+
 interface BlinkEntry {
 	invalidate: () => void;
 }
 
 const blinkEntries = new Map<unknown, BlinkEntry>();
 let blinkTimer: ReturnType<typeof setInterval> | undefined;
+const themeDiffBgParts = new WeakMap<object, Map<string, AnsiParts>>();
 
 function stripAnsi(text: string): string {
 	return text.replace(ANSI_RE, "");
@@ -1002,16 +1008,40 @@ function fallbackDiffBgOpen(token: string): string {
 	return "";
 }
 
-function bgParts(theme: any, token: string): { open: string; close: string } {
+function cacheThemeBgParts(theme: any, token: string): AnsiParts | undefined {
 	const marker = "\uE000";
+	if (!theme || (typeof theme !== "object" && typeof theme !== "function") || !theme.bg) return undefined;
 	try {
-		if (theme?.bg) {
-			const parts = ansiPartsFromStyled(theme.bg(token, marker));
-			if (ansiHasBackground(parts.open)) return parts;
+		const parts = ansiPartsFromStyled(theme.bg(token, marker));
+		if (!ansiHasBackground(parts.open)) return undefined;
+		let cached = themeDiffBgParts.get(theme);
+		if (!cached) {
+			cached = new Map();
+			themeDiffBgParts.set(theme, cached);
 		}
+		cached.set(token, parts);
+		return parts;
 	} catch {
 		// Keep rendering readable if the active theme cannot provide this token.
 	}
+	return undefined;
+}
+
+function cachedThemeBgParts(theme: any, token: string): AnsiParts | undefined {
+	if (!theme || (typeof theme !== "object" && typeof theme !== "function")) return undefined;
+	return themeDiffBgParts.get(theme)?.get(token);
+}
+
+function captureDiffBackgroundTheme(theme: any): void {
+	cacheThemeBgParts(theme, DIFF_ADD_BG_TOKEN);
+	cacheThemeBgParts(theme, DIFF_DEL_BG_TOKEN);
+}
+
+function bgParts(theme: any, token: string): AnsiParts {
+	const live = cacheThemeBgParts(theme, token);
+	if (live) return live;
+	const cached = cachedThemeBgParts(theme, token);
+	if (cached) return cached;
 	const fallbackOpen = fallbackDiffBgOpen(token);
 	if (fallbackOpen) return { open: fallbackOpen, close: ANSI_BG_RESET };
 	return { open: "", close: "" };
@@ -2849,6 +2879,7 @@ function installToolExecutionRendererPatch(pi: ExtensionAPI): void {
 
 function applyToolChromeTheme(theme: any, cwd?: string): void {
 	if (toolChromeMode(cwd) === "off") return;
+	captureDiffBackgroundTheme(theme);
 	const transparent = "\x1b[49m";
 	try {
 		if (theme?.bgColors instanceof Map) {
