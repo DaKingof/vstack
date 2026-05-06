@@ -1643,7 +1643,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 		promptGuidelines: [
 			"Use bg_task instead of bash backgrounding/nohup when the user wants a long-running command to continue while the conversation remains usable.",
 			"Use bg_task list/log/stop to inspect or terminate tasks started by bg_task or /bg.",
-			"Use bg_task for pi-bridge, session, tmux, subagent, or log monitoring instead of raw foreground bash polling loops.",
+			"Use bg_task for pi-bridge, session, tmux, agent/delegate, or log monitoring instead of raw foreground bash polling loops.",
 			"If a bash monitor is auto-backgrounded, continue the turn and inspect it later with bg_task log/list/stop rather than waiting on foreground bash.",
 		],
 		parameters: Type.Object({

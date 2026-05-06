@@ -41,7 +41,7 @@ Built-in auto-background matches are intentionally conservative:
 - `watch ...`
 - `tail -f ...` and `journalctl -f ...`
 - delayed Pi session/tmux monitors such as `sleep 50; pi-bridge history ...`
-- shell loops with `sleep` that appear to monitor Pi session bridge, tmux panes, subagent/delegate state, or long finite/open-ended polling loops
+- shell loops with `sleep` that appear to monitor Pi session bridge, tmux panes, agent/delegate state, or long finite/open-ended polling loops
 
 Use `Alt+.` or `/bg next` when you know the next bash command should be backgrounded even if it does not match the conservative patterns. The shortcut cannot detach a bash process that has already started, because Pi's built-in bash tool does not expose a public process handle to extensions. If pressed while a tool is already running, it applies to the next bash command that has not yet started.
 
@@ -69,7 +69,7 @@ Useful `spawn` options:
 
 ## Notes
 
-Tasks are scoped to the current Pi runtime and are stopped on session shutdown. On Unix, shells start in their own process group so `/bg stop` and shutdown terminate child processes as well as the shell. For Pi bridge, session monitoring, and tmux/subagent pane monitoring, prefer `bg_task`, `/bg run`, or the built-in auto-backgrounding over raw foreground polling loops.
+Tasks are scoped to the current Pi runtime and are stopped on session shutdown. On Unix, shells start in their own process group so `/bg stop` and shutdown terminate child processes as well as the shell. For Pi bridge, session monitoring, and tmux/agent pane monitoring, prefer `bg_task`, `/bg run`, or the built-in auto-backgrounding over raw foreground polling loops.
 
 ## Attribution
 
