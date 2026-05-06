@@ -2653,6 +2653,7 @@ async function runSingleAgent(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	sessionKey?: string,
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
 
@@ -2670,7 +2671,20 @@ async function runSingleAgent(
 		};
 	}
 
-	const args: string[] = ["--mode", "json", "-p", "--no-session"];
+	// Without sessionKey, bg agents run ephemerally (--no-session). With
+	// sessionKey, route pi to a stable session file under our runtime so the
+	// same key + agent across calls resumes prior conversation context. Pi's
+	// SessionManager.open() handles 'create if missing, continue if existing'.
+	const args: string[] = ["--mode", "json", "-p"];
+	let resumedSessionPath: string | undefined;
+	if (sessionKey && sessionKey.trim()) {
+		const sessionsDir = path.join(runtimeRoot, "sessions");
+		await fs.promises.mkdir(sessionsDir, { recursive: true, mode: 0o700 }).catch(() => undefined);
+		resumedSessionPath = path.join(sessionsDir, `bg-${safeFileName(agent.name)}-${safeFileName(sessionKey.trim())}.jsonl`);
+		args.push("--session", resumedSessionPath);
+	} else {
+		args.push("--no-session");
+	}
 	const selectedModel = parentModel ?? agent.model;
 	if (selectedModel) args.push("--model", selectedModel);
 	if (parentThinkingLevel && parentThinkingLevel !== "off") args.push("--thinking", parentThinkingLevel);
@@ -2878,12 +2892,14 @@ const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	sessionKey: Type.Optional(Type.String({ description: "Stable id for resuming a bg (non-pane) agent across calls. Same key + agent => same persisted pi session, retains conversation context. Ignored for pane agents." })),
 });
 
 const ChainItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	sessionKey: Type.Optional(Type.String({ description: "Stable id for resuming a bg (non-pane) agent across calls. Same key + agent => same persisted pi session, retains conversation context. Ignored for pane agents." })),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -2901,6 +2917,12 @@ const SubagentParams = Type.Object({
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: false.", default: false }),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+	sessionKey: Type.Optional(
+		Type.String({
+			description:
+				"For bg (non-pane) agents only, single mode. Stable id used as the resumed pi session file name; the same agent + sessionKey across calls retains conversation context. Use a stable workflow-scoped id like 'review-issue-123' for reviewer-* agents that need memory across multiple delegations. Ignored for pane agents (panes already persist via their own session file).",
+		}),
+	),
 	forceSpawn: Type.Optional(
 		Type.Boolean({
 			description:
@@ -4354,6 +4376,7 @@ export default function (pi: ExtensionAPI) {
 								signal,
 								chainUpdate,
 								makeDetails("chain"),
+								step.sessionKey,
 							);
 					results.push(result);
 					if (!stepAgent?.pane) {
@@ -4515,6 +4538,7 @@ export default function (pi: ExtensionAPI) {
 									}
 								},
 								makeDetails("parallel"),
+								t.sessionKey,
 							);
 					allResults[index] = result;
 					if (!taskAgent?.pane) updateOneshotDashboard(result);
@@ -4583,6 +4607,7 @@ export default function (pi: ExtensionAPI) {
 							signal,
 							onUpdate,
 							makeDetails("single"),
+							params.sessionKey,
 						);
 				if (!agent?.pane) {
 					updateDashboard({
