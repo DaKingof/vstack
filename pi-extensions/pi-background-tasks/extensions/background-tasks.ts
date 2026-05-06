@@ -734,10 +734,11 @@ function makeToolResult(text: string, details: Record<string, unknown> = {}): Ag
 
 function backgroundRule(theme: Theme, width: number): string {
 	const rule = "─".repeat(Math.max(1, width));
-	for (const token of ["borderMuted", "muted"] as const) {
+	for (const token of ["borderMuted", "muted", "dim"] as const) {
 		try {
 			const styled = theme.fg(token, rule);
-			if (styled !== rule) return styled;
+			const textStyled = theme.fg("text", rule);
+			if (styled !== rule && styled !== textStyled) return styled;
 		} catch {
 			// Try the next token/fallback below.
 		}

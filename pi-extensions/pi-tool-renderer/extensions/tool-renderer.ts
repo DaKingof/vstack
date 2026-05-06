@@ -11,6 +11,7 @@ const ASSISTANT_MESSAGE_PATCH_SYMBOL = Symbol.for("vstack.pi-tool-renderer.assis
 const CUSTOM_MESSAGE_SPACING_PATCH_SYMBOL = Symbol.for("vstack.pi-tool-renderer.custom-message-spacing-patch");
 const TOOL_EXECUTION_RENDERER_PATCH_SYMBOL = Symbol.for("vstack.pi-tool-renderer.tool-execution-renderer-patch.v2");
 const TOOL_CHROME_PATCH_SYMBOL = Symbol.for("vstack.pi-tool-renderer.tool-chrome-patch");
+const TOOL_CHROME_THEME_SYMBOL = Symbol.for("vstack.pi-tool-renderer.tool-chrome-theme");
 const COMPACTION_SUMMARY_RENDERER_PATCH_SYMBOL = Symbol.for("vstack.pi-tool-renderer.compaction-summary-renderer-patch");
 const SKILL_INVOCATION_RENDERER_PATCH_SYMBOL = Symbol.for("vstack.pi-tool-renderer.skill-invocation-renderer-patch");
 const MARKDOWN_CODE_BLOCK_PATCH_SYMBOL = Symbol.for("vstack.pi-tool-renderer.markdown-code-block-patch");
@@ -659,20 +660,37 @@ function stackPrefix(theme: any): string {
 	return theme.fg("accent", "● ");
 }
 
-function toolRule(theme: any, text: string): string {
+function fgToken(theme: any, token: string, text: string, rejectTextFallback = false): string | undefined {
 	try {
-		return theme.fg("muted", text);
+		const styled = theme?.fg?.(token, text);
+		if (typeof styled !== "string" || styled === text) return undefined;
+		if (rejectTextFallback && token !== "text") {
+			try {
+				const textStyled = theme?.fg?.("text", text);
+				if (typeof textStyled === "string" && textStyled !== text && styled === textStyled) return undefined;
+			} catch {
+				// Ignore and accept the token styling.
+			}
+		}
+		return styled;
 	} catch {
-		return text;
+		return undefined;
 	}
 }
 
+function subtleRule(theme: any, text: string): string {
+	return fgToken(theme, "borderMuted", text, true)
+		?? fgToken(theme, "muted", text, true)
+		?? fgToken(theme, "dim", text, true)
+		?? `\x1b[90m${text}\x1b[39m`;
+}
+
+function toolRule(theme: any, text: string): string {
+	return fgToken(theme, "muted", text, true) ?? fgToken(theme, "dim", text, true) ?? text;
+}
+
 function borderMuted(theme: any, text: string): string {
-	try {
-		return theme.fg("borderMuted", text);
-	} catch {
-		return toolRule(theme, text);
-	}
+	return subtleRule(theme, text);
 }
 
 type TreeBranch = "├" | "└" | "│";
@@ -2857,6 +2875,24 @@ function renderGenericToolResult(name: string, result: any, { expanded, isPartia
 	return makeTruncatedLines(text);
 }
 
+function rememberToolChromeTheme(component: any, theme: any): void {
+	if (theme?.fg) component[TOOL_CHROME_THEME_SYMBOL] = theme;
+}
+
+function withCallTheme(component: any, renderer: (args: any, theme: any, context: any) => any): (args: any, theme: any, context: any) => any {
+	return function renderCallWithRememberedTheme(this: any, args: any, theme: any, context: any) {
+		rememberToolChromeTheme(component, theme);
+		return renderer.call(this, args, theme, context);
+	};
+}
+
+function withResultTheme(component: any, renderer: (result: any, options: any, theme: any, context: any) => any): (result: any, options: any, theme: any, context: any) => any {
+	return function renderResultWithRememberedTheme(this: any, result: any, options: any, theme: any, context: any) {
+		rememberToolChromeTheme(component, theme);
+		return renderer.call(this, result, options, theme, context);
+	};
+}
+
 function installToolExecutionRendererPatch(pi: ExtensionAPI): void {
 	const proto = ToolExecutionComponent?.prototype as any;
 	if (!proto) return;
@@ -2886,28 +2922,30 @@ function installToolExecutionRendererPatch(pi: ExtensionAPI): void {
 	proto.getCallRenderer = function patchedGetCallRenderer(this: any) {
 		const toolName = typeof this?.toolName === "string" ? this.toolName : "";
 		if (shouldUseUnknownToolRenderer(this, toolName)) {
-			return (args: any, theme: any, context: any) => renderUnknownToolCall(toolName, args, theme, context);
+			return withCallTheme(this, (args: any, theme: any, context: any) => renderUnknownToolCall(toolName, args, theme, context));
 		}
 		if (toolName === "apply_patch" && settingBoolean("applyPatchRenderer", true) && !componentDefinesRenderer(this, "renderCall")) {
-			return (args: any, theme: any, context: any) => renderApplyPatchCall(args, theme, context);
+			return withCallTheme(this, (args: any, theme: any, context: any) => renderApplyPatchCall(args, theme, context));
 		}
 		if (settingBoolean("genericToolRenderers", true) && shouldUseGenericRenderer(toolName) && !componentDefinesRenderer(this, "renderCall")) {
-			return (args: any, theme: any, context: any) => renderGenericToolCall(toolName, args, theme, context);
+			return withCallTheme(this, (args: any, theme: any, context: any) => renderGenericToolCall(toolName, args, theme, context));
 		}
-		return originalGetCallRenderer.call(this);
+		const renderer = originalGetCallRenderer.call(this);
+		return typeof renderer === "function" ? withCallTheme(this, renderer) : renderer;
 	};
 	proto.getResultRenderer = function patchedGetResultRenderer(this: any) {
 		const toolName = typeof this?.toolName === "string" ? this.toolName : "";
 		if (shouldUseUnknownToolRenderer(this, toolName)) {
-			return (result: any, options: any, theme: any, context: any) => renderUnknownToolResult(toolName, result, options, theme, context);
+			return withResultTheme(this, (result: any, options: any, theme: any, context: any) => renderUnknownToolResult(toolName, result, options, theme, context));
 		}
 		if (toolName === "apply_patch" && settingBoolean("applyPatchRenderer", true) && !componentDefinesRenderer(this, "renderResult")) {
-			return (result: any, options: any, theme: any, context: any) => renderApplyPatchResult(result, options, theme, context);
+			return withResultTheme(this, (result: any, options: any, theme: any, context: any) => renderApplyPatchResult(result, options, theme, context));
 		}
 		if (settingBoolean("genericToolRenderers", true) && shouldUseGenericRenderer(toolName) && !componentDefinesRenderer(this, "renderResult")) {
-			return (result: any, options: any, theme: any, context: any) => renderGenericToolResult(toolName, result, options, theme, context);
+			return withResultTheme(this, (result: any, options: any, theme: any, context: any) => renderGenericToolResult(toolName, result, options, theme, context));
 		}
-		return originalGetResultRenderer.call(this);
+		const renderer = originalGetResultRenderer.call(this);
+		return typeof renderer === "function" ? withResultTheme(this, renderer) : renderer;
 	};
 	proto[TOOL_EXECUTION_RENDERER_PATCH_SYMBOL] = state;
 	pi.on("session_shutdown", () => {
@@ -2929,16 +2967,7 @@ function prepareToolChromeTheme(theme: any, cwd?: string): void {
 let activeToolChromeCtx: ExtensionContext | undefined;
 
 function mutedHorizontalRule(theme: any, width: number): string {
-	const rule = "─".repeat(Math.max(1, width));
-	for (const token of ["borderMuted", "muted"] as const) {
-		try {
-			const styled = theme?.fg?.(token, rule);
-			if (typeof styled === "string" && styled !== rule) return styled;
-		} catch {
-			// Try the next token/fallback below.
-		}
-	}
-	return `\x1b[90m${rule}\x1b[39m`;
+	return subtleRule(theme, "─".repeat(Math.max(1, width)));
 }
 
 function shouldOmitBottomToolChromeRule(core: string[]): boolean {
@@ -2966,7 +2995,7 @@ function installToolChromePatch(): void {
 			return wrapped.length > 0 ? wrapped : [""];
 		});
 		if (mode === "transparent") return core;
-		const activeTheme = this?.ui?.theme ?? (activeToolChromeCtx?.hasUI ? activeToolChromeCtx.ui.theme : undefined);
+		const activeTheme = this?.[TOOL_CHROME_THEME_SYMBOL] ?? this?.ui?.theme ?? (activeToolChromeCtx?.hasUI ? activeToolChromeCtx.ui.theme : undefined);
 		const rule = mutedHorizontalRule(activeTheme, width);
 		return shouldOmitBottomToolChromeRule(core) ? [rule, ...core] : [rule, ...core, rule];
 	};

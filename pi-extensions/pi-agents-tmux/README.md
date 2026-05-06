@@ -19,7 +19,7 @@ Pi package for delegating work to specialized agents from a running Pi session.
 - Durable task registry plus `get_subagent_result` recovery by `taskId` or latest agent task.
 - `steer_subagent` for bridge-based mid-run steering, limited to exact child session-file targeting, with an explicit inbox fallback when that exact bridge target is unavailable.
 - Session-scoped inbox/outbox handoff, transcript artifacts, and pane registries under `~/.pi/agent/vstack/pi-agents-tmux/sessions/<session-id>/`.
-- Grid-style tmux layout and pane titles like `agent:iced`.
+- Auto-sized grid tmux layout for pane agents, reflowed on every spawn, with pane titles like `agent:iced`.
 
 ## Tool modes
 

@@ -251,11 +251,16 @@ function renderTaskLine(task: TaskItem, theme: Theme, active = false, prefix = "
 
 function mutedRule(theme: Theme, width: number): string {
 	const rule = "─".repeat(Math.max(1, width));
-	try {
-		return theme.fg("borderMuted", rule);
-	} catch {
-		return theme.fg("muted", rule);
+	for (const token of ["borderMuted", "muted", "dim"] as const) {
+		try {
+			const styled = theme.fg(token, rule);
+			const textStyled = theme.fg("text", rule);
+			if (styled !== rule && styled !== textStyled) return styled;
+		} catch {
+			// Try the next token/fallback below.
+		}
 	}
+	return `\x1b[90m${rule}\x1b[39m`;
 }
 
 class SingleLineText {
