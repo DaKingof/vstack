@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { getCapabilities, Image, Text, type Component } from "@mariozechner/pi-tui";
 import { hasOpenAiModelsLoaded } from "./activation.js";
+import { registerBackgroundImageGenerationCommand } from "./background-image-generation.js";
 import { computeNextActiveTools, computeToolCapabilities, modelKey, PACKAGE_TOOL_NAMES, type ModelLike } from "./capabilities.js";
 import { registerOpenAICodexCustomProvider } from "./provider-shim.js";
 import { rewriteNativeOpenAiTools } from "./provider-native-tools.js";
@@ -194,6 +195,7 @@ export default function codexMinimalTools(pi: ExtensionAPI): void {
 	const initialSettings = loadSettings(currentCwd);
 	if (initialSettings.enabled && initialSettings.nativeProviderTools) {
 		registerOpenAICodexCustomProvider(pi, { getCurrentCwd: () => currentCwd });
+		registerBackgroundImageGenerationCommand(pi);
 	}
 
 	registerDiagnosticCommand(pi);

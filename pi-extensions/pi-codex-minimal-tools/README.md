@@ -41,6 +41,7 @@ Restart Pi after installation.
 | --- | --- |
 | `/codex-minimal-tools` | Open the extension-manager settings popup (falls back to inline status when the manager is not installed). |
 | `/codex-minimal-tools:doctor` | Run lightweight self-checks. |
+| `/image-gen <prompt> [@reference.png]` | Queue background Codex OAuth image generation/editing with the configured GPT Image model. Posts the saved image path when complete without holding the current turn open. |
 
 Arguments support autocomplete.
 

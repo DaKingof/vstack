@@ -26,7 +26,7 @@ function imageToolConfig(tool: Record<string, unknown>, options: NativeToolRewri
 		if (typeof value === "string") config[key] = value;
 	}
 	if (!config.output_format) config.output_format = "png";
-	if (!config.action) config.action = "generate";
+	if (!config.action) config.action = "auto";
 	return config;
 }
 

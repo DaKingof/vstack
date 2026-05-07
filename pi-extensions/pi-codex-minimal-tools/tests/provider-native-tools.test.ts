@@ -12,7 +12,7 @@ test("rewriteNativeOpenAiTools rewrites image_generation function tools to nativ
 	};
 	const result = rewriteNativeOpenAiTools(payload, { imageModel: "gpt-image-2" });
 	assert.deepEqual(result.rewritten, ["image_generation"]);
-	assert.deepEqual(result.payload.tools[0], { type: "image_generation", model: "gpt-image-2", output_format: "webp", action: "generate" });
+	assert.deepEqual(result.payload.tools[0], { type: "image_generation", model: "gpt-image-2", output_format: "webp", action: "auto" });
 	assert.deepEqual(result.payload.tools[1], { type: "function", function: { name: "web_search", parameters: {} } });
 	assert.equal((result.payload.tools[2] as any).name, "read");
 });
