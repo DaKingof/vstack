@@ -132,9 +132,24 @@ name: iced
 description: Iced UI specialist
 tools: read, grep, find, ls, bash, edit, write
 model: openai/gpt-5.5:xhigh
+color: cyan
 pane: true
 ---
 ```
+
+Supported agent frontmatter fields:
+
+| Field | Required | Values |
+| --- | --- | --- |
+| `name` | yes | Unique agent name used in `subagent`, `/agents`, pane title, and task ids. |
+| `description` | yes | Short description shown in `/agents` and completions. |
+| `tools` | no | Comma-separated Pi tool allowlist, for example `read, grep, find, ls, bash, edit, write`. If omitted, write-capable defaults are used for `generalist`, `rust`, `iced`, and `worker`; other names default to read-only tools. |
+| `model` | no | Pi model id. Shorthands are accepted: `sonnet` → `claude-sonnet-4-5`, `opus*` → `claude-opus-4-5`, `haiku` → `claude-haiku-4-5`. Other values pass through unchanged, including provider ids like `openai/gpt-5.5:xhigh`. |
+| `pane` | no | `true`, `yes`, `1`, or `pane` starts/reuses a persistent tmux pane. Omit or use `false` for background one-shot mode. |
+| `persistentPane` | no | Legacy alias for `pane`. |
+| `color` | no | Statusline badge color for child panes. Valid values: `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`. Aliases: `orange` → `yellow`, `purple`/`violet` → `magenta`, `teal` → `cyan`. Unknown/empty values fall back to automatic color cycling. |
+
+Everything after the frontmatter is the agent's system prompt.
 
 The parent Pi session writes tasks to `inbox/<agent>/` and polls `outbox/<agent>/` under the session runtime directory. Sessions, prompt copies, launcher scripts, inbox/outbox, processed files, and pane registries are isolated by Pi session ID and never stored under the project's `.pi/` directory. Completions are surfaced back into the main conversation automatically.
 
