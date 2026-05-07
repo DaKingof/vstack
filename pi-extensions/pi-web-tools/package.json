@@ -110,7 +110,7 @@
         {
           "key": "exaAdvancedEnabled",
           "label": "Exa advanced tools",
-          "description": "Enable advanced Exa fetch, answer, find-similar, and code search tools.",
+          "description": "Enable advanced Exa answer, find-similar, and code search tools.",
           "type": "boolean",
           "default": false,
           "category": "Exa",
@@ -126,42 +126,6 @@
           "category": "Compatibility",
           "apply": "reload",
           "requiresReload": true
-        },
-        {
-          "key": "curatorEnabled",
-          "label": "Curator UI",
-          "description": "Allow curator workflow when interactive. Full browser review UI is staged for a follow-up phase.",
-          "type": "boolean",
-          "default": true,
-          "category": "Curator",
-          "apply": "live"
-        },
-        {
-          "key": "curatorTimeoutSeconds",
-          "label": "Curator timeout",
-          "description": "Timeout cap for curator workflows, capped at 600 seconds.",
-          "type": "number",
-          "default": 20,
-          "category": "Curator",
-          "apply": "live"
-        },
-        {
-          "key": "summaryModel",
-          "label": "Summary model",
-          "description": "Model preference for curator summaries; use current to keep the active model.",
-          "type": "string",
-          "default": "current",
-          "category": "Curator",
-          "apply": "live"
-        },
-        {
-          "key": "includeContentByDefault",
-          "label": "Include content by default",
-          "description": "Fetch page content after search results by default.",
-          "type": "boolean",
-          "default": false,
-          "category": "Content",
-          "apply": "live"
         },
         {
           "key": "browserCookieAccess",
@@ -185,7 +149,7 @@
         {
           "key": "githubClone.enabled",
           "label": "GitHub clone extraction",
-          "description": "Enable GitHub clone extraction for repository URLs. Full clone cache is staged for follow-up parity.",
+          "description": "Enable GitHub clone/cache extraction for repository URLs.",
           "type": "boolean",
           "default": true,
           "category": "Content",
@@ -203,30 +167,10 @@
         {
           "key": "video.enabled",
           "label": "Video extraction",
-          "description": "Enable YouTube/local video understanding. Full Gemini/yt-dlp support is staged for follow-up parity.",
+          "description": "Enable YouTube and local video understanding via Gemini API/Web when available.",
           "type": "boolean",
           "default": true,
           "category": "Content",
-          "apply": "reload",
-          "requiresReload": true
-        },
-        {
-          "key": "shortcuts.curator",
-          "label": "Curator shortcut",
-          "description": "Shortcut for curator UI.",
-          "type": "string",
-          "default": "ctrl+shift+s",
-          "category": "Shortcuts",
-          "apply": "reload",
-          "requiresReload": true
-        },
-        {
-          "key": "shortcuts.activity",
-          "label": "Activity shortcut",
-          "description": "Shortcut for activity widget.",
-          "type": "string",
-          "default": "ctrl+shift+w",
-          "category": "Shortcuts",
           "apply": "reload",
           "requiresReload": true
         }

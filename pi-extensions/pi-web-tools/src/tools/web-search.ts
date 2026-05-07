@@ -25,7 +25,6 @@ export const webSearchSchema = Type.Object({
 	startPublishedDate: Type.Optional(Type.String()),
 	endPublishedDate: Type.Optional(Type.String()),
 	includeContent: Type.Optional(Type.Boolean()),
-	curator: Type.Optional(Type.Boolean()),
 });
 
 export type WebSearchInput = Static<typeof webSearchSchema>;

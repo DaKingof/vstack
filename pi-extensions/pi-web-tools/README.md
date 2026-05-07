@@ -52,12 +52,6 @@ Restart Pi after installation.
 - `get_web_content.maxCharacters` caps the retrieval returned to the model; default is 50k characters. Omit it for normal full-context retrieval, lower it only for previews.
 - Session storage is not a standalone project file. The durable handle shown in UI is the `content id`, and Pi persists it with the session history.
 
-Staged for follow-up parity with `pi-web-access`:
-
-- Browser curator UI and activity monitor.
-- Gemini extraction fallback for HTML pages where Jina also fails (Jina is the current single fallback after the in-house extractor).
-- ffmpeg/yt-dlp-driven frame extraction for video URLs (text understanding works without these binaries).
-
 ## Settings
 
 Settings are read from the vstack extension-manager namespace:
@@ -92,6 +86,7 @@ Key toggles:
 - `browserCookieAccess` opts in to Gemini Web cookie scraping. With `browserCookies.preferredBrowser` set to `auto` (default) / `firefox` / `zen` / `chrome` / `chromium`, the package reads cookies from Firefox/Zen unencrypted SQLite or Chromium-family DBs (libsecret on Linux, Keychain on macOS, DPAPI master key + AES-GCM on Windows).
 - `pdfOcr.enabled` controls whether `pdftoppm` rasterizes scanned PDFs into ImageContent blocks for vision OCR. Defaults on; set to false to skip rasterization on scanned PDFs.
 - `githubClone.enabled` toggles the GitHub clone cache (default on). Repos exceeding `maxRepoSizeMB` automatically fall back to API-based extraction.
+- `video.enabled` toggles YouTube and local video understanding via Gemini API/Web when available.
 
 Secrets should be supplied with environment variables, project `.env.local`/`.env` files, or a private config file. Process environment variables win over values loaded from files:
 

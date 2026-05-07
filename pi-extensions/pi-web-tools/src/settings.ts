@@ -18,10 +18,6 @@ export interface WebToolsSettings {
 	exaDeepResearchEnabled: boolean;
 	exaAdvancedEnabled: boolean;
 	compatibilityTools: boolean;
-	curatorEnabled: boolean;
-	curatorTimeoutSeconds: number;
-	summaryModel: string;
-	includeContentByDefault: boolean;
 	exaResearchModes: Record<string, Record<string, unknown>>;
 	browserCookieAccess: boolean;
 	githubClone: { enabled: boolean; maxRepoSizeMB: number; cloneTimeoutSeconds: number; cacheMaxAgeHours: number };
@@ -29,7 +25,6 @@ export interface WebToolsSettings {
 	pdfOcr: { enabled: boolean; maxPages: number; dpi: number };
 	browserCookies: { preferredBrowser: "auto" | "firefox" | "zen" | "chrome" | "chromium"; profile?: string };
 	video: { enabled: boolean };
-	shortcuts: { curator: string; activity: string };
 	apiKeys: Partial<Record<Exclude<ResolvedWebProvider, "exa-mcp" | "duckduckgo"> | "openai" | "jina", string>>;
 	privateConfigFile?: string;
 	warnings: string[];
@@ -45,10 +40,6 @@ export const DEFAULT_SETTINGS: Omit<WebToolsSettings, "apiKeys" | "warnings" | "
 	exaDeepResearchEnabled: true,
 	exaAdvancedEnabled: false,
 	compatibilityTools: false,
-	curatorEnabled: true,
-	curatorTimeoutSeconds: 20,
-	summaryModel: "current",
-	includeContentByDefault: false,
 	exaResearchModes: {},
 	browserCookieAccess: false,
 	githubClone: { enabled: true, maxRepoSizeMB: 350, cloneTimeoutSeconds: 60, cacheMaxAgeHours: 24 },
@@ -56,7 +47,6 @@ export const DEFAULT_SETTINGS: Omit<WebToolsSettings, "apiKeys" | "warnings" | "
 	pdfOcr: { enabled: true, maxPages: 5, dpi: 150 },
 	browserCookies: { preferredBrowser: "auto" },
 	video: { enabled: true },
-	shortcuts: { curator: "ctrl+shift+s", activity: "ctrl+shift+w" },
 };
 
 type SettingsRecord = Record<string, unknown>;
@@ -252,7 +242,6 @@ export function loadSettings(cwd = process.cwd()): WebToolsSettings {
 	const pdfOcr = nested(raw, "pdfOcr");
 	const browserCookies = nested(raw, "browserCookies");
 	const video = nested(raw, "video");
-	const shortcuts = nested(raw, "shortcuts");
 	const sharedSecrets = ["exaApiKey", "perplexityApiKey", "geminiApiKey", "openaiApiKey"].filter((key) => typeof raw[key] === "string");
 	if (sharedSecrets.length > 0) warnings.push(`API keys in shared Pi settings are supported for compatibility but env vars or PI_WEB_TOOLS_CONFIG_FILE are preferred: ${sharedSecrets.join(", ")}`);
 	const secrets = { ...envFileConfig, ...raw, ...privateConfig };
@@ -271,10 +260,6 @@ export function loadSettings(cwd = process.cwd()): WebToolsSettings {
 		exaDeepResearchEnabled: boolSetting(raw, "exaDeepResearchEnabled"),
 		exaAdvancedEnabled: boolSetting(raw, "exaAdvancedEnabled"),
 		compatibilityTools: boolSetting(raw, "compatibilityTools"),
-		curatorEnabled: boolSetting(raw, "curatorEnabled"),
-		curatorTimeoutSeconds: numberSetting(raw, "curatorTimeoutSeconds", DEFAULT_SETTINGS.curatorTimeoutSeconds, 1, 600),
-		summaryModel: stringSetting(raw, "summaryModel", DEFAULT_SETTINGS.summaryModel),
-		includeContentByDefault: boolSetting(raw, "includeContentByDefault"),
 		exaResearchModes: recordOfRecords(raw, "exaResearchModes"),
 		browserCookieAccess: boolSetting(raw, "browserCookieAccess"),
 		githubClone: {
@@ -296,10 +281,6 @@ export function loadSettings(cwd = process.cwd()): WebToolsSettings {
 			profile: typeof browserCookies.profile === "string" && browserCookies.profile.trim() ? browserCookies.profile.trim() : undefined,
 		},
 		video: { enabled: typeof video.enabled === "boolean" ? video.enabled : DEFAULT_SETTINGS.video.enabled },
-		shortcuts: {
-			curator: stringSetting(shortcuts, "curator", DEFAULT_SETTINGS.shortcuts.curator),
-			activity: stringSetting(shortcuts, "activity", DEFAULT_SETTINGS.shortcuts.activity),
-		},
 		apiKeys: {
 			exa: resolveSecretRef(exaKey, "EXA_API_KEY", warnings),
 			perplexity: resolveSecretRef(perplexityKey, "PERPLEXITY_API_KEY", warnings),

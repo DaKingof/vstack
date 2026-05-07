@@ -7,15 +7,29 @@ import { DEFAULT_SETTINGS, loadSettings, settingsDiagnostics } from "../src/sett
 
 function tempDir(): string { return mkdtempSync(join(tmpdir(), "pi-web-tools-")); }
 
-test("package settings defaults match runtime defaults", () => {
+function manifestSettings(): Array<{ key: string; default: unknown }> {
 	const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-	const settings = manifest.vstack.extensionManager.settings as Array<{ key: string; default: unknown }>;
+	return manifest.vstack.extensionManager.settings as Array<{ key: string; default: unknown }>;
+}
+
+function valueAtPath(record: any, path: string): unknown {
+	return path.split(".").reduce((current, part) => current?.[part], record);
+}
+
+test("package settings defaults match runtime defaults", () => {
+	const settings = manifestSettings();
 	const manifestDefaults = Object.fromEntries(settings.map((item) => [item.key, item.default]));
 	assert.equal(manifestDefaults.enabled, DEFAULT_SETTINGS.enabled);
 	assert.equal(manifestDefaults.defaultProvider, DEFAULT_SETTINGS.defaultProvider);
 	assert.equal(manifestDefaults.enabledProviders, DEFAULT_SETTINGS.enabledProviders.join(","));
 	assert.equal(manifestDefaults.nativeOpenAiWebSearch, DEFAULT_SETTINGS.nativeOpenAiWebSearch);
 	assert.equal(manifestDefaults["githubClone.enabled"], DEFAULT_SETTINGS.githubClone.enabled);
+});
+
+test("package settings only expose implemented runtime settings", () => {
+	const keys = manifestSettings().map((item) => item.key);
+	assert.deepEqual(keys.filter((key) => /curator|activity|shortcut|summaryModel|includeContentByDefault/i.test(key)), []);
+	for (const key of keys) assert.notEqual(valueAtPath(DEFAULT_SETTINGS, key), undefined, `${key} must exist in DEFAULT_SETTINGS`);
 });
 
 test("loadSettings merges user/project/private config and env wins", () => {
