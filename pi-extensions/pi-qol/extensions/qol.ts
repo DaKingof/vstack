@@ -3723,7 +3723,7 @@ class QolSessionSearchComponent {
 			lines.push(row(`${ansiYellow("enter")} ${dim("prompts")}  ${ansiYellow("alt+c/f/r/i/n/a")} ${dim("actions")}  ${ansiYellow("tab")} ${dim("scope")}`));
 		} else {
 			lines.push(row(`${ansiYellow("-/=")} ${dim("page")}  ${ansiYellow("enter")} ${dim("all prompts")}  ${ansiYellow("alt+c")} ${dim("copy")}  ${ansiYellow("alt+f")} ${dim("fork")}  ${ansiYellow("alt+r")} ${dim("resume")}`));
-			lines.push(row(`${ansiYellow("alt+i")} ${dim("inject")}  ${ansiYellow("alt+n")} ${dim("new+ctx")}  ${ansiYellow("alt+a")} ${dim("actions")}  ${ansiYellow("tab")} ${dim("scope")}  ${ansiYellow("ctrl+u")} ${dim("clear")}`));
+			lines.push(row(`${ansiYellow("alt+i")} ${dim("inject")}  ${ansiYellow("alt+n")} ${dim("new+ctx")}  ${ansiYellow("alt+a")} ${dim("actions")}  ${ansiYellow("tab")} ${dim("scope")}`));
 		}
 		lines.push(bottom());
 		return lines;
@@ -3759,7 +3759,8 @@ class QolSessionSearchComponent {
 			const hit = state.results[i]!;
 			const selected = i === state.selected;
 			const titleText = truncateToWidth(sessionResumeTitle(hit.result), Math.max(8, leftWidth - 18), "…");
-			const title = `${selected ? this.theme.bold(accent(titleText)) : this.theme.bold(titleText)} ${dim(`· #${hit.message.index} · ${formatSessionSearchDate(hit.result.modified)}`)}`;
+			const titleMatched = styleSessionSnippet(titleText, state.query, this.theme);
+			const title = `${selected ? this.theme.bold(titleMatched) : this.theme.bold(titleMatched)} ${dim(`· #${hit.message.index} · ${formatSessionSearchDate(hit.result.modified)}`)}`;
 			leftLines.push(fixed(title, leftWidth, selected));
 			const snippet = styleSessionSnippet(hit.snippet || hit.message.text, state.query, this.theme);
 			leftLines.push(fixed(`${dim("match:")} ${snippet}`, leftWidth, selected));
