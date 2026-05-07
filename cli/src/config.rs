@@ -480,6 +480,37 @@ fn fnv1a_chain(state: u64, data: &[u8]) -> u64 {
     h
 }
 
+/// Resolve a Pi extension's source directory by matching the npm package
+/// `name` field in `pi-extensions/*/package.json`. Pi extension lock entries
+/// store the npm name (e.g. `@vanillagreen/pi-questions`), but the on-disk
+/// directory uses an unscoped slug (`pi-extensions/pi-questions`), so a naive
+/// `join(entry.name)` never resolves for scoped packages.
+fn resolve_pi_extension_dir(source_root: &Path, name: &str) -> Option<PathBuf> {
+    let direct = source_root.join("pi-extensions").join(name);
+    if direct.is_dir() && direct.join("package.json").is_file() {
+        return Some(direct);
+    }
+    let root = source_root.join("pi-extensions");
+    let entries = std::fs::read_dir(&root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let pkg = path.join("package.json");
+        let Ok(raw) = std::fs::read_to_string(&pkg) else {
+            continue;
+        };
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if parsed.get("name").and_then(|n| n.as_str()) == Some(name) {
+            return Some(path);
+        }
+    }
+    None
+}
+
 /// Compute a content hash for a single file.
 fn hash_file_bytes(path: &Path) -> u64 {
     match std::fs::read(path) {
@@ -674,8 +705,7 @@ pub fn compute_source_hash(entry: &LockEntry) -> String {
             }
         }
         ItemKind::PiExtension => {
-            let dir = source_root.join("pi-extensions").join(&entry.name);
-            if dir.exists() {
+            if let Some(dir) = resolve_pi_extension_dir(&source_root, &entry.name) {
                 state = fnv1a_chain(state, &hash_dir_bytes(&dir).to_le_bytes());
             }
         }
@@ -984,5 +1014,42 @@ mod source_registry_tests {
         reg.forget("vanillagreencom/vstack");
 
         assert!(reg.was_removed("vanillagreencom/vstack"));
+    }
+
+    #[test]
+    fn pi_extension_hash_tracks_scoped_package_content() {
+        let dir = sandbox("pi_hash_scoped");
+        let pkg_dir = dir.join("pi-extensions").join("pi-questions");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"@vanillagreen/pi-questions","version":"0.0.1"}"#,
+        )
+        .unwrap();
+        let ext_dir = pkg_dir.join("extensions");
+        fs::create_dir_all(&ext_dir).unwrap();
+        fs::write(ext_dir.join("questions.ts"), b"// before").unwrap();
+
+        let entry = LockEntry {
+            name: "@vanillagreen/pi-questions".to_string(),
+            kind: ItemKind::PiExtension,
+            source: dir.display().to_string(),
+            harnesses: vec!["pi".to_string()],
+            method: InstallMethod::Symlink,
+            installed_at: "2026-05-06T00:00:00Z".to_string(),
+            source_hash: String::new(),
+        };
+
+        let h1 = compute_source_hash(&entry);
+        fs::write(ext_dir.join("questions.ts"), b"// after a real edit").unwrap();
+        let h2 = compute_source_hash(&entry);
+
+        assert_ne!(
+            h1, h2,
+            "hash must change when source content changes for scoped Pi packages"
+        );
+        // Must not collapse to the bare FNV offset constant.
+        assert_ne!(h1, format!("{:016x}", FNV_OFFSET));
+        let _ = fs::remove_dir_all(&dir);
     }
 }
