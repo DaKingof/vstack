@@ -1,13 +1,13 @@
 /**
  * vstack Pi extension manager.
  *
- * Provides a Pi-styled settings shell with package tabs. Pi does not yet
- * expose a public API for third-party extensions to inject native built-in
- * /settings tabs, so this extension exposes /extensions and the
+ * Provides a Pi-styled package manager plus a separate settings editor. Pi does
+ * not yet expose a public API for third-party extensions to inject native
+ * built-in /settings tabs, so this extension exposes /extensions and the
  * /extensions settings subcommand.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme, ThemeColor } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import type { AutocompleteItem } from "@mariozechner/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
@@ -28,7 +28,6 @@ const POPUP_FRAME_ROWS = 2 + POPUP_PADDING_Y * 2;
 const LEFT_MIN_WIDTH = 34;
 const LEFT_MAX_WIDTH = 48;
 const LIST_ROWS = 18;
-const SETTINGS_ROWS = 10;
 const MANAGER_INNER_ROWS = 32;
 const QUICK_SETTINGS_INNER_ROWS = 30;
 const QUICK_SETTINGS_ROWS = 18;
@@ -36,17 +35,18 @@ const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 const VSTACK_OPEN_QUICK_SETTINGS_SYMBOL = Symbol.for("vstack.pi.extension-manager.open-quick-settings");
 const ANSI_GREEN_FG = "\x1b[32m";
 const ANSI_YELLOW_FG = "\x1b[33m";
+const ANSI_RED_FG = "\x1b[31m";
 const ANSI_FG_RESET = "\x1b[39m";
 
 function ansiGreen(text: string): string { return `${ANSI_GREEN_FG}${text}${ANSI_FG_RESET}`; }
 function ansiYellow(text: string): string { return `${ANSI_YELLOW_FG}${text}${ANSI_FG_RESET}`; }
+function ansiRed(text: string): string { return `${ANSI_RED_FG}${text}${ANSI_FG_RESET}`; }
 
 type Scope = "user" | "project" | "temporary" | "builtin" | "unknown";
 type ExtensionState = "active" | "disabled" | "shadowed" | "broken";
 type ApplyMode = "live" | "reload" | "session" | "restart";
 type SettingType = "boolean" | "enum" | "string" | "number" | "secret" | "path";
 type TopTab = string;
-type Pane = "list" | "settings";
 
 const TAB_ALL = "all";
 const PACKAGE_TAB_PREFIX = "package:";
@@ -107,7 +107,6 @@ interface PopupLayout {
 	bodyRows: number;
 	innerRows: number;
 	listRows: number;
-	settingsRows: number;
 }
 
 interface VstackModalLock {
@@ -138,6 +137,9 @@ interface InventoryItem {
 	updateAvailable?: boolean;
 	updateSource?: "vstack" | "npm";
 	updateCommand?: string;
+	installSource?: "vstack" | "npm" | "unknown";
+	npmName?: string;
+	sourceRepo?: string;
 }
 
 interface SourceIndexEntry {
@@ -174,32 +176,8 @@ interface ManagerTab {
 	packageName?: string;
 }
 
-interface ManagerActionEdit {
-	type: "edit-setting";
-	itemId: string;
-	settingKey: string;
-}
-
-interface ManagerActionSet {
-	type: "set-setting";
-	itemId: string;
-	settingKey: string;
-	value: unknown;
-}
-
 interface ManagerActionToggleItem {
 	type: "toggle-item";
-	itemId: string;
-}
-
-interface ManagerActionResetSetting {
-	type: "reset-setting";
-	itemId: string;
-	settingKey: string;
-}
-
-interface ManagerActionResetSettings {
-	type: "reset-settings";
 	itemId: string;
 }
 
@@ -208,7 +186,12 @@ interface ManagerActionUninstallPackage {
 	itemId: string;
 }
 
-type ManagerAction = ManagerActionEdit | ManagerActionSet | ManagerActionToggleItem | ManagerActionResetSetting | ManagerActionResetSettings | ManagerActionUninstallPackage | { type: "close" } | undefined;
+interface ManagerActionUpdatePackage {
+	type: "update-package";
+	itemId: string;
+}
+
+type ManagerAction = ManagerActionToggleItem | ManagerActionUninstallPackage | ManagerActionUpdatePackage | { type: "close" } | undefined;
 
 function expandHome(input: string): string {
 	if (input === "~") return homedir();
@@ -349,7 +332,6 @@ function managerLayout(terminalRows: number): PopupLayout {
 		bodyRows,
 		innerRows,
 		listRows: Math.max(3, Math.min(LIST_ROWS, bodyRows - 3)),
-		settingsRows: Math.max(3, Math.min(SETTINGS_ROWS, bodyRows - 10)),
 	};
 }
 
@@ -360,7 +342,6 @@ function quickSettingsLayout(terminalRows: number): PopupLayout {
 		bodyRows,
 		innerRows,
 		listRows: Math.max(3, Math.min(QUICK_SETTINGS_ROWS, bodyRows)),
-		settingsRows: 0,
 	};
 }
 
@@ -438,8 +419,9 @@ function localPackageDirName(packageName: string): string {
 	return packageName.startsWith("@vanillagreen/") ? packageName.split("/").pop() || packageName : packageName;
 }
 
-function readSourceRepoVersion(repoRoot: string, packageName: string): string | undefined {
-	const manifestPath = join(repoRoot, "pi-extensions", localPackageDirName(packageName), "package.json");
+function readPackageVersionFromDir(dir: string | undefined): string | undefined {
+	if (!dir) return undefined;
+	const manifestPath = join(dir, "package.json");
 	if (!existsSync(manifestPath)) return undefined;
 	try {
 		const parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -447,6 +429,29 @@ function readSourceRepoVersion(repoRoot: string, packageName: string): string | 
 	} catch {
 		return undefined;
 	}
+}
+
+function readSourceRepoVersion(repoRoot: string, packageName: string, sourcePath?: string): string | undefined {
+	return readPackageVersionFromDir(sourcePath) ?? readPackageVersionFromDir(join(repoRoot, "pi-extensions", localPackageDirName(packageName)));
+}
+
+function npmRoot(args: string[], cwd?: string): string | undefined {
+	const result = spawnSync("npm", ["root", ...args], { encoding: "utf8", cwd });
+	if (result.error || (result.status ?? 1) !== 0) return undefined;
+	return (result.stdout ?? "").trim() || undefined;
+}
+
+function npmPackageDir(root: string, npmName: string): string {
+	return join(root, ...npmName.split("/"));
+}
+
+function npmInstalledVersion(npmName: string, cwd: string): string | undefined {
+	const roots = [npmRoot(["-g"]), npmRoot([], cwd)].filter((root): root is string => Boolean(root));
+	for (const root of roots) {
+		const version = readPackageVersionFromDir(npmPackageDir(root, npmName));
+		if (version) return version;
+	}
+	return undefined;
 }
 
 function npmPackageNameFromSource(source: string): string | undefined {
@@ -545,6 +550,54 @@ function normalizePackageEntry(entry: unknown, baseDir: string): { source: strin
 	return { source: record.source, resolved: resolveSource(record.source, baseDir), disabledByFilter: allDisabled };
 }
 
+function resetUpdateMetadata(item: InventoryItem): void {
+	delete item.latestVersion;
+	delete item.updateAvailable;
+	delete item.updateSource;
+	delete item.updateCommand;
+	delete item.npmName;
+	delete item.sourceRepo;
+}
+
+function applyUpdateMetadata(items: InventoryItem[], settingsFiles: SettingsFile[], cwd: string): void {
+	const sourceIndex = loadSourceIndex(settingsFiles);
+	const npmCache = loadNpmCache();
+	for (const item of items) {
+		if (item.kind !== "package" || !item.packageName) continue;
+		resetUpdateMetadata(item);
+		item.installSource = "unknown";
+
+		const npmName = npmPackageNameFromSource(item.sourceName);
+		if (npmName) {
+			item.installSource = "npm";
+			item.npmName = npmName;
+			item.installedVersion = npmInstalledVersion(npmName, cwd) ?? item.installedVersion;
+			const latest = npmCache[npmName]?.version;
+			if (latest) {
+				item.latestVersion = latest;
+				item.updateSource = "npm";
+				item.updateAvailable = isNewer(latest, item.installedVersion);
+				item.updateCommand = `npm install -g ${npmName}@latest`;
+			}
+			continue;
+		}
+
+		const sourceEntry = sourceIndex[item.packageName];
+		if (sourceEntry?.sourceRepo) {
+			item.installSource = "vstack";
+			item.sourceRepo = sourceEntry.sourceRepo;
+			const latest = readSourceRepoVersion(sourceEntry.sourceRepo, item.packageName, sourceEntry.sourcePath);
+			if (latest) {
+				item.latestVersion = latest;
+				item.updateSource = "vstack";
+				item.updateAvailable = isNewer(latest, item.installedVersion);
+				const scopeFlag = item.scope === "user" ? " --global" : "";
+				item.updateCommand = `vstack add ${sourceEntry.sourceRepo}${scopeFlag} --pi-extension ${item.packageName} --harness pi -y`;
+			}
+		}
+	}
+}
+
 function resolveSource(source: string, baseDir: string): string {
 	const expanded = expandHome(source);
 	if (expanded.startsWith("npm:") || expanded.startsWith("git:") || expanded.startsWith("http://") || expanded.startsWith("https://")) {
@@ -639,7 +692,7 @@ function makeResourceItem(
 	};
 }
 
-function buildInventory(pi: ExtensionAPI, ctx: ExtensionContext): Inventory {
+function buildInventory(_pi: ExtensionAPI, ctx: ExtensionContext): Inventory {
 	const settingsFiles = loadSettingsFiles(ctx);
 	const managerState = mergedManagerState(settingsFiles);
 	const items: InventoryItem[] = [];
@@ -720,41 +773,11 @@ function buildInventory(pi: ExtensionAPI, ctx: ExtensionContext): Inventory {
 		items.push(...collectAutoExtensions(file.baseDir, file.scope));
 	}
 
-	const sourceIndex = loadSourceIndex(settingsFiles);
-	const npmCache = loadNpmCache();
 	for (const item of items) {
 		if (item.kind !== "package" || !item.packageName) continue;
-		const manifestPath = item.packageDir ? join(item.packageDir, "package.json") : undefined;
-		let installedVersion: string | undefined;
-		if (manifestPath && existsSync(manifestPath)) {
-			try {
-				const parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
-				if (typeof parsed?.version === "string") installedVersion = parsed.version;
-			} catch {}
-		}
-		item.installedVersion = installedVersion;
-
-		const sourceEntry = sourceIndex[item.packageName];
-		if (sourceEntry?.sourceRepo) {
-			const latest = readSourceRepoVersion(sourceEntry.sourceRepo, item.packageName);
-			if (latest) {
-				item.latestVersion = latest;
-				item.updateSource = "vstack";
-				item.updateAvailable = isNewer(latest, installedVersion);
-				const scopeFlag = item.scope === "user" ? " --global" : "";
-				item.updateCommand = `vstack add ${sourceEntry.sourceRepo}${scopeFlag} --pi-extension ${item.packageName} --harness pi -y`;
-				continue;
-			}
-		}
-
-		const npmName = npmPackageNameFromSource(item.sourceName) ?? (item.sourceName.startsWith("npm:") ? item.packageName : undefined);
-		if (npmName && npmCache[npmName]) {
-			item.latestVersion = npmCache[npmName].version;
-			item.updateSource = "npm";
-			item.updateAvailable = isNewer(npmCache[npmName].version, installedVersion);
-			item.updateCommand = `npm install -g ${npmName}@latest`;
-		}
+		item.installedVersion = readPackageVersionFromDir(item.packageDir);
 	}
+	applyUpdateMetadata(items, settingsFiles, ctx.cwd);
 
 	applyDisableState(items, managerState);
 	items.sort(compareInventoryItems);
@@ -812,10 +835,6 @@ function applyDisableState(items: InventoryItem[], managerState: ManagerState): 
 			item.stateReason = "explicitly disabled in vstack extension manager";
 		}
 	}
-}
-
-function normalizeScope(value: unknown): Scope {
-	return value === "user" || value === "project" || value === "temporary" || value === "builtin" ? value : "unknown";
 }
 
 function getConfigValue(inventory: Inventory, extensionId: string, schema: SettingsSchema): ConfigValue {
@@ -934,31 +953,12 @@ function packageNameForTab(tab: TopTab): string | undefined {
 	return tab.startsWith(PACKAGE_TAB_PREFIX) ? tab.slice(PACKAGE_TAB_PREFIX.length) : undefined;
 }
 
-function isInventoryTab(tab: TopTab): boolean {
-	return tab === TAB_ALL || packageNameForTab(tab) !== undefined;
-}
-
 function itemBelongsToPackage(item: InventoryItem, packageName: string): boolean {
 	return item.packageName === packageName || item.sourceName === packageName || item.provider === packageName || item.sourcePath.includes(`/packages/${packageName}/`);
 }
 
-function managerTabs(inventory: Inventory): ManagerTab[] {
-	const tabs: ManagerTab[] = [{ id: TAB_ALL, label: "All" }];
-	const seen = new Set<string>();
-	for (const item of [...inventory.packages].sort((a, b) => a.displayName.localeCompare(b.displayName))) {
-		if (!item.packageName || item.state === "shadowed" || seen.has(item.packageName)) continue;
-		seen.add(item.packageName);
-		tabs.push({ id: packageTabId(item.packageName), label: item.displayName, packageName: item.packageName });
-	}
-	return tabs;
-}
-
 function selectedPackageForSetting(item: InventoryItem): string | undefined {
 	return item.packageName ?? (item.kind === "package" ? item.displayName : undefined);
-}
-
-function managedPackageItemsForPackage(items: InventoryItem[], packageName: string): InventoryItem[] {
-	return items.filter((item) => itemBelongsToPackage(item, packageName) && (item.kind === "package" || item.kind === "extension module")).sort(compareInventoryItems);
 }
 
 function packageExtensions(items: InventoryItem[], packageName: string): InventoryItem[] {
@@ -1001,34 +1001,21 @@ function itemMatchesFilters(item: InventoryItem, allItems: InventoryItem[], ui: 
 
 function filteredItems(items: InventoryItem[], ui: ManagerUiState): InventoryItem[] {
 	const query = ui.search.trim().toLowerCase();
-	const packageName = packageNameForTab(ui.topTab);
-	const allPackageSummary = ui.topTab === TAB_ALL;
-	const base = packageName
-		? managedPackageItemsForPackage(items, packageName)
-		: allPackageSummary
-			? items.filter((item) => item.kind === "package")
-			: [];
-	const fallback = allPackageSummary && base.length === 0 ? items : base;
-	return fallback.filter((item) => {
-		const packageSummary = allPackageSummary && item.kind === "package";
+	const base = items.filter((item) => item.kind === "package");
+	return base.filter((item) => {
 		if (query && !itemSearchText(item, items).includes(query)) return false;
-		return itemMatchesFilters(item, items, ui, packageSummary);
+		return itemMatchesFilters(item, items, ui, true);
 	});
 }
 
 interface ManagerUiState {
-	topTab: TopTab;
-	pane: Pane;
 	search: string;
 	selected: number;
-	settingSelected: number;
 	scroll: number;
-	settingScroll: number;
 	diagnosticsScroll: number;
 	stateFilter: string;
 	scopeFilter: string;
 	showAudit: boolean;
-	editing?: InlineEditState & { itemId: string; settingKey: string };
 }
 
 interface InlineEditState {
@@ -1175,18 +1162,14 @@ function renderInlineEditValue(editing: InlineEditState): string {
 	return `${editing.buffer.slice(0, editing.cursor)}█${editing.buffer.slice(editing.cursor)}`;
 }
 
-function makeInitialUiState(initialTab: TopTab): ManagerUiState {
+function makeInitialUiState(): ManagerUiState {
 	return {
-		pane: "list",
 		scopeFilter: "all",
 		search: "",
 		selected: 0,
-		settingScroll: 0,
-		settingSelected: 0,
 		diagnosticsScroll: 0,
 		showAudit: false,
 		stateFilter: "all",
-		topTab: initialTab,
 		scroll: 0,
 	};
 }
@@ -1199,6 +1182,17 @@ type UninstallMethod =
 interface UninstallPlan {
 	item: InventoryItem;
 	method: UninstallMethod;
+	command: string;
+	description: string;
+}
+
+type UpdateMethod =
+	| { kind: "vstack"; packageName: string; sourceRepo: string; scope: Scope }
+	| { kind: "npm"; npmName: string; scope: Scope; cwd: string };
+
+interface UpdatePlan {
+	item: InventoryItem;
+	method: UpdateMethod;
 	command: string;
 	description: string;
 }
@@ -1282,78 +1276,90 @@ function runUninstall(plan: UninstallPlan, inventory: Inventory): { ok: boolean;
 		: { ok: false, message: `Could not find a matching entry for ${plan.item.sourceName} in ${plan.item.scope} settings.json.` };
 }
 
-async function openManager(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, initialTab: TopTab = TAB_ALL): Promise<void> {
+function planUpdate(item: InventoryItem, ctx: ExtensionCommandContext | ExtensionContext): UpdatePlan | undefined {
+	if (item.kind !== "package" || !item.packageName || !item.updateAvailable) return undefined;
+	if (item.updateSource === "vstack" && item.sourceRepo) {
+		const scopeFlag = item.scope === "user" ? " --global" : "";
+		return {
+			item,
+			method: { kind: "vstack", packageName: item.packageName, sourceRepo: item.sourceRepo, scope: item.scope },
+			command: `vstack add ${item.sourceRepo}${scopeFlag} --pi-extension ${item.packageName} --harness pi -y`,
+			description: "Installed via vstack — copies the selected package from its tracked source repo into the same Pi scope.",
+		};
+	}
+	if (item.updateSource === "npm" && item.npmName) {
+		return {
+			item,
+			method: { kind: "npm", npmName: item.npmName, scope: item.scope, cwd: ctx.cwd },
+			command: `npm install -g ${item.npmName}@latest`,
+			description: "Installed via npm — installs the latest published package version, then Pi can load it after /reload or restart.",
+		};
+	}
+	return undefined;
+}
+
+function runUpdate(plan: UpdatePlan): { ok: boolean; message: string } {
+	if (plan.method.kind === "vstack") {
+		const args = ["add", plan.method.sourceRepo];
+		if (plan.method.scope === "user") args.push("--global");
+		args.push("--pi-extension", plan.method.packageName, "--harness", "pi", "-y");
+		const result = spawnSync("vstack", args, { encoding: "utf8" });
+		if (result.error) return { ok: false, message: `Failed to launch vstack: ${stringifyError(result.error)}` };
+		if ((result.status ?? 1) !== 0) {
+			const stderr = (result.stderr ?? "").trim() || (result.stdout ?? "").trim() || `exit ${result.status}`;
+			return { ok: false, message: `vstack update failed: ${stderr}` };
+		}
+		return { ok: true, message: `Updated via vstack: ${plan.item.displayName}.` };
+	}
+	const result = spawnSync("npm", ["install", "-g", `${plan.method.npmName}@latest`], { encoding: "utf8", cwd: plan.method.cwd });
+	if (result.error) return { ok: false, message: `Failed to launch npm: ${stringifyError(result.error)}` };
+	if ((result.status ?? 1) !== 0) {
+		const stderr = (result.stderr ?? "").trim() || (result.stdout ?? "").trim() || `exit ${result.status}`;
+		return { ok: false, message: `npm update failed: ${stderr}` };
+	}
+	return { ok: true, message: `Updated via npm: ${plan.method.npmName}.` };
+}
+
+async function openManager(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext): Promise<void> {
 	const releaseModalLock = acquireVstackModalLock();
 	try {
-	let ui = makeInitialUiState(initialTab);
+	let ui = makeInitialUiState();
 	while (true) {
 		const inventory = buildInventory(pi, ctx as ExtensionContext);
 		const action = await ctx.ui.custom<ManagerAction>(
-			(tui, theme, _keybindings, done) => createManagerComponent(pi, ctx, inventory, ui, theme, () => tui.requestRender(), () => managerLayout(tui.terminal.rows), done),
+			(tui, theme, _keybindings, done) => createManagerComponent(ctx, inventory, ui, theme, () => tui.requestRender(), () => managerLayout(tui.terminal.rows), done),
 			{ overlay: true, overlayOptions: { anchor: "center", maxHeight: DEFAULT_MAX_HEIGHT, width: DEFAULT_WIDTH_PERCENT } },
 		);
 
 		if (!action || action.type === "close") return;
-		if (action.type === "edit-setting") {
-			const item = inventory.items.find((candidate) => candidate.id === action.itemId);
-			const schema = item?.settingsSchema?.find((candidate) => candidate.key === action.settingKey);
-			if (!item || !schema) continue;
-			const extensionId = selectedPackageForSetting(item) ?? item.displayName;
-			const current = getConfigValue(inventory, extensionId, schema).value;
-			const prompt = `${schema.label ?? schema.key} (${schema.type}${schema.enumValues?.length ? `: ${schema.enumValues.join("|")}` : ""})`;
-			const input = await ctx.ui.input(prompt, formatSettingValue({ ...schema, secret: false }, current));
-			if (input === undefined) continue;
-			try {
-				const value = parseSettingInput(schema, input);
-				setConfigValue(inventory, item, schema, value);
-				pi.events.emit(SETTINGS_EVENT, { extensionId, key: schema.key, value });
-				ctx.ui.notify(applyMessage(schema), schema.apply === "restart" || schema.requiresReload ? "warning" : "info");
-			} catch (error) {
-				ctx.ui.notify(stringifyError(error), "error");
-			}
-			continue;
-		}
-		if (action.type === "set-setting") {
-			const item = inventory.items.find((candidate) => candidate.id === action.itemId);
-			const schema = item?.settingsSchema?.find((candidate) => candidate.key === action.settingKey);
-			if (!item || !schema) continue;
-			setConfigValue(inventory, item, schema, action.value);
-			pi.events.emit(SETTINGS_EVENT, { extensionId: selectedPackageForSetting(item) ?? item.displayName, key: schema.key, value: action.value });
-			ctx.ui.notify(applyMessage(schema), schema.apply === "restart" || schema.requiresReload ? "warning" : "info");
-			continue;
-		}
-		if (action.type === "reset-setting") {
-			const item = inventory.items.find((candidate) => candidate.id === action.itemId);
-			const schema = item?.settingsSchema?.find((candidate) => candidate.key === action.settingKey);
-			if (!item || !schema) continue;
-			const extensionId = selectedPackageForSetting(item) ?? item.displayName;
-			if (!getConfigValue(inventory, extensionId, schema).explicit) {
-				ctx.ui.notify(`${schema.label ?? schema.key} is already using its default.`, "info");
-				continue;
-			}
-			resetConfigKeys(inventory, extensionId, [schema.key]);
-			pi.events.emit(SETTINGS_EVENT, { extensionId, key: schema.key, value: schema.default });
-			notifyReset(ctx, schema.label ?? schema.key, [schema]);
-			continue;
-		}
-		if (action.type === "reset-settings") {
-			const item = inventory.items.find((candidate) => candidate.id === action.itemId);
-			const schemas = item?.settingsSchema?.filter((schema) => schema.type !== "secret") ?? [];
-			if (!item || schemas.length === 0) continue;
-			const extensionId = selectedPackageForSetting(item) ?? item.displayName;
-			const explicitSchemas = schemas.filter((schema) => getConfigValue(inventory, extensionId, schema).explicit);
-			if (explicitSchemas.length === 0) {
-				ctx.ui.notify(`${item.displayName} settings are already using defaults.`, "info");
-				continue;
-			}
-			resetConfigKeys(inventory, extensionId, explicitSchemas.map((schema) => schema.key));
-			for (const schema of explicitSchemas) pi.events.emit(SETTINGS_EVENT, { extensionId, key: schema.key, value: schema.default });
-			notifyReset(ctx, `${item.displayName} settings`, explicitSchemas);
-			continue;
-		}
 		if (action.type === "toggle-item") {
 			const item = inventory.items.find((candidate) => candidate.id === action.itemId);
 			if (item) toggleItem(pi, ctx, inventory, item);
+			continue;
+		}
+		if (action.type === "update-package") {
+			const item = inventory.items.find((candidate) => candidate.id === action.itemId);
+			if (!item) continue;
+			const plan = planUpdate(item, ctx);
+			if (!plan) {
+				ctx.ui.notify(`${item.displayName} does not have an available update.`, "info");
+				continue;
+			}
+			const body = [
+				`Package: ${plan.item.packageName}`,
+				`Scope: ${plan.item.scope}`,
+				`Current: ${plan.item.installedVersion ?? "unknown"}`,
+				`Latest: ${plan.item.latestVersion ?? "unknown"}`,
+				"",
+				plan.description,
+				"",
+				`Will run: ${plan.command}`,
+			].join("\n");
+			const confirmed = await ctx.ui.confirm(`Update ${plan.item.displayName}?`, body);
+			if (!confirmed) continue;
+			const result = runUpdate(plan);
+			if (result.ok) ctx.ui.notify(`${result.message} Run /reload to apply.`, "warning");
+			else ctx.ui.notify(result.message, "error");
 			continue;
 		}
 		if (action.type === "uninstall-package") {
@@ -1488,7 +1494,6 @@ function setPackageExtensionFiltered(item: InventoryItem, files: SettingsFile[],
 }
 
 function createManagerComponent(
-	pi: ExtensionAPI,
 	ctx: ExtensionCommandContext | ExtensionContext,
 	inventory: Inventory,
 	ui: ManagerUiState,
@@ -1497,41 +1502,25 @@ function createManagerComponent(
 	getLayout: () => PopupLayout,
 	done: (value: ManagerAction) => void,
 ) {
-	const topTabs = managerTabs(inventory);
 	const states = ["all", "active", "inactive"];
 	const scopes = ["all", "user", "project", "temporary"];
+	kickNpmUpdateCheck(npmCandidatesFromInventory(inventory), () => {
+		applyUpdateMetadata(inventory.items, inventory.settingsFiles, ctx.cwd);
+		requestRender();
+	});
 
 	function clamp(): void {
 		const layout = getLayout();
-		if (!topTabs.some((tab) => tab.id === ui.topTab)) ui.topTab = TAB_ALL;
-		if (!isInventoryTab(ui.topTab)) return;
 		const list = filteredItems(inventory.items, ui);
 		ui.selected = Math.max(0, Math.min(ui.selected, Math.max(0, list.length - 1)));
 		ui.scroll = Math.max(0, Math.min(ui.scroll, Math.max(0, list.length - layout.listRows)));
 		if (ui.selected < ui.scroll) ui.scroll = ui.selected;
 		if (ui.selected >= ui.scroll + layout.listRows) ui.scroll = ui.selected - layout.listRows + 1;
-		const selected = list[ui.selected];
-		const settingCount = selected?.settingsSchema?.length ?? 0;
-		ui.settingSelected = Math.max(0, Math.min(ui.settingSelected, Math.max(0, settingCount - 1)));
-		if (ui.settingSelected < ui.settingScroll) ui.settingScroll = ui.settingSelected;
-		if (ui.settingSelected >= ui.settingScroll + layout.settingsRows) ui.settingScroll = ui.settingSelected - layout.settingsRows + 1;
-		ui.settingScroll = Math.max(0, Math.min(ui.settingScroll, Math.max(0, settingCount - layout.settingsRows)));
 	}
 
 	function cycle<T extends string>(values: T[], current: string, delta: number): T {
 		const idx = Math.max(0, values.indexOf(current as T));
 		return values[(idx + delta + values.length) % values.length]!;
-	}
-
-	function switchTab(delta: number): void {
-		ui.topTab = cycle(topTabs.map((tab) => tab.id), ui.topTab, delta);
-		ui.selected = 0;
-		ui.scroll = 0;
-		ui.settingSelected = 0;
-		ui.settingScroll = 0;
-		ui.diagnosticsScroll = 0;
-		clamp();
-		requestRender();
 	}
 
 	function diagnosticsMaxScroll(): number {
@@ -1548,43 +1537,7 @@ function createManagerComponent(
 		requestRender();
 	}
 
-	function saveInlineEdit(): void {
-		const editing = ui.editing;
-		if (!editing) return;
-		const item = inventory.items.find((candidate) => candidate.id === editing.itemId);
-		const schema = item?.settingsSchema?.find((candidate) => candidate.key === editing.settingKey);
-		if (!item || !schema) {
-			ui.editing = undefined;
-			requestRender();
-			return;
-		}
-		try {
-			const value = parseSettingInput(schema, editing.buffer);
-			setConfigValue(inventory, item, schema, value);
-			const extensionId = selectedPackageForSetting(item) ?? item.displayName;
-			pi.events.emit(SETTINGS_EVENT, { extensionId, key: schema.key, value });
-			const apply = schema.apply ?? (schema.requiresReload ? "reload" : "live");
-			if (apply !== "live") ctx.ui.notify(applyMessage(schema), apply === "restart" ? "warning" : "info");
-			ui.editing = undefined;
-			requestRender();
-		} catch (error) {
-			ctx.ui.notify(stringifyError(error), "error");
-		}
-	}
-
 	function handleInput(data: string): void {
-		if (ui.editing) {
-			if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
-				ui.editing = undefined;
-				requestRender();
-				return;
-			}
-			if (matchesKey(data, "enter") || matchesKey(data, "return")) return saveInlineEdit();
-			if (handleInlineEditInput(ui.editing, data)) {
-				requestRender();
-			}
-			return;
-		}
 		if (ui.showAudit) {
 			if (matchesKey(data, "escape") || matchesKey(data, "backspace")) {
 				ui.showAudit = false;
@@ -1610,58 +1563,34 @@ function createManagerComponent(
 			return;
 		}
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) return done({ type: "close" });
-		if (matchesKey(data, "tab")) {
-			switchTab(1);
-			return;
-		}
-		if (matchesKey(data, "shift+tab")) {
-			switchTab(-1);
-			return;
-		}
 		if (matchesKey(data, "alt+a")) {
 			ui.showAudit = true;
 			ui.diagnosticsScroll = 0;
 			requestRender();
 			return;
 		}
-		if (!isInventoryTab(ui.topTab)) return;
 		const list = filteredItems(inventory.items, ui);
 		const selected = list[ui.selected];
-		const settings = selected?.settingsSchema ?? [];
-		if (matchesKey(data, "left")) {
-			ui.pane = "list";
-			requestRender();
-			return;
-		}
-		if (matchesKey(data, "right")) {
-			ui.pane = "settings";
-			requestRender();
-			return;
-		}
 		if (matchesKey(data, "up")) {
-			if (ui.pane === "settings") ui.settingSelected -= 1;
-			else ui.selected -= 1;
+			ui.selected -= 1;
 			clamp();
 			requestRender();
 			return;
 		}
 		if (matchesKey(data, "down")) {
-			if (ui.pane === "settings") ui.settingSelected += 1;
-			else ui.selected += 1;
+			ui.selected += 1;
 			clamp();
 			requestRender();
 			return;
 		}
 		if (matchesKey(data, "-") || matchesKey(data, "pageUp")) {
-			if (ui.pane === "settings") ui.settingSelected -= getLayout().settingsRows;
-			else ui.selected -= getLayout().listRows;
+			ui.selected -= getLayout().listRows;
 			clamp();
 			requestRender();
 			return;
 		}
 		if (matchesKey(data, "=") || matchesKey(data, "pageDown")) {
-			if (ui.pane === "settings") ui.settingSelected += getLayout().settingsRows;
-			else ui.selected += getLayout().listRows;
+			ui.selected += getLayout().listRows;
 			clamp();
 			requestRender();
 			return;
@@ -1681,13 +1610,8 @@ function createManagerComponent(
 			return;
 		}
 		if (matchesKey(data, "alt+x") && selected) return done({ type: "toggle-item", itemId: selected.id });
-		if ((matchesKey(data, "delete") || matchesKey(data, "alt+shift+x") || matchesKey(data, "ctrl+x")) && selected) {
-			if (matchesKey(data, "alt+shift+x") || matchesKey(data, "ctrl+x")) return done({ type: "reset-settings", itemId: selected.id });
-			if (ui.pane === "settings" && settings.length > 0) {
-				const schema = settings[ui.settingSelected];
-				if (schema) return done({ type: "reset-setting", itemId: selected.id, settingKey: schema.key });
-			}
-		}
+		if (matchesKey(data, "alt+u") && selected?.updateAvailable) return done({ type: "update-package", itemId: selected.id });
+		if (matchesKey(data, "alt+d") && selected && selected.kind === "package") return done({ type: "uninstall-package", itemId: selected.id });
 		if (isPlainSearchInput(data)) {
 			ui.search += data;
 			ui.selected = 0;
@@ -1709,23 +1633,7 @@ function createManagerComponent(
 			requestRender();
 			return;
 		}
-		if (matchesKey(data, "alt+u") && selected && selected.kind === "package") {
-			return done({ type: "uninstall-package", itemId: selected.id });
-		}
 		if ((matchesKey(data, "enter") || matchesKey(data, "return")) && selected) {
-			if (ui.pane === "settings" && settings.length > 0) {
-				const schema = settings[ui.settingSelected];
-				if (!schema) return;
-				const extensionId = selectedPackageForSetting(selected) ?? selected.displayName;
-				const current = getConfigValue(inventory, extensionId, schema).value;
-				if (schema.type === "boolean" || schema.type === "enum") {
-					return done({ type: "set-setting", itemId: selected.id, settingKey: schema.key, value: nextSettingValue(schema, current) });
-				}
-				const buffer = stringifySettingValue(current ?? schema.default ?? "");
-				ui.editing = { buffer, cursor: buffer.length, itemId: selected.id, settingKey: schema.key };
-				requestRender();
-				return;
-			}
 			return done({ type: "toggle-item", itemId: selected.id });
 		}
 	}
@@ -1736,13 +1644,9 @@ function createManagerComponent(
 		const safeWidth = Math.max(1, width);
 		const bodyWidth = frameContentWidth(safeWidth);
 		let lines: string[] = [];
-		lines.push(renderTabBar(topTabs, ui.topTab, bodyWidth, theme));
-		lines.push("");
-		const primaryHint = ui.editing
-			? `${theme.fg("dim", "editing value · ")}${ansiYellow("←/→")} ${theme.fg("dim", "move · ")}${ansiYellow("alt+←/→")} ${theme.fg("dim", "word · ")}${ansiYellow("backspace/delete")} ${theme.fg("dim", "delete")}`
-			: ui.showAudit
+		const primaryHint = ui.showAudit
 			? `${theme.fg("dim", "diagnostics · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("backspace")} ${theme.fg("dim", "back")}`
-			: `${ansiYellow("tab")} ${theme.fg("dim", "switch tabs · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("alt+a")} ${theme.fg("dim", "diagnostics")}`;
+			: `${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("alt+a")} ${theme.fg("dim", "diagnostics")}`;
 		const footerLines = ["", ...wrapLine(primaryHint, bodyWidth)];
 		const availableRows = Math.max(1, layout.innerRows - lines.length - footerLines.length);
 		if (ui.showAudit) lines.push(...renderDiagnosticsViewport(inventory, ui, bodyWidth, theme, availableRows));
@@ -1882,7 +1786,7 @@ function renderExtensions(inventory: Inventory, ui: ManagerUiState, width: numbe
 	const rightWidth = Math.max(20, width - leftWidth - 3);
 	const left = renderList(list, ui, leftWidth, theme, layout.listRows);
 	const rows = layout.bodyRows;
-	const right = renderInspector(inventory, selected, ui, rightWidth, theme, layout.settingsRows, rows);
+	const right = renderInspector(inventory, selected, rightWidth, theme, rows);
 	const searchText = ` > ${ui.search}${theme.inverse(" ")}`;
 	const searchLine = theme.bg("toolPendingBg", pad(searchText, width));
 	const filterValue = (label: string, value: string): string => `${theme.fg("muted", `${label}:`)} ${value === "all" ? theme.fg("dim", value) : theme.fg("accent", label === "scope" ? scopeFilterLabel(value) : value)}`;
@@ -1890,9 +1794,8 @@ function renderExtensions(inventory: Inventory, ui: ManagerUiState, width: numbe
 	const hintParts: string[] = [];
 	const toggleLabel = itemToggleHintLabel(selected);
 	if (toggleLabel) hintParts.push(`${ansiYellow("alt+x")} ${theme.fg("dim", toggleLabel)}`);
-	if (selected?.kind === "package") hintParts.push(`${ansiYellow("alt+u")} ${theme.fg("dim", "uninstall package")}`);
-	if ((selected?.settingsSchema ?? []).some((schema) => schema.type !== "secret")) hintParts.push(`${ansiYellow("alt+shift+x")} ${theme.fg("dim", "reset settings")}`);
-	hintParts.push(`${ansiYellow("delete")} ${theme.fg("dim", "reset setting")}`, `${ansiYellow("←/→")} ${theme.fg("dim", "pane")}`);
+	if (selected?.updateAvailable) hintParts.push(`${ansiYellow("alt+u")} ${theme.fg("dim", `update via ${selected.updateSource ?? "source"}`)}`);
+	if (selected?.kind === "package") hintParts.push(`${ansiYellow("alt+d")} ${theme.fg("dim", "uninstall")}`);
 	const hintLine = hintParts.join(theme.fg("dim", " · "));
 	const lines = [searchLine, ...wrapLine(filterLine, width), "", ...wrapLine(hintLine, width), divider(width, theme)];
 	const tableRows = Math.max(1, rows - Math.max(0, lines.length - 5) - footerRows);
@@ -1910,15 +1813,25 @@ function itemToggleHintLabel(item: InventoryItem | undefined): string | undefine
 	return `${verb} ${kindLabel(item.kind)}`;
 }
 
-function listDisplayName(item: InventoryItem, ui: ManagerUiState): string {
-	if (packageNameForTab(ui.topTab) && item.kind === "package") return "Overview";
+function stateToken(item: InventoryItem): string {
+	if (item.state === "active") return ansiGreen("[on]");
+	if (item.state === "broken") return ansiRed("[err]");
+	return ansiYellow("[off]");
+}
+
+function installSourceLabel(item: InventoryItem): string {
+	if (item.installSource === "npm") return "NPM";
+	if (item.installSource === "vstack") return "Vstack";
+	return "Unknown";
+}
+
+function listDisplayName(item: InventoryItem): string {
 	if (item.kind === "extension module") return (item.entrypoint ?? item.displayName).replace(/^\.\//, "");
 	return item.displayName;
 }
 
 function renderList(items: InventoryItem[], ui: ManagerUiState, width: number, theme: Theme, listRows: number): string[] {
-	const title = packageNameForTab(ui.topTab) ? "Package" : "Packages";
-	const lines = [`${managerPaneTitle(theme, title, ui.pane === "list")} ${theme.fg("dim", `(${items.length})`)}`, ""];
+	const lines = [`${managerPaneTitle(theme, "Packages", true)} ${theme.fg("dim", `(${items.length})`)}`, ""];
 	if (items.length === 0) {
 		lines.push(theme.fg("dim", "No matching items."));
 		return lines;
@@ -1928,13 +1841,13 @@ function renderList(items: InventoryItem[], ui: ManagerUiState, width: number, t
 		const index = ui.scroll + visibleIndex;
 		const selected = index === ui.selected;
 		const marker = " ";
-		const stateIcon = item.state === "active" ? theme.fg("success", "●") : item.state === "disabled" ? theme.fg("warning", "○") : item.state === "shadowed" ? theme.fg(selected ? "text" : "dim", "◌") : theme.fg("error", "×");
-		const name = selected ? theme.fg("text", listDisplayName(item, ui)) : listDisplayName(item, ui);
+		const stateIcon = stateToken(item);
+		const name = selected ? theme.fg("text", listDisplayName(item)) : listDisplayName(item);
 		const scopeText = scopeFilterLabel(item.scope);
 		const meta = item.kind === "package"
 			? managerMutedForSelection(theme, ` ${scopeText}`, selected)
 			: managerMutedForSelection(theme, ` ${kindLabel(item.kind)} · ${scopeText}`, selected);
-		const updateBadge = item.updateAvailable && item.latestVersion ? ` ${ansiYellow(`↑ ${item.latestVersion}`)}` : "";
+		const updateBadge = item.updateAvailable ? ` ${ansiRed("Update Needed")}` : "";
 		const row = truncateToWidth(`${marker}${stateIcon} ${name}${meta}${updateBadge}`, width, "…");
 		lines.push(selected ? managerSelectedLine(theme, row, width) : row);
 	}
@@ -1958,86 +1871,33 @@ function packageExtensionLines(inventory: Inventory, item: InventoryItem, width:
 	return lines;
 }
 
-function renderInspector(inventory: Inventory, item: InventoryItem | undefined, ui: ManagerUiState, width: number, theme: Theme, settingsRows: number, viewportRows: number): string[] {
+function renderInspector(inventory: Inventory, item: InventoryItem | undefined, width: number, theme: Theme, viewportRows: number): string[] {
 	if (!item) return [theme.fg("dim", "Select an item to inspect it.")];
+	const updateText = item.updateAvailable && item.latestVersion
+		? `${ansiRed("Update Needed")} ${theme.fg("dim", `${item.installedVersion ?? "unknown"} -> ${item.latestVersion}`)}`
+		: item.latestVersion
+			? theme.fg("dim", `latest ${item.latestVersion}`)
+			: theme.fg("dim", "not checked");
 	const detailLines = [
-		`${managerEntityTitle(theme, item.displayName)} ${theme.fg(stateColor(item.state), item.state)}`,
+		`${managerEntityTitle(theme, item.displayName)} ${stateToken(item)}${item.updateAvailable ? ` ${ansiRed("Update Needed")}` : ""}`,
 		item.description ? theme.fg("text", item.description) : theme.fg("dim", "No description."),
 		"",
-		`${theme.fg("muted", "Kind")}: ${item.kind === "package" ? "package" : kindLabel(item.kind)}    ${theme.fg("muted", "Scope")}: ${scopeFilterLabel(item.scope)}`,
+		`${theme.fg("muted", "Scope")}: ${scopeFilterLabel(item.scope)}    ${theme.fg("muted", "Installed with")}: ${installSourceLabel(item)}`,
 		`${theme.fg("muted", "Source")}: ${compactPath(item.sourcePath)}`,
 		`${theme.fg("muted", "State")}: ${item.stateReason}`,
+		`${theme.fg("muted", "Version")}: ${item.installedVersion ?? "unknown"}`,
+		`${theme.fg("muted", "Update")}: ${updateText}`,
 	];
-	if (item.installedVersion || item.latestVersion) {
-		const current = item.installedVersion ?? "unknown";
-		if (item.updateAvailable && item.latestVersion) {
-			const src = item.updateSource === "npm" ? "npm" : "vstack source";
-			detailLines.push(`${theme.fg("muted", "Version")}: ${current} ${ansiYellow(`↑ ${item.latestVersion}`)} ${theme.fg("dim", `(${src})`)}`);
-			if (item.updateCommand) {
-				detailLines.push(`${theme.fg("muted", "Update")}: ${ansiYellow(item.updateCommand)}`);
-			}
-		} else if (item.latestVersion) {
-			detailLines.push(`${theme.fg("muted", "Version")}: ${current} ${theme.fg("dim", `(latest ${item.latestVersion})`)}`);
-		} else {
-			detailLines.push(`${theme.fg("muted", "Version")}: ${current}`);
-		}
+	if (item.updateAvailable && item.updateCommand) {
+		detailLines.push(`${theme.fg("muted", "Action")}: ${ansiYellow(`alt+u update via ${item.updateSource ?? "source"}`)}`);
+		detailLines.push(`${theme.fg("muted", "Command")}: ${item.updateCommand}`);
 	}
 	if (item.trigger) detailLines.push(`${theme.fg("muted", "Trigger")}: ${item.trigger}`);
 	if (item.shadowedBy) detailLines.push(`${theme.fg("muted", "Shadowed by")}: ${item.shadowedBy}`);
 	if (item.brokenError) detailLines.push(`${theme.fg("error", "Error")}: ${item.brokenError}`);
 	detailLines.push(...packageExtensionLines(inventory, item, width, theme));
-
-	const schemas = item.settingsSchema ?? [];
-	const settingsHeader = ["", managerPaneTitle(theme, "Settings", ui.pane === "settings"), ""];
 	const safeViewportRows = Math.max(1, viewportRows);
-	const minimumSettingsRows = schemas.length > 0 ? Math.min(safeViewportRows, ui.pane === "settings" ? 6 : 3) : 1;
-	const maxDetailRows = Math.max(0, safeViewportRows - settingsHeader.length - minimumSettingsRows);
-	const clippedDetails = detailLines.length > maxDetailRows
-		? [...detailLines.slice(0, Math.max(0, maxDetailRows - 1)), theme.fg("dim", "… details clipped")]
-		: detailLines;
-	const lines = [...clippedDetails, ...settingsHeader];
-
-	if (schemas.length === 0) {
-		lines.push(theme.fg("dim", "No declared settings schema for this item."));
-		return lines.flatMap((line) => wrapLine(line, width)).slice(0, safeViewportRows);
-	}
-
-	const extensionId = selectedPackageForSetting(item) ?? item.displayName;
-	const settingViewportRows = Math.max(1, safeViewportRows - lines.length);
-	ui.settingSelected = Math.max(0, Math.min(ui.settingSelected, Math.max(0, schemas.length - 1)));
-	const selectedSchema = schemas[ui.settingSelected];
-	const hasSelectedDescription = Boolean(selectedSchema?.description);
-	const maxVisibleSettings = Math.max(1, Math.min(settingsRows, settingViewportRows - 2 - (hasSelectedDescription ? 2 : 0)));
-	if (ui.settingSelected < ui.settingScroll) ui.settingScroll = ui.settingSelected;
-	if (ui.settingSelected >= ui.settingScroll + maxVisibleSettings) ui.settingScroll = ui.settingSelected - maxVisibleSettings + 1;
-	ui.settingScroll = Math.max(0, Math.min(ui.settingScroll, Math.max(0, schemas.length - maxVisibleSettings)));
-
-	const settingLines: string[] = [];
-	if (ui.settingScroll > 0) settingLines.push(theme.fg("dim", `↑ ${ui.settingScroll} earlier setting(s)`));
-	for (const [visibleIndex, schema] of schemas.slice(ui.settingScroll, ui.settingScroll + maxVisibleSettings).entries()) {
-		const index = ui.settingScroll + visibleIndex;
-		const selected = index === ui.settingSelected;
-		const config = getConfigValue(inventory, extensionId, schema);
-		const marker = " ";
-		const isEditing = ui.editing?.itemId === item.id && ui.editing?.settingKey === schema.key;
-		const value = isEditing && ui.editing ? renderInlineEditValue(ui.editing) : formatSettingValue(schema, config.value);
-		const valueText = theme.fg(isEditing ? "accent" : config.explicit ? "success" : selected ? "text" : "muted", value);
-		const label = selected ? theme.fg("text", schema.label ?? schema.key) : schema.label ?? schema.key;
-		const row = truncateToWidth(`${marker}${label}: ${valueText}`, width, "…");
-		settingLines.push(selected ? managerSelectedLine(theme, row, width) : row);
-		if (selected && !isEditing && schema.description) settingLines.push(...wrapDescription(schema.description, width, theme, "  "));
-	}
-	const hidden = Math.max(0, schemas.length - (ui.settingScroll + maxVisibleSettings));
-	if (hidden > 0) settingLines.push(theme.fg("dim", `↓ ${hidden} more setting(s)`));
-	lines.push(...settingLines.slice(0, settingViewportRows));
-	return lines.flatMap((line) => wrapLine(line, width)).slice(0, safeViewportRows);
-}
-
-function stateColor(state: ExtensionState): ThemeColor {
-	if (state === "active") return "success";
-	if (state === "disabled") return "warning";
-	if (state === "broken") return "error";
-	return "dim";
+	return detailLines.flatMap((line) => wrapLine(line, width)).slice(0, safeViewportRows);
 }
 
 function frameContentWidth(width: number): number {
@@ -2517,7 +2377,7 @@ export default function extensionManager(pi: ExtensionAPI): void {
 	}
 
 	pi.registerCommand("extensions", {
-		description: "Browse, toggle, inspect, and configure Pi extension packages.",
+		description: "Browse, update, toggle, and inspect Pi extension packages.",
 		handler: async (args, ctx) => {
 			const trimmed = args.trim();
 			const lower = trimmed.toLowerCase();
@@ -2529,7 +2389,7 @@ export default function extensionManager(pi: ExtensionAPI): void {
 				await openQuickSettings(pi, ctx, trimmed.slice("settings ".length));
 				return;
 			}
-			await openManager(pi, ctx, TAB_ALL);
+			await openManager(pi, ctx);
 		},
 	});
 
@@ -2544,7 +2404,7 @@ export default function extensionManager(pi: ExtensionAPI): void {
 
 	const openManagerPopup = async (ctx: ExtensionContext) => {
 		if (!ctx.hasUI) return;
-		await openManager(pi, ctx, TAB_ALL);
+		await openManager(pi, ctx);
 	};
 	const openSettingsPopup = async (ctx: ExtensionContext) => {
 		if (!ctx.hasUI) return;
