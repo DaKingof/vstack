@@ -65,4 +65,4 @@ State stores snapshots in `tasks_write` result details, with project/session cus
 
 ## Shortcut
 
-Pi uses `Ctrl+T` for thinking visibility. This package always registers the alternate shortcut from settings (`Alt+T` by default), which cycles `hidden → show 4 → show all`. It registers `Ctrl+T` only when `takeoverCtrlT` is enabled in the extension manager and Pi is reloaded.
+Pi uses `Ctrl+T` for thinking visibility. This package always registers the alternate shortcut from settings (`Alt+T` by default), which cycles `hidden → show 4 → show all`. It registers `Ctrl+T` only when `takeoverCtrlT` is enabled in the extension manager and Pi is reloaded. The task manager popup opens with `managerShortcut` (`Alt+Shift+T` by default) and the additional `F4` shortcut.

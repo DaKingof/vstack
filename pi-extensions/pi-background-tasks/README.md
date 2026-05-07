@@ -29,7 +29,7 @@ Restart Pi after installation.
 - `bg_status` compatibility tool for list/log/stop by PID.
 - `/bg` dashboard and task-control command.
 - `Alt+.` arms a one-shot diversion so the next not-yet-started bash command runs as a background task instead of blocking the turn.
-- `Alt+H` toggles the inline mini-dashboard shown/hidden; `Alt+Shift+H` opens the full dashboard.
+- `Alt+H` toggles the inline mini-dashboard shown/hidden; `Alt+Shift+H` and `F5` open the full dashboard.
 - Automatic diversion of clearly long-running bash monitors such as `watch`, `tail -f`, `journalctl -f`, and session/tmux polling loops.
 - Persistent log files under `${PI_BG_TASK_DIR:-$TMPDIR/vstack-pi-bg}`; truncated log output includes the full log path.
 - Wakeups when a task exits, and optional wakeups when output matches a substring or `/regex/flags` pattern.
@@ -67,6 +67,7 @@ Settings:
 - `autoBackgroundBash` toggles built-in automatic diversion.
 - `autoBackgroundPatterns` adds newline-separated regular expressions for project-specific monitor commands.
 - `backgroundBashShortcut` changes the default `Alt+.` binding, or set it to `none` to disable.
+- `dashboardShortcut` changes the default `Alt+Shift+H` full-dashboard binding; `F5` is also registered as an additional dashboard shortcut.
 - `forcedBackgroundNotifyOnOutput` optionally wakes the agent on output from shortcut-forced background tasks. Exit wakeups are always enabled for forced tasks.
 - `forcedBackgroundWindowSeconds` controls how long `Alt+.`/`/bg:next` stays armed.
 

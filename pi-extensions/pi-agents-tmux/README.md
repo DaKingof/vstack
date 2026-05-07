@@ -118,7 +118,7 @@ Non-interactive mode emits inline list/show output. Management commands remain a
 
 ## Dashboard widget
 
-The inline agents widget (default toggle `Alt+A`, popup `Alt+Shift+A`) shows live state for every spawned agent. Each row carries the agent name, its kind (`pane` or `bg`), and live usage stats refreshed from the transcript jsonl every poll cycle: ` N` (turns), `↑in ↓out` (tokens), and `$cost`. Compact mode aggregates totals across all agents on the trailing line. Expanded mode adds a `Total · ...` line at the bottom. Rows sort by start time so the order is stable while live updates patch usage in place.
+The inline agents widget (default toggle `Alt+A`, popup `Alt+Shift+A`; `F3` also opens the popup) shows live state for every spawned agent. Each row carries the agent name, its kind (`pane` or `bg`), and live usage stats refreshed from the transcript jsonl every poll cycle: ` N` (turns), `↑in ↓out` (tokens), and `$cost`. Compact mode aggregates totals across all agents on the trailing line. Expanded mode adds a `Total · ...` line at the bottom. Rows sort by start time so the order is stable while live updates patch usage in place.
 
 Rendering contract: the dashboard/popup owns live lifecycle (`queued`, `working`, `waiting`, `done`, `needs completion`). Inline tool output stays quieter when the dashboard is enabled: pane calls render as launch breadcrumbs, while bg/one-shot calls render the useful result preview without repeating the dashboard's lifecycle row.
 
@@ -187,7 +187,7 @@ A future backend could use Pi SDK `createAgentSession()` for non-pane one-shot a
 `pi-extension-manager` exposes:
 
 - `maxParallelTasks` and `maxConcurrency` for one-shot delegation limits.
-- Dashboard controls: `dashboard`, `quietInlineWhenDashboard`, `dashboardMaxItems`, `dashboardCollapsed`, `dashboardShortcut` (default `alt+a` cycles dashboard mode), `popupShortcut` (default `alt+shift+a` opens the full `/agents` browser), and `treeStyle`.
+- Dashboard controls: `dashboard`, `quietInlineWhenDashboard`, `dashboardMaxItems`, `dashboardCollapsed`, `dashboardShortcut` (default `alt+a` cycles dashboard mode), `popupShortcut` (default `alt+shift+a` opens the full `/agents` browser; `F3` is an additional popup shortcut), and `treeStyle`.
 - `collapsedItemCount` for compact result rendering.
 - `truncateResults`, `resultMaxBytes` (default 102400), `resultMaxLines` (default 4000), and `preserveFullOutput` for result truncation. Oversized one-shot outputs are saved under `~/.pi/agent/vstack/pi-agents-tmux/sessions/<session-id>/outputs/` when preservation is enabled.
 - `completionPollMs` and `childInboxPollMs` for persistent pane polling intervals.

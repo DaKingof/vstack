@@ -32,6 +32,7 @@ Restart Pi after installation.
 ## UI notes
 
 - `/extensions` opens on the `All` tab. Selecting a package shows its overview, resources, and settings in the inspector.
+- `Alt+Shift+E` and `F11` open the extension manager popup; `Alt+Shift+S` and `F12` open the quick settings popup.
 - Package tabs show one package plus its child resources.
 - `Alt+R` toggles the raw resource list; `Alt+A` opens diagnostics/audit; `Tab` and `Shift+Tab` cycle tabs.
 - `Delete` resets the selected setting; `Ctrl+X` resets settings for the selected extension/package.
