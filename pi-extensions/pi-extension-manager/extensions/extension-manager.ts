@@ -1124,7 +1124,151 @@ interface ManagerUiState {
 	scopeFilter: string;
 	showAudit: boolean;
 	showResources: boolean;
-	editing?: { buffer: string; itemId: string; settingKey: string };
+	editing?: InlineEditState & { itemId: string; settingKey: string };
+}
+
+interface InlineEditState {
+	buffer: string;
+	cursor: number;
+}
+
+interface InlineEditChar {
+	ch: string;
+	start: number;
+	end: number;
+}
+
+function inlineEditChars(text: string): InlineEditChar[] {
+	const out: InlineEditChar[] = [];
+	let offset = 0;
+	for (const ch of text) {
+		const start = offset;
+		offset += ch.length;
+		out.push({ ch, start, end: offset });
+	}
+	return out;
+}
+
+function clampInlineCursor(editing: InlineEditState): void {
+	editing.cursor = Math.max(0, Math.min(editing.cursor, editing.buffer.length));
+}
+
+function codeUnitToCharIndex(chars: InlineEditChar[], cursor: number): number {
+	let index = 0;
+	while (index < chars.length && chars[index]!.end <= cursor) index += 1;
+	return index;
+}
+
+function charIndexToCodeUnit(chars: InlineEditChar[], index: number, textLength: number): number {
+	if (index <= 0) return 0;
+	if (index >= chars.length) return textLength;
+	return chars[index]!.start;
+}
+
+function inlineCharKind(ch: string): "space" | "word" | "punct" {
+	if (/\s/u.test(ch)) return "space";
+	if (/[A-Za-z0-9_]/.test(ch)) return "word";
+	return "punct";
+}
+
+function moveInlineCursorByChars(editing: InlineEditState, delta: number): void {
+	const chars = inlineEditChars(editing.buffer);
+	const index = codeUnitToCharIndex(chars, editing.cursor);
+	editing.cursor = charIndexToCodeUnit(chars, index + delta, editing.buffer.length);
+}
+
+function moveInlineCursorWordLeft(editing: InlineEditState): void {
+	const chars = inlineEditChars(editing.buffer);
+	let index = codeUnitToCharIndex(chars, editing.cursor);
+	while (index > 0 && inlineCharKind(chars[index - 1]!.ch) === "space") index -= 1;
+	if (index <= 0) {
+		editing.cursor = 0;
+		return;
+	}
+	const kind = inlineCharKind(chars[index - 1]!.ch);
+	while (index > 0 && inlineCharKind(chars[index - 1]!.ch) === kind) index -= 1;
+	editing.cursor = charIndexToCodeUnit(chars, index, editing.buffer.length);
+}
+
+function moveInlineCursorWordRight(editing: InlineEditState): void {
+	const chars = inlineEditChars(editing.buffer);
+	let index = codeUnitToCharIndex(chars, editing.cursor);
+	while (index < chars.length && inlineCharKind(chars[index]!.ch) === "space") index += 1;
+	if (index >= chars.length) {
+		editing.cursor = editing.buffer.length;
+		return;
+	}
+	const kind = inlineCharKind(chars[index]!.ch);
+	while (index < chars.length && inlineCharKind(chars[index]!.ch) === kind) index += 1;
+	editing.cursor = charIndexToCodeUnit(chars, index, editing.buffer.length);
+}
+
+function insertInlineText(editing: InlineEditState, text: string): void {
+	clampInlineCursor(editing);
+	editing.buffer = `${editing.buffer.slice(0, editing.cursor)}${text}${editing.buffer.slice(editing.cursor)}`;
+	editing.cursor += text.length;
+}
+
+function deleteInlineRange(editing: InlineEditState, start: number, end: number): void {
+	const safeStart = Math.max(0, Math.min(start, editing.buffer.length));
+	const safeEnd = Math.max(safeStart, Math.min(end, editing.buffer.length));
+	editing.buffer = `${editing.buffer.slice(0, safeStart)}${editing.buffer.slice(safeEnd)}`;
+	editing.cursor = safeStart;
+}
+
+function handleInlineEditInput(editing: InlineEditState, data: string): boolean {
+	clampInlineCursor(editing);
+	if (matchesKey(data, "left") || matchesKey(data, "ctrl+b")) {
+		moveInlineCursorByChars(editing, -1);
+		return true;
+	}
+	if (matchesKey(data, "right") || matchesKey(data, "ctrl+f")) {
+		moveInlineCursorByChars(editing, 1);
+		return true;
+	}
+	if (matchesKey(data, "alt+left") || matchesKey(data, "ctrl+left") || matchesKey(data, "alt+b")) {
+		moveInlineCursorWordLeft(editing);
+		return true;
+	}
+	if (matchesKey(data, "alt+right") || matchesKey(data, "ctrl+right") || matchesKey(data, "alt+f")) {
+		moveInlineCursorWordRight(editing);
+		return true;
+	}
+	if (matchesKey(data, "home") || matchesKey(data, "ctrl+a")) {
+		editing.cursor = 0;
+		return true;
+	}
+	if (matchesKey(data, "end") || matchesKey(data, "ctrl+e")) {
+		editing.cursor = editing.buffer.length;
+		return true;
+	}
+	if (matchesKey(data, "backspace")) {
+		const before = editing.cursor;
+		moveInlineCursorByChars(editing, -1);
+		deleteInlineRange(editing, editing.cursor, before);
+		return true;
+	}
+	if (matchesKey(data, "delete") || matchesKey(data, "ctrl+d")) {
+		const start = editing.cursor;
+		moveInlineCursorByChars(editing, 1);
+		deleteInlineRange(editing, start, editing.cursor);
+		return true;
+	}
+	if (matchesKey(data, "ctrl+u")) {
+		editing.buffer = "";
+		editing.cursor = 0;
+		return true;
+	}
+	if (isPlainSearchInput(data)) {
+		insertInlineText(editing, data);
+		return true;
+	}
+	return false;
+}
+
+function renderInlineEditValue(editing: InlineEditState): string {
+	clampInlineCursor(editing);
+	return `${editing.buffer.slice(0, editing.cursor)}█${editing.buffer.slice(editing.cursor)}`;
 }
 
 function makeInitialUiState(initialTab: TopTab): ManagerUiState {
@@ -1568,18 +1712,7 @@ function createManagerComponent(
 				return;
 			}
 			if (matchesKey(data, "enter") || matchesKey(data, "return")) return saveInlineEdit();
-			if (matchesKey(data, "backspace")) {
-				ui.editing.buffer = ui.editing.buffer.slice(0, -1);
-				requestRender();
-				return;
-			}
-			if (matchesKey(data, "ctrl+u")) {
-				ui.editing.buffer = "";
-				requestRender();
-				return;
-			}
-			if (isPlainSearchInput(data)) {
-				ui.editing.buffer += data;
+			if (handleInlineEditInput(ui.editing, data)) {
 				requestRender();
 			}
 			return;
@@ -1735,7 +1868,8 @@ function createManagerComponent(
 				if (schema.type === "boolean" || schema.type === "enum") {
 					return done({ type: "set-setting", itemId: selected.id, settingKey: schema.key, value: nextSettingValue(schema, current) });
 				}
-				ui.editing = { buffer: stringifySettingValue(current ?? schema.default ?? ""), itemId: selected.id, settingKey: schema.key };
+				const buffer = stringifySettingValue(current ?? schema.default ?? "");
+				ui.editing = { buffer, cursor: buffer.length, itemId: selected.id, settingKey: schema.key };
 				requestRender();
 				return;
 			}
@@ -1752,7 +1886,7 @@ function createManagerComponent(
 		lines.push(renderTabBar(topTabs, ui.topTab, bodyWidth, theme));
 		lines.push("");
 		const primaryHint = ui.editing
-			? `${theme.fg("dim", "editing value · ")}${ansiYellow("enter")} ${theme.fg("dim", "save · ")}${ansiYellow("esc")} ${theme.fg("dim", "cancel · ")}${ansiYellow("backspace")} ${theme.fg("dim", "delete · ")}${ansiYellow("ctrl+u")} ${theme.fg("dim", "clear")}`
+			? `${theme.fg("dim", "editing value · ")}${ansiYellow("←/→")} ${theme.fg("dim", "move · ")}${ansiYellow("alt+←/→")} ${theme.fg("dim", "word · ")}${ansiYellow("enter")} ${theme.fg("dim", "save · ")}${ansiYellow("esc")} ${theme.fg("dim", "cancel · ")}${ansiYellow("backspace/delete")} ${theme.fg("dim", "delete · ")}${ansiYellow("ctrl+u")} ${theme.fg("dim", "clear")}`
 			: ui.showAudit
 			? `${theme.fg("dim", "diagnostics · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("Alt+A")} ${theme.fg("dim", "back · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`
 			: `${ansiYellow("tab")} ${theme.fg("dim", "switch tabs · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("Alt+A")} ${theme.fg("dim", "diagnostics · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
@@ -2025,7 +2159,7 @@ function renderInspector(inventory: Inventory, item: InventoryItem | undefined, 
 		const config = getConfigValue(inventory, extensionId, schema);
 		const marker = " ";
 		const isEditing = ui.editing?.itemId === item.id && ui.editing?.settingKey === schema.key;
-		const value = isEditing ? `${ui.editing?.buffer ?? ""}█` : formatSettingValue(schema, config.value);
+		const value = isEditing && ui.editing ? renderInlineEditValue(ui.editing) : formatSettingValue(schema, config.value);
 		const valueText = theme.fg(isEditing ? "accent" : config.explicit ? "success" : selected ? "text" : "muted", value);
 		const label = selected ? theme.fg("text", schema.label ?? schema.key) : schema.label ?? schema.key;
 		const row = truncateToWidth(`${marker}${label}: ${valueText}`, width, "…");
@@ -2116,7 +2250,7 @@ interface QuickSettingRow extends QuickSettingTarget {
 }
 
 interface QuickSettingsUiState {
-	editing?: { buffer: string; rowId: string };
+	editing?: InlineEditState & { rowId: string };
 	scroll: number;
 	search: string;
 	selected: number;
@@ -2255,7 +2389,8 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 			requestRender();
 			return;
 		}
-		ui.editing = { buffer: quickSettingEditValue(inventory, row), rowId: row.id };
+		const buffer = quickSettingEditValue(inventory, row);
+		ui.editing = { buffer, cursor: buffer.length, rowId: row.id };
 		requestRender();
 	};
 
@@ -2286,18 +2421,7 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 				return;
 			}
 			if (matchesKey(data, "enter") || matchesKey(data, "return")) return saveInlineEdit();
-			if (matchesKey(data, "backspace")) {
-				ui.editing.buffer = ui.editing.buffer.slice(0, -1);
-				requestRender();
-				return;
-			}
-			if (matchesKey(data, "ctrl+u")) {
-				ui.editing.buffer = "";
-				requestRender();
-				return;
-			}
-			if (isPlainSearchInput(data)) {
-				ui.editing.buffer += data;
+			if (handleInlineEditInput(ui.editing, data)) {
 				requestRender();
 			}
 			return;
@@ -2381,7 +2505,7 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 			? theme.bg("toolPendingBg", pad(` ${theme.fg("dim", "Editing inline value")}`, bodyWidth))
 			: theme.bg("toolPendingBg", pad(` > ${ui.search}${theme.inverse(" ")}`, bodyWidth));
 		const footer = ui.editing
-			? `${theme.fg("dim", "editing value · ")}${ansiYellow("enter")} ${theme.fg("dim", "save · ")}${ansiYellow("esc")} ${theme.fg("dim", "cancel · ")}${ansiYellow("backspace")} ${theme.fg("dim", "delete · ")}${ansiYellow("ctrl+u")} ${theme.fg("dim", "clear")}`
+			? `${theme.fg("dim", "editing value · ")}${ansiYellow("←/→")} ${theme.fg("dim", "move · ")}${ansiYellow("alt+←/→")} ${theme.fg("dim", "word · ")}${ansiYellow("enter")} ${theme.fg("dim", "save · ")}${ansiYellow("esc")} ${theme.fg("dim", "cancel · ")}${ansiYellow("backspace/delete")} ${theme.fg("dim", "delete · ")}${ansiYellow("ctrl+u")} ${theme.fg("dim", "clear")}`
 			: `${ansiYellow("tab")} ${theme.fg("dim", "switch extension tabs · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("enter")} ${theme.fg("dim", "edit/toggle · ")}${ansiYellow("delete")} ${theme.fg("dim", "reset setting · ")}${ansiYellow("ctrl+x")} ${theme.fg("dim", "reset extension · ")}${ansiYellow("backspace")} ${theme.fg("dim", "clear · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
 		lines.push(renderTabBar(tabs, ui.tab, bodyWidth, theme));
 		lines.push("");
@@ -2407,7 +2531,7 @@ function createQuickSettingsComponent(pi: ExtensionAPI, ctx: ExtensionCommandCon
 			const labelText = truncateToWidth(row.schema.label ?? row.schema.key, 34, "…");
 			const label = selected ? theme.fg("text", labelText) : labelText;
 			const isEditing = ui.editing?.rowId === row.id;
-			const value = isEditing ? `${ui.editing?.buffer ?? ""}█` : formatSettingValue(row.schema, config.value);
+			const value = isEditing && ui.editing ? renderInlineEditValue(ui.editing) : formatSettingValue(row.schema, config.value);
 			const valueText = theme.fg(isEditing ? "accent" : config.explicit ? "success" : selected ? "text" : "muted", value);
 			const rowText = truncateToWidth(`${itemPad}${label}${" ".repeat(Math.max(1, 36 - visibleWidth(labelText)))}${valueText}`, bodyWidth, "…");
 			lines.push(selected ? managerSelectedLine(theme, rowText, bodyWidth) : rowText);
