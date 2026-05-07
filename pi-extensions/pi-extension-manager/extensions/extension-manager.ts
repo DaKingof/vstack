@@ -2681,6 +2681,23 @@ export default function extensionManager(pi: ExtensionAPI): void {
 
 	(globalThis as unknown as Record<PropertyKey, unknown>)[VSTACK_OPEN_QUICK_SETTINGS_SYMBOL] = async (ctx: ExtensionCommandContext | ExtensionContext, hint?: string) => openQuickSettings(pi, ctx, hint);
 
+	pi.registerShortcut("alt+shift+e" as any, {
+		description: "Open the extension manager popup",
+		handler: async (ctx) => {
+			const extCtx = ctx as ExtensionContext;
+			if (!extCtx.hasUI) return;
+			await openManager(pi, extCtx, TAB_ALL);
+		},
+	});
+
+	pi.registerShortcut("alt+shift+s" as any, {
+		description: "Open the extension manager settings popup",
+		handler: async (ctx) => {
+			const extCtx = ctx as ExtensionContext;
+			if (!extCtx.hasUI) return;
+			await openQuickSettings(pi, extCtx);
+		},
+	});
 
 	pi.on("session_start", (_event, ctx) => {
 		activeCtx = ctx;
