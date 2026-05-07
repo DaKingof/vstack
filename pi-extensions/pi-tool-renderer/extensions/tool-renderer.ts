@@ -187,6 +187,22 @@ function resultTruncated(result: any): boolean {
 	return truncatedMarker(textContent(result));
 }
 
+function readResultSummary(result: any, args: any, theme: any): string {
+	const truncation = result?.details?.truncation;
+	if (truncation?.truncated && typeof truncation.outputLines === "number" && typeof truncation.totalLines === "number") {
+		let summary = theme.fg("success", `${truncation.outputLines}/${truncation.totalLines} lines`) + theme.fg("warning", " · truncated");
+		if (!truncation.firstLineExceedsLimit && truncation.outputLines > 0) {
+			const startLine = Math.max(1, Math.floor(Number(args?.offset) || 1));
+			summary += theme.fg("dim", ` · continue offset=${startLine + truncation.outputLines}`);
+		}
+		return summary;
+	}
+	const count = lineCount(textContent(result));
+	let summary = theme.fg("success", `${count} line${count === 1 ? "" : "s"}`);
+	if (resultTruncated(result)) summary += theme.fg("warning", " · truncated");
+	return summary;
+}
+
 function makeEmpty() {
 	return {
 		invalidate() {},
@@ -3080,8 +3096,7 @@ function registerRead(pi: ExtensionAPI, agent: any, cwd: string): void {
 			clearBlink(context);
 			const content = textContent(result);
 			const count = lineCount(content);
-			let summary = theme.fg("success", `${count} line${count === 1 ? "" : "s"}`);
-			if (resultTruncated(result)) summary += theme.fg("warning", " · truncated");
+			const summary = readResultSummary(result, context?.args ?? {}, theme);
 			const mode = readOutputMode(context?.cwd ?? cwd);
 			if (mode === "hidden") return makeEmpty();
 			let text = `${stackPrefix(theme)}${call}${theme.fg("dim", " · ")}${summary}`;

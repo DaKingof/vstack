@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -269,7 +270,8 @@ function writeArtifact(ctx: ExtensionContext, toolName: string, toolCallId: stri
 	for (const dir of candidates) {
 		try {
 			mkdirSync(dir, { recursive: true, mode: 0o700 });
-			const artifactPath = join(dir, `${Date.now()}-${safeTool}-${safeId}.txt`);
+			const unique = randomUUID().replaceAll("-", "").slice(0, 12);
+			const artifactPath = join(dir, `${Date.now()}-${unique}-${safeTool}-${safeId}.txt`);
 			writeFileSync(artifactPath, text, { encoding: "utf8", mode: 0o600 });
 			return { path: artifactPath };
 		} catch (error) {

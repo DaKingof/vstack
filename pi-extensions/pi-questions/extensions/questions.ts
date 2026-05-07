@@ -231,7 +231,7 @@ async function writeFullQuestionResult(result: QuestionResult, toolCallId: strin
 }
 
 async function makeQuestionToolResult(toolCallId: string, result: QuestionResult): Promise<AgentToolResult<QuestionResult>> {
-	const text = JSON.stringify(result);
+	const text = JSON.stringify(result, null, 2);
 	const truncation = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
 	if (!truncation.truncated) return { content: [{ type: "text", text }], details: result };
 	const artifact = await writeFullQuestionResult(result, toolCallId, text);

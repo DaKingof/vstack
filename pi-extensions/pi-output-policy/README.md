@@ -34,3 +34,5 @@ Restart Pi after installation.
 ## Limit
 
 Pi's built-in tools may already truncate before `tool_result`. This extension can only preserve the text it receives, so custom tools that return full large text benefit most from spill preservation.
+
+For truncated file reads, continue reading the original source file with `offset`/`limit`. Session `tool-results/*.json` files are wrapper artifacts for the already-returned tool result; they may contain escaped, line-hostile JSON and usually do not recover file content beyond Pi's read limit.
