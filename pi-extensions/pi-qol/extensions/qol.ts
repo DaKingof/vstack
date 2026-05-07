@@ -1087,9 +1087,9 @@ function repoNameFromRemote(remote: string): string | undefined {
 	return match?.[1];
 }
 
-function formatModel(ctx: ExtensionContext, pi: ExtensionAPI): string {
+function formatModelName(ctx: ExtensionContext): string {
 	const model = ctx.model;
-	if (!model) return `no model / ${pi.getThinkingLevel()}`;
+	if (!model) return "no model";
 	let name = model.name || model.id;
 	name = name.replace(/^Claude\s+/i, "");
 	name = name.replace(/^claude[-_]/i, "");
@@ -1101,7 +1101,29 @@ function formatModel(ctx: ExtensionContext, pi: ExtensionAPI): string {
 	name = name.replace(/\bhaiku\b/i, "Haiku");
 	name = name.replace(/\s+/g, " ").trim();
 	name = name.replace(/\b(Opus|Sonnet|Haiku) (\d) (\d)\b/, "$1 $2.$3");
-	return `${name} / ${pi.getThinkingLevel()}`;
+	return name;
+}
+
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+const THINKING_TOKEN: Record<ThinkingLevel, "thinkingOff" | "thinkingMinimal" | "thinkingLow" | "thinkingMedium" | "thinkingHigh" | "thinkingXhigh"> = {
+	off: "thinkingOff",
+	minimal: "thinkingMinimal",
+	low: "thinkingLow",
+	medium: "thinkingMedium",
+	high: "thinkingHigh",
+	xhigh: "thinkingXhigh",
+};
+
+function normalizeThinkingLevel(value: string | undefined): ThinkingLevel {
+	switch ((value ?? "").toLowerCase()) {
+		case "off": return "off";
+		case "minimal": return "minimal";
+		case "low": return "low";
+		case "medium": return "medium";
+		case "high": return "high";
+		case "xhigh": return "xhigh";
+		default: return "off";
+	}
 }
 
 function formatWindow(tokens: number | undefined): string {
@@ -1210,21 +1232,36 @@ function setTmuxWindowOption(target: string, option: string, value: string): voi
 	execFile("tmux", ["set-option", "-wq", "-t", target, option, value], { timeout: 1000 }, () => undefined);
 }
 
+function cavemanIconTone(mode: string, active: boolean): "muted" | "text" | "success" | "thinkingHigh" | "error" {
+	if (!active) return "muted";
+	switch (mode) {
+		case "micro": return "text";
+		case "lite": return "success";
+		case "full": return "thinkingHigh";
+		case "ultra": return "error";
+		default: return "muted";
+	}
+}
+
 function renderStatusLine(width: number, ctx: ExtensionContext, git: GitState, pi: ExtensionAPI, theme: Pick<Theme, "fg">): string {
 	const { label: contextLabel, percent } = statuslineContextInfo(ctx);
-	const leftHead = `${git.projectName}${gitBadge(git, settingBoolean("showDirtyMarker", true, ctx.cwd))} ${formatModel(ctx, pi)} (${contextLabel})`;
+	const projectChunk = `${git.projectName}${gitBadge(git, settingBoolean("showDirtyMarker", true, ctx.cwd))} ${formatModelName(ctx)} / `;
+	const thinkingLevel = normalizeThinkingLevel(pi.getThinkingLevel());
+	const thinkingChunk = thinkingLevel;
+	const contextChunk = ` (${contextLabel})`;
 	const cavemanBridge = readCavemanBridge();
 	const cavemanVisible = !!cavemanBridge && (cavemanBridge.isStatusBadgeEnabled?.(ctx.cwd) ?? true);
 	const caveman = cavemanVisible ? cavemanBridge : undefined;
-	const cavemanGlyph = caveman ? (caveman.isActive() ? CAVEMAN_ICON_ACTIVE : CAVEMAN_ICON_INACTIVE) : "";
-	const cavemanTone: "success" | "muted" = caveman?.isActive() ? "success" : "muted";
+	const cavemanActive = caveman?.isActive() ?? false;
+	const cavemanGlyph = caveman ? (cavemanActive ? CAVEMAN_ICON_ACTIVE : CAVEMAN_ICON_INACTIVE) : "";
+	const cavemanTone = cavemanIconTone(caveman?.getMode() ?? "off", cavemanActive);
 	const cavemanSegment = caveman ? ` / ${cavemanGlyph}` : "";
-	const leftPlain = `${leftHead}${cavemanSegment}`;
+	const leftPlain = `${projectChunk}${thinkingChunk}${contextChunk}${cavemanSegment}`;
 	const rightPlain = percent === null ? "…%" : `${percent}%`;
 	const percentColor = percent === null ? "muted" : percent <= 15 ? "error" : percent <= 30 ? "warning" : "success";
 	const leftColored = caveman
-		? `${theme.fg("accent", `${leftHead} / `)}${theme.fg(cavemanTone, cavemanGlyph)}`
-		: theme.fg("accent", leftPlain);
+		? `${theme.fg("accent", projectChunk)}${theme.fg(THINKING_TOKEN[thinkingLevel], thinkingChunk)}${theme.fg("accent", `${contextChunk} / `)}${theme.fg(cavemanTone, cavemanGlyph)}`
+		: `${theme.fg("accent", projectChunk)}${theme.fg(THINKING_TOKEN[thinkingLevel], thinkingChunk)}${theme.fg("accent", contextChunk)}`;
 	const right = theme.fg(percentColor, rightPlain);
 	const minimumGap = 1;
 	const gapWidth = Math.max(minimumGap, width - visibleWidth(leftPlain) - visibleWidth(rightPlain) - 2);
