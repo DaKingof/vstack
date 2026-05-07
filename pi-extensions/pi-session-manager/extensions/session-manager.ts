@@ -36,6 +36,7 @@ type NameFilter = "all" | "named";
 type Mode = "browse" | "loading" | "rename" | "confirm-delete" | "confirm-delete-all" | "deleting";
 
 type SessionAction = { type: "resume"; path: string; title: string } | { type: "cancel" };
+type SessionManagerContext = ExtensionCommandContext | ExtensionContext;
 
 interface VstackModalLock {
 	depth: number;
@@ -561,7 +562,7 @@ class SessionManagerOverlay implements Focusable {
 	private currentSessionPath: string | undefined;
 
 	constructor(
-		private readonly ctx: ExtensionCommandContext,
+		private readonly ctx: SessionManagerContext,
 		private readonly pi: ExtensionAPI,
 		private readonly theme: Theme,
 		private readonly keybindings: KeybindingsManager,
@@ -1190,7 +1191,7 @@ class SessionManagerOverlay implements Focusable {
 	}
 }
 
-async function openManager(ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<SessionAction> {
+async function openManager(ctx: SessionManagerContext, pi: ExtensionAPI): Promise<SessionAction> {
 	const releaseModalLock = acquireVstackModalLock();
 	try {
 		const result = await ctx.ui.custom<SessionAction | undefined>(
@@ -1211,12 +1212,17 @@ async function openManager(ctx: ExtensionCommandContext, pi: ExtensionAPI): Prom
 	}
 }
 
-async function handleSessionsCommand(_args: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
+async function handleSessionsCommand(_args: string, ctx: SessionManagerContext, pi: ExtensionAPI): Promise<void> {
 	if (!ctx.hasUI) {
 		ctx.ui.notify("/sessions requires interactive UI", "error");
 		return;
 	}
-	await ctx.waitForIdle();
+	const waitForIdle = (ctx as { waitForIdle?: () => Promise<void> }).waitForIdle;
+	if (typeof waitForIdle === "function") await waitForIdle.call(ctx);
+	else if (typeof ctx.isIdle === "function" && !ctx.isIdle()) {
+		ctx.ui.notify("Session manager can open after the current turn finishes", "warning");
+		return;
+	}
 	const action = await openManager(ctx, pi);
 	if (action.type !== "resume") return;
 	if (samePath(action.path, ctx.sessionManager.getSessionFile())) {
