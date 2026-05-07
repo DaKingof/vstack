@@ -35,7 +35,7 @@
           "label": "Popup shortcut",
           "description": "Keyboard shortcut that opens the full flightdeck mission-control popup. Use none to disable.",
           "type": "string",
-          "default": "alt+f",
+          "default": "f6",
           "category": "Keyboard",
           "apply": "reload",
           "requiresReload": true

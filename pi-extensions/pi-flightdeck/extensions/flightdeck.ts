@@ -212,7 +212,7 @@ function renderPauseBannerLines(snapshot: FlightdeckSnapshot, theme: Theme, widt
 	const prInfo = issue?.pr_number ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", "PR")} ${theme.fg("accent", `#${issue.pr_number}`)}` : "";
 	const meta = paneInfo ? `${paneInfo}${prInfo}` : "";
 	const promptWrap = promptText ? wrapLine(theme.fg("dim", promptText), inner).slice(0, 4) : [];
-	const hint = theme.fg("dim", "Respond in chat to resume the master agent. ") + theme.fg("warning", `${settingString("popupShortcut", "alt+f")} `) + theme.fg("dim", "for full context.");
+	const hint = theme.fg("dim", "Respond in chat to resume the master agent. ") + theme.fg("warning", `${settingString("popupShortcut", "f6")} `) + theme.fg("dim", "for full context.");
 	const lines: string[] = [];
 	lines.push(titleLine);
 	if (meta) lines.push(meta);
@@ -923,7 +923,7 @@ export default function flightdeck(pi: ExtensionAPI): void {
 		},
 	});
 
-	const popupShortcut = settingString("popupShortcut", "alt+f");
+	const popupShortcut = settingString("popupShortcut", "f6");
 	if (popupShortcut !== "none") {
 		pi.registerShortcut(popupShortcut as Parameters<typeof pi.registerShortcut>[0], {
 			description: "Open the flightdeck mission-control popup",

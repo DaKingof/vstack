@@ -8,7 +8,7 @@ When Pi is running as the flightdeck **master agent** in a tmux session, this ex
 
 - **Pause banner** — when flightdeck master sets `paused_for_user`, a high-contrast yellow-framed banner appears above the editor with the issue id, reason, and prompt excerpt. Clears automatically when master resumes.
 - **Persistent dashboard widget** — compact tree of tracked issues with state badges, harness chip, PR number, last decision, and age.
-- **`/flightdeck` popup** (Alt+F) — full mission-control view with six tabs:
+- **`/flightdeck` popup** (F6) — full mission-control view with six tabs:
   - **Overview** — one row per tracked issue, with detail block for the selected one.
   - **Live feed** — daemon log, pending events queue, adapter wake events, and decisions interleaved.
   - **Conversations** — last assistant turn per inner pane, captured from adapter wake events.
@@ -29,7 +29,7 @@ Configurable in `/extensions:settings` under `Flightdeck Dashboard`.
 | Key | Default | Purpose |
 |---|---|---|
 | `enabled` | `true` | Master kill-switch (reload required) |
-| `popupShortcut` | `alt+f` | Open the mission-control popup (`none` to disable) |
+| `popupShortcut` | `f6` | Open the mission-control popup (`none` to disable) |
 | `dashboardShortcut` | `alt+shift+f` | Cycle widget hidden → compact → expanded |
 | `dashboard` | `true` | Render the persistent widget above the editor |
 | `dashboardDefaultState` | `compact` | `hidden` / `compact` / `expanded` on first appearance |
