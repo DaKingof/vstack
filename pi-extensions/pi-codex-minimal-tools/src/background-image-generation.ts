@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { extname, isAbsolute, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import type { Api, Model } from "@mariozechner/pi-ai";
+import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { loadSettings } from "./settings.js";
 import {
 	buildGeneratedImageDisplayText,
@@ -23,6 +24,8 @@ interface ActiveImageJob {
 }
 
 const activeImageJobs = new Map<string, ActiveImageJob>();
+let activeStatusCtx: ExtensionCommandContext | undefined;
+let statusTimer: ReturnType<typeof setInterval> | undefined;
 
 export interface ParsedImageGenCommand {
 	prompt: string;
@@ -78,28 +81,76 @@ function tokenizeArgs(input: string): string[] {
 	return tokens;
 }
 
-function truncateText(value: string, max = 72): string {
-	return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
+function padAnsi(text: string, width: number): string {
+	return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
 }
 
-function renderJobLines(): string[] {
+function imageGenBranch(theme: any, branch: "├" | "└"): string {
+	return theme.fg("muted", `${branch}─ `);
+}
+
+function simpleFrame(lines: string[], width: number, theme: any, title: string): string[] {
+	if (width < 8) return lines.map((line) => truncateToWidth(line, width, ""));
+	const border = (text: string) => theme.fg("borderAccent", text);
+	const titleText = ` ${truncateToWidth(title, Math.max(1, width - 4), "…")} `;
+	const fill = Math.max(1, width - 2 - visibleWidth(titleText));
+	const innerWidth = Math.max(1, width - 4);
+	return [
+		`${border("┏")}${theme.fg("success", titleText)}${border("━".repeat(fill))}${border("┓")}`,
+		...lines.map((line) => `${border("┃")} ${padAnsi(truncateToWidth(line, innerWidth, ""), innerWidth)} ${border("┃")}`),
+		`${border("┗")}${border("━".repeat(width - 2))}${border("┛")}`,
+	].map((line) => truncateToWidth(line, width, ""));
+}
+
+function renderJobLines(theme: any, width: number): string[] {
 	const jobs = Array.from(activeImageJobs.values()).sort((a, b) => a.startedAt - b.startedAt);
 	if (jobs.length === 0) return [];
-	return [
-		`Image generation: ${jobs.length} running`,
-		...jobs.slice(0, 4).map((job) => {
-			const ageSeconds = Math.max(0, Math.round((Date.now() - job.startedAt) / 1000));
-			const refs = job.referenceCount > 0 ? ` · ${job.referenceCount} ref` : "";
-			return `• ${job.imageModel}${refs} · ${ageSeconds}s · ${truncateText(job.prompt)}`;
-		}),
-		...(jobs.length > 4 ? [`• +${jobs.length - 4} more`] : []),
+	const running = jobs.length;
+	const dot = theme.fg("dim", " · ");
+	const lines = [
+		`${theme.fg("accent", "● ")}${theme.fg("text", theme.bold("Image Generation"))}${dot}${theme.fg("success", `${running} running`)}${dot}${theme.fg("dim", "/image-gen")}`,
 	];
+	const shown = jobs.slice(0, 4);
+	for (const [index, job] of shown.entries()) {
+		const ageSeconds = Math.max(0, Math.round((Date.now() - job.startedAt) / 1000));
+		const isLast = index === shown.length - 1 && jobs.length <= shown.length;
+		const refs = job.referenceCount > 0 ? `${dot}${theme.fg("warning", `${job.referenceCount} ref`)}` : "";
+		const promptWidth = Math.max(16, width - 36);
+		lines.push(`${imageGenBranch(theme, isLast ? "└" : "├")}${theme.fg("accent", "◐ ")}${theme.fg("toolOutput", job.imageModel)}${refs}${dot}${theme.fg("success", "running")}${dot}${theme.fg("dim", `${ageSeconds}s`)}${dot}${theme.fg("text", truncateToWidth(job.prompt, promptWidth, "…"))}`);
+	}
+	const hidden = jobs.length - shown.length;
+	if (hidden > 0) lines.push(`${imageGenBranch(theme, "└")}${theme.fg("muted", `… ${hidden} more`)}`);
+	return simpleFrame(lines, width, theme, ` image-gen ${running} `);
+}
+
+function createImageGenWidgetFactory(): (_tui: unknown, theme: any) => Component {
+	return (_tui, theme) => ({
+		invalidate() {},
+		render(width: number): string[] {
+			return renderJobLines(theme, width);
+		},
+	});
+}
+
+function ensureStatusTimer(): void {
+	if (statusTimer) return;
+	statusTimer = setInterval(() => {
+		if (!activeStatusCtx || activeImageJobs.size === 0) {
+			if (statusTimer) clearInterval(statusTimer);
+			statusTimer = undefined;
+			return;
+		}
+		updateImageGenStatus(activeStatusCtx);
+	}, 1000);
+	statusTimer.unref?.();
 }
 
 function updateImageGenStatus(ctx: ExtensionCommandContext): void {
+	activeStatusCtx = ctx;
 	const count = activeImageJobs.size;
 	ctx.ui.setStatus(IMAGE_GEN_STATUS_KEY, count > 0 ? `image-gen ${count}` : undefined);
-	ctx.ui.setWidget(IMAGE_GEN_STATUS_KEY, count > 0 ? renderJobLines() : undefined, { placement: "belowEditor" });
+	ctx.ui.setWidget(IMAGE_GEN_STATUS_KEY, count > 0 ? createImageGenWidgetFactory() : undefined, { placement: "aboveEditor" });
+	if (count > 0) ensureStatusTimer();
 }
 
 function startImageJob(ctx: ExtensionCommandContext, parsed: ParsedImageGenCommand, imageModel: string): ActiveImageJob {
