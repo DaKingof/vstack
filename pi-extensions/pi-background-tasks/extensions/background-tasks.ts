@@ -1863,6 +1863,15 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			},
 		});
 	}
+	if (dashboardShortcut.toLowerCase() !== "f5") {
+		pi.registerShortcut("f5", {
+			description: "Open the background task dashboard",
+			handler: async (ctx) => {
+				activeCtx = ctx as ExtensionContext;
+				await openDashboard(ctx as ExtensionContext);
+			},
+		});
+	}
 	if (backgroundBashShortcut !== "none") {
 		pi.registerShortcut(backgroundBashShortcut, {
 			description: "Move the next not-yet-started bash command to a background task",

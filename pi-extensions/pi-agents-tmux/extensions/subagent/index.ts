@@ -5405,20 +5405,26 @@ export default function (pi: ExtensionAPI) {
 	if (shortcut !== "none") {
 		pi.registerShortcut(shortcut as any, { description: "Cycle agent dashboard display", handler: async (ctx) => toggleDashboardMode(ctx as ExtensionContext) });
 	}
+	const openAgentsPopup = async (ctx: ExtensionContext) => {
+		dashboardCtx = ctx;
+		if (!ctx.hasUI) return;
+		const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+		const parentThinkingLevel = pi.getThinkingLevel();
+		const parentSessionId = runtimeSessionId(ctx);
+		const runtimeRoot = sessionRuntimeDir(parentSessionId);
+		await openAgentsBrowser(ctx, "project", undefined, runtimeRoot, parentSessionId, parentModel, parentThinkingLevel, () => activeDashboardItems(Object.values(dashboardState.items)));
+	};
 	const popup = popupShortcut();
 	if (popup !== "none") {
 		pi.registerShortcut(popup as any, {
 			description: "Open the /agents browser popup",
-			handler: async (ctx) => {
-				const extCtx = ctx as ExtensionContext;
-				dashboardCtx = extCtx;
-				if (!extCtx.hasUI) return;
-				const parentModel = extCtx.model ? `${extCtx.model.provider}/${extCtx.model.id}` : undefined;
-				const parentThinkingLevel = pi.getThinkingLevel();
-				const parentSessionId = runtimeSessionId(extCtx);
-				const runtimeRoot = sessionRuntimeDir(parentSessionId);
-				await openAgentsBrowser(extCtx, "project", undefined, runtimeRoot, parentSessionId, parentModel, parentThinkingLevel, () => activeDashboardItems(Object.values(dashboardState.items)));
-			},
+			handler: async (ctx) => openAgentsPopup(ctx as ExtensionContext),
+		});
+	}
+	if (popup.toLowerCase() !== "f3") {
+		pi.registerShortcut("f3" as any, {
+			description: "Open the /agents browser popup",
+			handler: async (ctx) => openAgentsPopup(ctx as ExtensionContext),
 		});
 	}
 

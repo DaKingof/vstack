@@ -1076,4 +1076,7 @@ export default function taskPanel(pi: ExtensionAPI): void {
 	if (managerShortcut !== "none") {
 		pi.registerShortcut(managerShortcut, { description: "Open the task manager popup", handler: async (ctx) => manage(ctx as ExtensionContext) });
 	}
+	if (managerShortcut.toLowerCase() !== "f4") {
+		pi.registerShortcut("f4", { description: "Open the task manager popup", handler: async (ctx) => manage(ctx as ExtensionContext) });
+	}
 }
