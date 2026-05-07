@@ -3055,21 +3055,13 @@ function parseSessionSearchQuery(query: string): QolParsedSessionQuery {
 	return { mode: "tokens", tokens };
 }
 
-function simpleFuzzyScore(needle: string, haystack: string): number | undefined {
+function simpleTokenScore(needle: string, haystack: string): number | undefined {
 	const query = needle.toLowerCase();
 	const text = haystack.toLowerCase();
 	if (!query) return 0;
 	const direct = text.indexOf(query);
 	if (direct >= 0) return direct * 0.1;
-	let pos = 0;
-	let score = 0;
-	for (const char of query) {
-		const found = text.indexOf(char, pos);
-		if (found < 0) return undefined;
-		score += found - pos + 1;
-		pos = found + 1;
-	}
-	return score + 1000;
+	return undefined;
 }
 
 function matchSessionSearch(session: QolSessionSearchSession, parsed: QolParsedSessionQuery): { matches: boolean; score: number } {
@@ -3091,7 +3083,7 @@ function matchSessionSearch(session: QolSessionSearchSession, parsed: QolParsedS
 			score += index * 0.1;
 			continue;
 		}
-		const tokenScore = simpleFuzzyScore(token.value, text);
+		const tokenScore = simpleTokenScore(token.value, text);
 		if (tokenScore === undefined) return { matches: false, score: 0 };
 		score += tokenScore;
 	}
@@ -3187,7 +3179,7 @@ function matchTextSearch(text: string, parsed: QolParsedSessionQuery): { matches
 			score += index * 0.1;
 			continue;
 		}
-		const tokenScore = simpleFuzzyScore(token.value, text);
+		const tokenScore = simpleTokenScore(token.value, text);
 		if (tokenScore === undefined) return { matches: false, score: 0 };
 		score += tokenScore;
 	}
@@ -3704,7 +3696,7 @@ class QolSessionSearchComponent {
 		lines.push(row(this.renderScopeTabs(inner)));
 		if (!compact) lines.push(empty());
 		lines.push(filledRow(` > ${queryDisplay}`));
-		if (!compact) lines.push(row(dim(`fuzzy tokens · re:<pattern> regex · "phrase" exact`)));
+		if (!compact) lines.push(row(dim(`tokens · re:<pattern> regex · "phrase" exact`)));
 		lines.push(divider());
 
 		if (state.results.length === 0) {
