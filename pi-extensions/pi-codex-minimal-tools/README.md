@@ -11,7 +11,7 @@ Implemented features:
 - `image_generation` — native OpenAI Codex image generation on supported models.
 - `/codex-minimal-tools` — opens the extension-manager settings popup when `pi-extension-manager` is installed; otherwise prints status and active package tools inline.
 - Capability gating that only adds/removes this package's tools and preserves Pi native tools.
-- OpenAI-loaded gating: package tools are not registered until OpenAI/OpenAI-Codex models are present.
+- OpenAI active-model gating: package tools are only active for OpenAI/OpenAI-Codex-like models, even if other providers support images.
 - Native-aware OpenAI Codex provider shim for active `image_generation` tools.
 - Generated image saving under `imageOutputDir` with `latest.<ext>` mirrors.
 - Optional direct OpenAI Images API fallback when `directImageApiFallback` is enabled and `OPENAI_API_KEY` is set.
@@ -53,7 +53,7 @@ When `pi-extension-manager` is installed, settings appear under **Codex Minimal 
   "vstack": {
     "extensionManager": {
       "config": {
-        "pi-codex-minimal-tools": {}
+        "@vanillagreen/pi-codex-minimal-tools": {}
       }
     }
   }

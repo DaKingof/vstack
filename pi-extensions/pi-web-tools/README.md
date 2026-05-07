@@ -67,7 +67,7 @@ Settings are read from the vstack extension-manager namespace:
   "vstack": {
     "extensionManager": {
       "config": {
-        "pi-web-tools": {
+        "@vanillagreen/pi-web-tools": {
           "defaultProvider": "auto",
           "enabledProviders": "exa,openai-native,perplexity,gemini",
           "exaDeepResearchEnabled": true,

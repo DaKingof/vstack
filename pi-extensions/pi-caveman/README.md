@@ -25,11 +25,11 @@ Restart Pi after installation.
 
 | Command | Action |
 | --- | --- |
-| `/caveman` | Enable the configured default mode when off; otherwise show status. |
-| `/caveman:lite\|full\|ultra\|micro` | Set the session mode. |
-| `/caveman:toggle` | Toggle between off and the configured default mode. |
-| `/caveman off` | Disable caveman mode. |
-| `/caveman status` | Show current mode and source. |
+| `/caveman` | Toggle the current session between off and the last active mode. |
+| `/caveman:lite\|full\|ultra\|micro` | Set a session override mode. |
+| `/caveman:toggle` | Toggle the session override between off and the last active mode. |
+| `/caveman off` | Disable caveman mode for the current session. |
+| `/caveman status` | Show current mode and whether it comes from settings or a session override. |
 
 Arguments support autocomplete.
 
@@ -45,6 +45,9 @@ Arguments support autocomplete.
 ## Behavior
 
 - The extension injects instructions in `before_agent_start`; it does not post-process model output.
-- Mode persists in the Pi session and restores from the active branch.
+- The canonical setting is `mode` (`off`, `lite`, `full`, `ultra`, or `micro`). Older `enabled` + `defaultMode` settings are only read as a local fallback.
+- `/caveman` commands create a per-session override when `sessionOverrideAllowed` is on. Changing the extension-manager `mode` setting clears the session override so the configured mode takes over immediately.
+- Session override state and the last active mode persist in the Pi session and restore from the active branch.
 - Settings live in Pi/vstack `settings.json`; project settings override user settings.
+- QOL can use the caveman bridge for its compact statusline badge and `Alt+C` editor shortcut.
 - The clarity/safety escape is prompt policy: destructive, security-sensitive, or ambiguous turns get explicit normal-clarity guidance while mode can remain active for later turns.

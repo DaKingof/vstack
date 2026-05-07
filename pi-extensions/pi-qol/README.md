@@ -26,8 +26,8 @@ Restart Pi after installation.
 
 ## What it provides
 
-- Compact statusline and `π` prompt editor: shows repo/project, branch/dirty state, model, thinking level, context window size, and remaining context percent while replacing Pi's default footer/editor chrome.
-- Reliable multiline input: `Shift+Enter` / `Shift+Return` inserts a newline when the terminal reports it distinctly; `ctrl+j` is the default fallback newline key. `Alt+Enter` is reserved for Pi follow-up messages.
+- Compact statusline and `π` prompt editor: shows repo/project, branch/dirty state, model, colorized thinking level, optional Caveman badge, context window size, and remaining context percent while replacing Pi's default footer/editor chrome.
+- Reliable multiline input: `Shift+Enter` / `Shift+Return` inserts a newline when the terminal reports it distinctly; `ctrl+j` is the default fallback newline key. `Alt+Enter` is reserved for Pi follow-up messages. When `pi-caveman` is loaded, `Alt+C` cycles Caveman modes.
 - Compact image placeholders: existing pasted image paths can collapse to `[Image #N]` aliases and are attached on submit.
 - Session naming: `/rename [name]` sets or shows the friendly session name; automatic first-prompt naming is enabled by default.
 - Context usage: `/context` prints an inline Claude-style context-window visualization with estimated Pi/model category breakdowns.
@@ -65,6 +65,7 @@ Settings are exposed through `pi-extension-manager` under **QOL**.
 - `showSessionNameTitle`: show the named session above the prompt, or in tmux's pane title/border; default on.
 - `inputBottomPaddingLines`: blank lines below the compact prompt; default `0`.
 - Git display knobs: `gitRefreshTimeoutMs`, `showDirtyMarker`.
+- If `pi-caveman` is loaded, QOL reads its bridge to show a Caveman icon in the statusline and to make `Alt+C` cycle Caveman modes. The Caveman package's `showStatusBadge` setting also controls this QOL badge.
 
 ### Session auto-rename
 
