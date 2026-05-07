@@ -97,6 +97,12 @@ To see what flightdeck would do for a captured prompt without sending:
 
 If flightdeck is misbehaving, the most likely cause is a novel prompt shape that doesn't match any classifier sentinel. Check `prompt-classify` against the actual buffer; add a sentinel or escalate as `generic-multi-choice`.
 
+## Pi harness — optional dashboard
+
+When the master agent runs under Pi, the [`pi-flightdeck`](../../pi-extensions/pi-flightdeck/README.md) extension renders a read-only mission-control overlay (pause banner, persistent dashboard widget, `/flightdeck` popup with six tabs) by reading the same on-disk state files master and the daemon already maintain. It never writes — the skill remains the canonical owner of all mutation.
+
+Fully optional. The skill behaves identically with or without the extension; install it (`vstack add vanillagreencom/vstack --pi-extension pi-flightdeck --harness pi -y`) only if you want a live dashboard inside Pi.
+
 ## Pause / resume
 
 Flightdeck pauses automatically on:

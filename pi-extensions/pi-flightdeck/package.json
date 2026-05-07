@@ -1,0 +1,224 @@
+{
+  "name": "@vanillagreen/pi-flightdeck",
+  "version": "0.1.0",
+  "description": "Read-only mission-control dashboard for the flightdeck skill: live overview of tracked issues, daemon health, decisions log, and a prominent pause-banner when master is awaiting the user.",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "coding-agent",
+    "flightdeck",
+    "tmux",
+    "orchestration"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/flightdeck.ts"
+    ]
+  },
+  "vstack": {
+    "extensionManager": {
+      "displayName": "Flightdeck Dashboard",
+      "settings": [
+        {
+          "key": "enabled",
+          "label": "Enable flightdeck dashboard",
+          "description": "Register /flightdeck command, persistent dashboard widget, and pause banner.",
+          "type": "boolean",
+          "default": true,
+          "category": "General",
+          "apply": "reload",
+          "requiresReload": true
+        },
+        {
+          "key": "popupShortcut",
+          "label": "Popup shortcut",
+          "description": "Keyboard shortcut that opens the full flightdeck mission-control popup. Use none to disable.",
+          "type": "string",
+          "default": "alt+f",
+          "category": "Keyboard",
+          "apply": "reload",
+          "requiresReload": true
+        },
+        {
+          "key": "dashboardShortcut",
+          "label": "Dashboard cycle shortcut",
+          "description": "Keyboard shortcut that cycles the persistent dashboard widget through hidden → compact → expanded. Use none to disable.",
+          "type": "string",
+          "default": "alt+shift+f",
+          "category": "Keyboard",
+          "apply": "reload",
+          "requiresReload": true
+        },
+        {
+          "key": "dashboard",
+          "label": "Show dashboard widget",
+          "description": "Render a persistent dashboard above the editor when a flightdeck session is active in this tmux session.",
+          "type": "boolean",
+          "default": true,
+          "category": "Dashboard",
+          "apply": "live"
+        },
+        {
+          "key": "dashboardDefaultState",
+          "label": "Dashboard default state",
+          "description": "Initial dashboard state when a flightdeck session first appears.",
+          "type": "enum",
+          "enumValues": [
+            "hidden",
+            "compact",
+            "expanded"
+          ],
+          "default": "compact",
+          "category": "Dashboard",
+          "apply": "live"
+        },
+        {
+          "key": "dashboardMaxItems",
+          "label": "Dashboard max issues",
+          "description": "Maximum issue rows shown in the persistent dashboard widget.",
+          "type": "number",
+          "default": 8,
+          "category": "Dashboard",
+          "apply": "live"
+        },
+        {
+          "key": "pauseBanner",
+          "label": "Show pause banner",
+          "description": "Render a high-contrast banner above the editor whenever flightdeck master sets paused_for_user. Banner clears automatically when master resumes.",
+          "type": "boolean",
+          "default": true,
+          "category": "Pause banner",
+          "apply": "live"
+        },
+        {
+          "key": "pauseBeep",
+          "label": "Terminal bell on pause",
+          "description": "Ring the terminal bell once when paused_for_user is first detected.",
+          "type": "boolean",
+          "default": true,
+          "category": "Pause banner",
+          "apply": "live"
+        },
+        {
+          "key": "autoOpenOnPause",
+          "label": "Auto-open popup on pause",
+          "description": "Automatically open the /flightdeck popup once when paused_for_user is first detected. The banner is shown either way.",
+          "type": "boolean",
+          "default": false,
+          "category": "Pause banner",
+          "apply": "live"
+        },
+        {
+          "key": "pollIntervalMs",
+          "label": "Refresh interval",
+          "description": "How often (ms) the dashboard, banner, and popup re-read flightdeck state files.",
+          "type": "number",
+          "default": 1500,
+          "category": "Refresh",
+          "apply": "reload",
+          "requiresReload": true
+        },
+        {
+          "key": "liveFeedLines",
+          "label": "Live feed lines",
+          "description": "Number of daemon log + decision lines retained in the popup Live feed tab.",
+          "type": "number",
+          "default": 200,
+          "category": "Popup",
+          "apply": "live"
+        },
+        {
+          "key": "conversationExcerptChars",
+          "label": "Conversation excerpt chars",
+          "description": "Maximum characters of last assistant text retained per pane in the Conversations tab.",
+          "type": "number",
+          "default": 800,
+          "category": "Popup",
+          "apply": "live"
+        },
+        {
+          "key": "conversationsHistory",
+          "label": "Conversations turns kept",
+          "description": "Number of recent assistant turns retained per pane in the Conversations tab.",
+          "type": "number",
+          "default": 5,
+          "category": "Popup",
+          "apply": "live"
+        },
+        {
+          "key": "treeStyle",
+          "label": "Tree connector style",
+          "description": "Connector glyphs for the dashboard widget. Unicode is prettier; ASCII uses |--/`-- for maximum terminal compatibility.",
+          "type": "enum",
+          "enumValues": [
+            "unicode",
+            "ascii"
+          ],
+          "default": "unicode",
+          "category": "Dashboard",
+          "apply": "live"
+        },
+        {
+          "key": "stateDir",
+          "label": "Daemon state dir override",
+          "description": "Override for FD_STATE_DIR resolution. Leave empty to use the same resolution flightdeck-daemon uses ($XDG_RUNTIME_DIR/flightdeck or /tmp/flightdeck-$UID).",
+          "type": "string",
+          "default": "",
+          "category": "Refresh",
+          "apply": "reload",
+          "requiresReload": true
+        },
+        {
+          "key": "flightdeckStateDir",
+          "label": "Master state dir (project-relative)",
+          "description": "Directory inside the project root that holds the flightdeck master state file. Matches FLIGHTDECK_STATE_DIR (default tmp).",
+          "type": "string",
+          "default": "tmp",
+          "category": "Refresh",
+          "apply": "reload",
+          "requiresReload": true
+        }
+      ],
+      "resources": [
+        {
+          "kind": "command",
+          "name": "/flightdeck",
+          "description": "Open the flightdeck mission-control popup."
+        }
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "files": [
+    "extensions/",
+    "assets/",
+    "README.md",
+    "package.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vanillagreencom/vstack.git",
+    "directory": "pi-extensions/pi-flightdeck"
+  },
+  "homepage": "https://github.com/vanillagreencom/vstack/tree/main/pi-extensions/pi-flightdeck",
+  "bugs": {
+    "url": "https://github.com/vanillagreencom/vstack/issues"
+  },
+  "author": "vanillagreen",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.74.0",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-tui": "^0.74.0",
+    "@types/node": "^25.6.2",
+    "typebox": "^1.1.38"
+  }
+}

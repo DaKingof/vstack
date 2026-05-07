@@ -317,6 +317,7 @@ All Pi packages declare `vstack.extensionManager.settings` (including an `enable
 | [`pi-claude-bridge`](pi-extensions/pi-claude-bridge/README.md) | Claude Code provider bridge (`claude-bridge/*`) with vstack-controlled Pi prompt-context forwarding. |
 | [`pi-codex-minimal-tools`](pi-extensions/pi-codex-minimal-tools/README.md) | Adds Codex-style `view_image`, `apply_patch`, native OpenAI `image_generation`, and background `/image-gen` with Codex OAuth without replacing Pi's native file/shell/edit tools. |
 | [`pi-extension-manager`](pi-extensions/pi-extension-manager/README.md) | Pi-styled package manager (`/extensions`) plus separate inline settings editor (`/extensions:settings`). |
+| [`pi-flightdeck`](pi-extensions/pi-flightdeck/README.md) | Read-only mission-control dashboard for the [`flightdeck`](skills/flightdeck) skill: pause banner, persistent issue widget, and `/flightdeck` popup with Overview / Live feed / Conversations / Conflicts & merges / Decisions / Daemon tabs. |
 | [`pi-output-policy`](pi-extensions/pi-output-policy/README.md) | OMP-style large-output policy: shell minimization, head/tail truncation, spill-file preservation, UI-safe caps. |
 | [`pi-prompt-stash`](pi-extensions/pi-prompt-stash/README.md) | Per-session prompt stash history with stash/pop editor (`Alt+S`). |
 | [`pi-qol`](pi-extensions/pi-qol/README.md) | Compact statusline/`π` prompt, multiline input, image chips, session naming/search/handoff, custom compaction, thinking timer. |

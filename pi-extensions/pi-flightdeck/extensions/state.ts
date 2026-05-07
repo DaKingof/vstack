@@ -1,0 +1,496 @@
+/**
+ * Read-only model of flightdeck master state + daemon process state.
+ *
+ * Mirrors the path resolution in skills/flightdeck/scripts/lib/daemon-paths.sh
+ * and flightdeck-state. We never write — writes belong to the daemon and the
+ * master agent (via flightdeck-state CLI).
+ */
+
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+
+export type IssueState = "waiting" | "prompting" | "submitting" | "merge-ready" | "merged" | "aborted" | "dead";
+
+export interface IssueRecord {
+	issue: string;
+	window?: string;
+	pane_target?: string;
+	harness?: string;
+	worktree?: string;
+	pr_number?: number | null;
+	state?: IssueState;
+	substate?: string | null;
+	unknown_since?: string | null;
+	last_capture_hash?: string | null;
+	last_response_at?: string | null;
+	spawned_at?: string;
+	last_polled_at?: string;
+	orchestration_started?: boolean;
+	scope_files_declared?: number | null;
+	scope_files_actual?: number | null;
+	decisions_log?: Array<{ ts: string; prompt_tag: string; answer: string }>;
+	[key: string]: unknown;
+}
+
+export interface PausedForUser {
+	issue_id?: string;
+	reason?: string;
+	prompt_text?: string;
+	[key: string]: unknown;
+}
+
+export interface MasterState {
+	session_id?: string;
+	started_at?: string;
+	terminated?: boolean;
+	terminated_at?: string;
+	issues: Record<string, IssueRecord>;
+	merge_queue: string[];
+	conflict_graph?: { edges?: Array<[string, string]>; computed_at?: string | null };
+	paused_for_user?: PausedForUser | null;
+}
+
+export interface DaemonHealth {
+	stateDir: string;
+	sessionKey?: string;
+	pidFile?: string;
+	pid?: number;
+	pidAlive: boolean;
+	heartbeatPath?: string;
+	heartbeatAgeSec?: number;
+	heartbeatExists: boolean;
+	busyPath?: string;
+	busy?: { pid?: number; master_pane_id?: string; started_at?: string };
+	wakePendingPath?: string;
+	wakePending?: {
+		delivered_at?: string;
+		delivered_at_epoch?: number;
+		master_pane_id?: string;
+		daemon_pid?: number;
+		in_flight?: Array<{ pane_id: string; hash: string; tag: string; is_bell?: boolean }>;
+	};
+	logPath?: string;
+	logTail?: string[];
+	wakeEventsPath?: string;
+	wakeEventsRecent?: WakeEvent[];
+	subscriberCounts: { opencode: number; claude: number; pi: number; codex: number };
+}
+
+export interface WakeEvent {
+	ts?: string;
+	pane_id?: string;
+	harness?: string;
+	classifier_tag?: string;
+	hash?: string;
+	last_assistant_text?: string;
+	event_type?: "question" | "subagent-completion" | string;
+	request_id?: string;
+	question?: unknown;
+	completion?: unknown;
+}
+
+export interface DaemonEvent {
+	ts?: string;
+	pane_id?: string;
+	hash?: string;
+	tag?: string;
+	reason?: string;
+	stable_age_sec?: number;
+	details?: unknown;
+}
+
+export interface TmuxContext {
+	sessionName: string;
+	sessionId: string;
+	sessionKey: string;
+	paneId?: string;
+}
+
+export interface FlightdeckSnapshot {
+	tmux: TmuxContext;
+	stateDir: string;
+	masterStatePath?: string;
+	master?: MasterState;
+	masterError?: string;
+	daemon: DaemonHealth;
+	wakeEvents: WakeEvent[];
+	pendingEvents: DaemonEvent[];
+}
+
+export interface SettingsLike {
+	stateDir?: string;
+	flightdeckStateDir?: string;
+	logTailLines?: number;
+	wakeEventsLines?: number;
+}
+
+const DEFAULT_LOG_TAIL = 200;
+const DEFAULT_WAKE_TAIL = 200;
+
+function expandHome(input: string): string {
+	if (!input) return input;
+	if (input === "~") return homedir();
+	if (input.startsWith("~/")) return join(homedir(), input.slice(2));
+	return input;
+}
+
+function nonEmpty(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed ? trimmed : undefined;
+}
+
+export function resolveTmuxContext(): TmuxContext | undefined {
+	if (!process.env.TMUX) return undefined;
+	const result = spawnSync("tmux", ["display-message", "-p", "#S\t#{session_id}\t#{pane_id}"], {
+		encoding: "utf8",
+		timeout: 1500,
+	});
+	if (result.status !== 0) return undefined;
+	const [name, id, pane] = (result.stdout ?? "").trim().split("\t");
+	if (!name || !id) return undefined;
+	const sessionKey = id.startsWith("$") ? `s${id.slice(1)}` : id;
+	return { sessionName: name, sessionId: id, sessionKey, paneId: pane || undefined };
+}
+
+export function resolveStateDir(settings?: SettingsLike): string {
+	const override = nonEmpty(settings?.stateDir) ?? nonEmpty(process.env.FD_STATE_DIR);
+	if (override) return resolve(expandHome(override));
+	const xdg = nonEmpty(process.env.XDG_RUNTIME_DIR);
+	if (xdg) return join(xdg, "flightdeck");
+	const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+	return `/tmp/flightdeck-${uid}`;
+}
+
+export function resolveProjectRoot(cwd: string): string {
+	let current = resolve(cwd);
+	const markers = [".vstack-lock.json", ".pi", ".git"];
+	while (true) {
+		for (const marker of markers) {
+			if (existsSync(join(current, marker))) return current;
+		}
+		const parent = dirname(current);
+		if (parent === current) return resolve(cwd);
+		current = parent;
+	}
+}
+
+export function masterStatePath(projectRoot: string, settings: SettingsLike, sessionName: string): string {
+	const dir = nonEmpty(settings.flightdeckStateDir) ?? "tmp";
+	return join(projectRoot, dir, `flightdeck-state-${sessionName}.json`);
+}
+
+export interface DaemonPaths {
+	pid: string;
+	lock: string;
+	log: string;
+	heartbeat: string;
+	busy: string;
+	wakePending: string;
+	events: string;
+	wakeEvents: string;
+}
+
+export function daemonPaths(stateDir: string, sessionKey: string): DaemonPaths {
+	return {
+		busy: join(stateDir, `fd-master-${sessionKey}.busy`),
+		events: join(stateDir, `fd-daemon-events-${sessionKey}.jsonl`),
+		heartbeat: join(stateDir, `fd-daemon-${sessionKey}.heartbeat`),
+		lock: join(stateDir, `fd-daemon-${sessionKey}.lock`),
+		log: join(stateDir, `fd-daemon-${sessionKey}.log`),
+		pid: join(stateDir, `fd-daemon-${sessionKey}.pid`),
+		wakeEvents: join(stateDir, `fd-wake-events-${sessionKey}.log`),
+		wakePending: join(stateDir, `fd-wake-pending-${sessionKey}`),
+	};
+}
+
+function readJsonFile<T>(path: string): T | undefined {
+	try {
+		const text = readFileSync(path, "utf8");
+		if (!text.trim()) return undefined;
+		return JSON.parse(text) as T;
+	} catch {
+		return undefined;
+	}
+}
+
+export function readMasterState(path: string): { state?: MasterState; error?: string } {
+	if (!existsSync(path)) return {};
+	try {
+		const text = readFileSync(path, "utf8");
+		if (!text.trim()) return { state: emptyState() };
+		const parsed = JSON.parse(text);
+		if (!parsed || typeof parsed !== "object") return { error: "master state JSON is not an object" };
+		const raw = parsed as Partial<MasterState>;
+		const issues: Record<string, IssueRecord> = {};
+		if (raw.issues && typeof raw.issues === "object" && !Array.isArray(raw.issues)) {
+			for (const [issue, value] of Object.entries(raw.issues as Record<string, unknown>)) {
+				if (value && typeof value === "object" && !Array.isArray(value)) {
+					issues[issue] = { issue, ...(value as Record<string, unknown>) } as IssueRecord;
+				}
+			}
+		}
+		return {
+			state: {
+				conflict_graph: raw.conflict_graph ?? { edges: [], computed_at: null },
+				issues,
+				merge_queue: Array.isArray(raw.merge_queue) ? raw.merge_queue.filter((v): v is string => typeof v === "string") : [],
+				paused_for_user: raw.paused_for_user ?? null,
+				session_id: raw.session_id,
+				started_at: raw.started_at,
+				terminated: raw.terminated ?? false,
+				terminated_at: raw.terminated_at,
+			},
+		};
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+function emptyState(): MasterState {
+	return {
+		conflict_graph: { edges: [], computed_at: null },
+		issues: {},
+		merge_queue: [],
+		paused_for_user: null,
+		terminated: false,
+	};
+}
+
+function readPidFile(path: string): number | undefined {
+	if (!existsSync(path)) return undefined;
+	const text = (() => {
+		try {
+			return readFileSync(path, "utf8").trim();
+		} catch {
+			return "";
+		}
+	})();
+	const pid = Number.parseInt(text, 10);
+	return Number.isFinite(pid) && pid > 0 ? pid : undefined;
+}
+
+function isPidAlive(pid: number | undefined): boolean {
+	if (!pid) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		const code = typeof error === "object" && error && "code" in error ? (error as { code?: string }).code : undefined;
+		// EPERM means the process exists but we can't signal it — still alive.
+		return code === "EPERM";
+	}
+}
+
+function fileMtimeSec(path: string): number | undefined {
+	try {
+		return Math.floor(statSync(path).mtimeMs / 1000);
+	} catch {
+		return undefined;
+	}
+}
+
+function readLastLines(path: string, maxLines: number): string[] {
+	try {
+		const text = readFileSync(path, "utf8");
+		const lines = text.split(/\r?\n/);
+		while (lines.length && !lines[lines.length - 1]) lines.pop();
+		if (lines.length <= maxLines) return lines;
+		return lines.slice(lines.length - maxLines);
+	} catch {
+		return [];
+	}
+}
+
+function readJsonLines(path: string, maxLines: number): unknown[] {
+	const lines = readLastLines(path, maxLines);
+	const out: unknown[] = [];
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		try {
+			out.push(JSON.parse(trimmed));
+		} catch {
+			// Skip malformed lines; daemon truncation/race produces them rarely.
+		}
+	}
+	return out;
+}
+
+function countSubscribers(stateDir: string): DaemonHealth["subscriberCounts"] {
+	const counts = { opencode: 0, claude: 0, pi: 0, codex: 0 };
+	let entries: string[];
+	try {
+		entries = readdirSync(stateDir);
+	} catch {
+		return counts;
+	}
+	for (const entry of entries) {
+		if (!entry.endsWith(".pid")) continue;
+		if (entry.startsWith("fd-subscriber-")) counts.opencode += 1;
+		else if (entry.startsWith("fd-cc-subscriber-")) counts.claude += 1;
+		else if (entry.startsWith("fd-pi-subscriber-")) counts.pi += 1;
+		else if (entry.startsWith("fd-cx-subscriber-")) counts.codex += 1;
+	}
+	return counts;
+}
+
+export function readDaemonHealth(
+	stateDir: string,
+	sessionKey: string,
+	logTail: number = DEFAULT_LOG_TAIL,
+	wakeTail: number = DEFAULT_WAKE_TAIL,
+): DaemonHealth {
+	const paths = daemonPaths(stateDir, sessionKey);
+	const pid = readPidFile(paths.pid);
+	const pidAlive = isPidAlive(pid);
+	const heartbeatExists = existsSync(paths.heartbeat);
+	const heartbeatAgeSec = heartbeatExists
+		? Math.max(0, Math.floor(Date.now() / 1000) - (fileMtimeSec(paths.heartbeat) ?? 0))
+		: undefined;
+	const busy = readJsonFile<{ pid?: number; master_pane_id?: string; started_at?: string }>(paths.busy);
+	const wakePending = readJsonFile<DaemonHealth["wakePending"]>(paths.wakePending);
+	const logTailLines = readLastLines(paths.log, logTail);
+	const wakeEventsRecent = readJsonLines(paths.wakeEvents, wakeTail) as WakeEvent[];
+	return {
+		busy,
+		busyPath: paths.busy,
+		heartbeatAgeSec,
+		heartbeatExists,
+		heartbeatPath: paths.heartbeat,
+		logPath: paths.log,
+		logTail: logTailLines,
+		pid,
+		pidAlive,
+		pidFile: paths.pid,
+		sessionKey,
+		stateDir,
+		subscriberCounts: countSubscribers(stateDir),
+		wakeEventsPath: paths.wakeEvents,
+		wakeEventsRecent,
+		wakePending,
+		wakePendingPath: paths.wakePending,
+	};
+}
+
+export function readPendingEvents(stateDir: string, sessionKey: string, maxLines: number = DEFAULT_LOG_TAIL): DaemonEvent[] {
+	const paths = daemonPaths(stateDir, sessionKey);
+	return readJsonLines(paths.events, maxLines) as DaemonEvent[];
+}
+
+export function buildSnapshot(cwd: string, settings: SettingsLike, options?: { logTailLines?: number; wakeEventsLines?: number }): FlightdeckSnapshot | undefined {
+	const tmux = resolveTmuxContext();
+	if (!tmux) return undefined;
+	const stateDir = resolveStateDir(settings);
+	const projectRoot = resolveProjectRoot(cwd);
+	const statePath = masterStatePath(projectRoot, settings, tmux.sessionName);
+	const { state, error } = readMasterState(statePath);
+	const daemon = readDaemonHealth(
+		stateDir,
+		tmux.sessionKey,
+		options?.logTailLines ?? DEFAULT_LOG_TAIL,
+		options?.wakeEventsLines ?? DEFAULT_WAKE_TAIL,
+	);
+	const pendingEvents = readPendingEvents(stateDir, tmux.sessionKey, options?.logTailLines ?? DEFAULT_LOG_TAIL);
+	return {
+		daemon,
+		master: state,
+		masterError: error,
+		masterStatePath: statePath,
+		pendingEvents,
+		stateDir,
+		tmux,
+		wakeEvents: daemon.wakeEventsRecent ?? [],
+	};
+}
+
+export function isFlightdeckActive(snapshot: FlightdeckSnapshot | undefined): boolean {
+	if (!snapshot) return false;
+	if (snapshot.master && !snapshot.master.terminated && Object.keys(snapshot.master.issues).length > 0) return true;
+	if (snapshot.daemon.pidAlive) return true;
+	return false;
+}
+
+export function sortedIssues(state: MasterState | undefined): IssueRecord[] {
+	if (!state) return [];
+	return Object.values(state.issues).sort((a, b) => {
+		const aTs = a.spawned_at ?? "";
+		const bTs = b.spawned_at ?? "";
+		if (aTs && bTs && aTs !== bTs) return aTs.localeCompare(bTs);
+		return a.issue.localeCompare(b.issue);
+	});
+}
+
+export function flatDecisionsLog(state: MasterState | undefined, max = 200): Array<{ issue: string; ts: string; prompt_tag: string; answer: string }> {
+	if (!state) return [];
+	const out: Array<{ issue: string; ts: string; prompt_tag: string; answer: string }> = [];
+	for (const issue of Object.values(state.issues)) {
+		for (const entry of issue.decisions_log ?? []) {
+			out.push({ answer: entry.answer, issue: issue.issue, prompt_tag: entry.prompt_tag, ts: entry.ts });
+		}
+	}
+	out.sort((a, b) => b.ts.localeCompare(a.ts));
+	return out.slice(0, max);
+}
+
+export function ageSecondsSince(iso: string | undefined | null): number | undefined {
+	if (!iso) return undefined;
+	const t = Date.parse(iso);
+	if (!Number.isFinite(t)) return undefined;
+	return Math.max(0, Math.floor((Date.now() - t) / 1000));
+}
+
+export function formatAge(seconds: number | undefined): string {
+	if (seconds === undefined) return "—";
+	if (seconds < 60) return `${seconds}s`;
+	if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+	if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
+	return `${Math.floor(seconds / 86_400)}d`;
+}
+
+export interface ConversationTurn {
+	ts: string;
+	pane_id: string;
+	harness?: string;
+	tag?: string;
+	hash?: string;
+	excerpt: string;
+}
+
+/**
+ * Fold the latest wake events into a per-pane conversation history.
+ * Best-effort — events get drained by the master ack, so this represents
+ * whatever has appeared since the last drain, plus what the buffer carried
+ * over.
+ */
+export function foldWakeEventsIntoConversations(
+	previous: Map<string, ConversationTurn[]>,
+	events: WakeEvent[],
+	maxPerPane: number,
+	maxChars: number,
+): Map<string, ConversationTurn[]> {
+	const next = new Map<string, ConversationTurn[]>();
+	for (const [k, v] of previous) next.set(k, [...v]);
+	for (const ev of events) {
+		const pane = ev.pane_id;
+		if (!pane) continue;
+		const text = typeof ev.last_assistant_text === "string" ? ev.last_assistant_text.trim() : "";
+		if (!text) continue;
+		const list = next.get(pane) ?? [];
+		const last = list[list.length - 1];
+		if (last && last.hash === ev.hash) continue;
+		list.push({
+			excerpt: text.length > maxChars ? `${text.slice(0, maxChars)}…` : text,
+			harness: ev.harness,
+			hash: ev.hash,
+			pane_id: pane,
+			tag: ev.classifier_tag,
+			ts: ev.ts ?? new Date().toISOString(),
+		});
+		while (list.length > maxPerPane) list.shift();
+		next.set(pane, list);
+	}
+	return next;
+}

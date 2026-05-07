@@ -94,6 +94,12 @@ Lessons distilled from real multi-issue session experience are grouped by domain
 - **PR/branch expansion bias** — prefer fixing additional findings inline in the current PR over deferring to new issues, UNLESS strong reason exists (different scope, different agent, requires measurement, blocked dependency, architectural decision needed). Strong reasons are concrete, not "tidiness".
 - **Merge-order tiebreakers**: (1) smallest scope first, (2) overlapping-files: smaller goes first, (3) otherwise: any order is fine.
 
+### Pi harness
+
+- **Optional dashboard extension** — when the master agent runs under the Pi harness, the [`pi-flightdeck`](../../pi-extensions/pi-flightdeck/README.md) extension renders a read-only mission-control overlay reading the same on-disk artifacts master and the daemon already write (`tmp/flightdeck-state-<SESSION>.json`, `${FD_STATE_DIR}/fd-{daemon,master,wake-events}-<KEY>.*`). It surfaces a high-contrast pause banner whenever `paused_for_user` is set, a persistent dashboard widget, and a `/flightdeck` popup with Overview / Live feed / Conversations / Conflicts & merges / Decisions / Daemon tabs. The skill is fully harness-agnostic and works without the extension — the extension is purely additive UX. Master never relies on it.
+- **No write coupling** — pi-flightdeck never mutates flightdeck state, the master-busy lock, the wake-events log, or pane registries. Daemon owns wake delivery, master owns state mutation via `flightdeck-state`, and `pane-respond` owns sending input to inner panes. Forwarded user decisions reach master via normal Pi chat (the user types a reply when the pause banner appears), never via the extension.
+- **No equivalent for other harnesses** — claude code, opencode, and codex masters use `flightdeck-state get`, `pane-registry list`, and `flightdeck-daemon health` directly. The on-disk schema in this SKILL.md is the canonical interface; do not introduce harness-specific shortcuts that bypass it.
+
 ### Structured questions (`patterns/opencode-questions.md`, `patterns/pi-questions.md`)
 
 - **Opencode wake events** — `oc-question` is canonical. Daemon emits the structured payload (header, options[], multiple) with classifier_tag `oc-question` and source `oc-question-event`. Master answers via `pane-respond --harness opencode --question <reqID> --answer "<label>"` / `--answer-multi "<l1,l2>"` / `--answers-json '[["tab1"],["tab2"]]'` / `--reject` — routes to `POST <oc_url>/question/<reqID>/{reply,reject}`. No tmux send-keys involved.
