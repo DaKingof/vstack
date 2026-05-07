@@ -4,9 +4,17 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-caveman.installed");
+const BRIDGE_SYMBOL = Symbol.for("vstack.pi.caveman");
 const STATE_TYPE = "vstack-caveman:state";
 const STATUS_KEY = "caveman";
 const CONFIG_ID = "@vanillagreen/pi-caveman";
+
+interface CavemanBridge {
+	isActive(): boolean;
+	getMode(): Mode;
+	getLastActiveMode(): ActiveMode;
+	subscribe(listener: () => void): () => void;
+}
 
 type Mode = "off" | "lite" | "full" | "ultra" | "micro";
 type ActiveMode = Exclude<Mode, "off">;
@@ -183,6 +191,24 @@ export default function caveman(pi: ExtensionAPI): void {
 
 	let state: CavemanState = initialState();
 	let activeCtx: ExtensionContext | undefined;
+	const listeners = new Set<() => void>();
+	const notifyListeners = () => {
+		for (const listener of [...listeners]) {
+			try { listener(); } catch { /* swallow listener errors */ }
+		}
+	};
+
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const bridge: CavemanBridge = {
+		isActive: () => state.mode !== "off",
+		getMode: () => state.mode,
+		getLastActiveMode: () => state.lastActiveMode,
+		subscribe: (listener) => {
+			listeners.add(listener);
+			return () => { listeners.delete(listener); };
+		},
+	};
+	host[BRIDGE_SYMBOL] = bridge;
 
 	const persist = () => pi.appendEntry<CavemanState>(STATE_TYPE, { ...state, updatedAt: new Date().toISOString() });
 	const syncStatus = (ctx?: ExtensionContext) => {
@@ -195,13 +221,18 @@ export default function caveman(pi: ExtensionAPI): void {
 		activeCtx = ctx;
 		state = restoreState(ctx);
 		syncStatus(ctx);
+		notifyListeners();
 	});
 	pi.on("session_tree", (_event, ctx) => {
 		activeCtx = ctx;
 		state = restoreState(ctx);
 		syncStatus(ctx);
+		notifyListeners();
 	});
-	pi.on("session_shutdown", (_event, ctx) => ctx.ui.setStatus(STATUS_KEY, undefined));
+	pi.on("session_shutdown", (_event, ctx) => {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		notifyListeners();
+	});
 
 	const applySubcommand = async (sub: string, ctx: ExtensionContext) => {
 		activeCtx = ctx;
@@ -228,6 +259,7 @@ export default function caveman(pi: ExtensionAPI): void {
 		state = { mode, lastActiveMode, source: "session", updatedAt: new Date().toISOString() };
 		persist();
 		syncStatus(ctx);
+		notifyListeners();
 		ctx.ui.notify(mode === "off" ? "Caveman off." : `Caveman ${mode} active.`, "info");
 	};
 
@@ -255,6 +287,7 @@ export default function caveman(pi: ExtensionAPI): void {
 		if (clarity && !settingBoolean("resumeAfterClarityEscape", true, ctx.cwd)) {
 			state = { mode: "off", lastActiveMode: state.lastActiveMode, source: "session", updatedAt: new Date().toISOString() };
 			persist();
+			notifyListeners();
 		}
 		syncStatus(ctx);
 		return { systemPrompt: `${event.systemPrompt}\n\n${prompt}` };

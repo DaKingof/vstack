@@ -20,6 +20,22 @@ const IMAGE_PATH_PATTERN = /(^|[\s(\[{<"'`])(@?(?:~|\.\.?|\/)[^\s)\]}>"'`]+?\.(?
 const QUESTION_SERVICE_SYMBOL = Symbol.for("vstack.pi-questions.service");
 const QOL_NOTIFICATION_SERVICE_SYMBOL = Symbol.for("vstack.pi-qol.notification-service");
 const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
+const CAVEMAN_BRIDGE_SYMBOL = Symbol.for("vstack.pi.caveman");
+const CAVEMAN_ICON_ACTIVE = "\uee9a";
+const CAVEMAN_ICON_INACTIVE = "\u{f19e0}";
+
+interface CavemanBridge {
+	isActive(): boolean;
+	getMode(): string;
+	getLastActiveMode(): string;
+	subscribe(listener: () => void): () => void;
+}
+
+function readCavemanBridge(): CavemanBridge | undefined {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const value = host[CAVEMAN_BRIDGE_SYMBOL];
+	return value && typeof value === "object" ? (value as CavemanBridge) : undefined;
+}
 const THINKING_TIMER_STORE_SYMBOL = Symbol.for("vstack.pi-qol.thinking-timer.store");
 const THINKING_TIMER_PATCH_SYMBOL = Symbol.for("vstack.pi-qol.thinking-timer.patch");
 const SESSION_SEARCH_PENDING_SYMBOL = Symbol.for("vstack.pi-qol.session-search.pending-context");
@@ -1193,17 +1209,25 @@ function setTmuxWindowOption(target: string, option: string, value: string): voi
 
 function renderStatusLine(width: number, ctx: ExtensionContext, git: GitState, pi: ExtensionAPI, theme: Pick<Theme, "fg">): string {
 	const { label: contextLabel, percent } = statuslineContextInfo(ctx);
-	const leftPlain = `${git.projectName}${gitBadge(git, settingBoolean("showDirtyMarker", true, ctx.cwd))} ${formatModel(ctx, pi)} (${contextLabel})`;
+	const leftHead = `${git.projectName}${gitBadge(git, settingBoolean("showDirtyMarker", true, ctx.cwd))} ${formatModel(ctx, pi)}`;
+	const leftTail = ` (${contextLabel})`;
+	const caveman = readCavemanBridge();
+	const cavemanGlyph = caveman ? (caveman.isActive() ? CAVEMAN_ICON_ACTIVE : CAVEMAN_ICON_INACTIVE) : "";
+	const cavemanTone: "success" | "muted" = caveman?.isActive() ? "success" : "muted";
+	const cavemanSegment = caveman ? ` / ${cavemanGlyph}` : "";
+	const leftPlain = `${leftHead}${cavemanSegment}${leftTail}`;
 	const rightPlain = percent === null ? "…%" : `${percent}%`;
 	const percentColor = percent === null ? "muted" : percent <= 15 ? "error" : percent <= 30 ? "warning" : "success";
-	const left = theme.fg("accent", leftPlain);
+	const leftColored = caveman
+		? `${theme.fg("accent", `${leftHead} / `)}${theme.fg(cavemanTone, cavemanGlyph)}${theme.fg("accent", leftTail)}`
+		: theme.fg("accent", leftPlain);
 	const right = theme.fg(percentColor, rightPlain);
 	const minimumGap = 1;
 	const gapWidth = Math.max(minimumGap, width - visibleWidth(leftPlain) - visibleWidth(rightPlain) - 2);
 	const filled = percent === null ? 0 : Math.round(gapWidth * (percent / 100));
 	const empty = Math.max(0, gapWidth - filled);
 	const bar = " ".repeat(empty) + theme.fg("warning", "─".repeat(filled));
-	return truncateToWidth(`${left} ${bar} ${right}`, width, "");
+	return truncateToWidth(`${leftColored} ${bar} ${right}`, width, "");
 }
 
 type QolSummaryProfile = "concise" | "balanced" | "exhaustive";
@@ -4148,6 +4172,14 @@ export default function qol(pi: ExtensionAPI): void {
 	};
 
 	let currentCtx: ExtensionContext | undefined;
+	let cavemanUnsubscribe: (() => void) | undefined;
+	const subscribeCavemanBridge = () => {
+		cavemanUnsubscribe?.();
+		cavemanUnsubscribe = undefined;
+		const bridge = readCavemanBridge();
+		if (!bridge) return;
+		cavemanUnsubscribe = bridge.subscribe(() => requestRender());
+	};
 	const notificationService: QolNotificationService = {
 		notifyQuestionOpened(ctx, event) {
 			notifyQuestionOpened(ctx ?? currentCtx, event, "question");
@@ -4164,6 +4196,7 @@ export default function qol(pi: ExtensionAPI): void {
 
 	pi.on("session_start", (event, ctx) => {
 		currentCtx = ctx;
+		subscribeCavemanBridge();
 		latestSystemPromptOptions = undefined;
 		resetAutoRename();
 		resetThinkingTimer(ctx);
@@ -4222,6 +4255,8 @@ export default function qol(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		cavemanUnsubscribe?.();
+		cavemanUnsubscribe = undefined;
 		resetAutoRename();
 		clearIdleCompactionTimer();
 		clearQuestionSubscribeTimer();
