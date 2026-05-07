@@ -30,6 +30,12 @@ export const webSearchSchema = Type.Object({
 
 export type WebSearchInput = Static<typeof webSearchSchema>;
 
+const DEFAULT_WEB_SEARCH_RESULTS = 5;
+
+function effectiveNumResults(params: WebSearchInput): number {
+	return Math.max(1, Math.floor(params.numResults ?? DEFAULT_WEB_SEARCH_RESULTS));
+}
+
 function normalizeQueries(params: WebSearchInput): string[] {
 	const queries = [...(params.queries ?? [])];
 	if (params.query) queries.unshift(params.query);
@@ -61,6 +67,7 @@ function formatProviderBody(provider: string, all: any[], answer?: string): stri
 
 export function createWebSearchToolDefinition(pi: ExtensionAPI, getSettings: (cwd?: string) => WebToolsSettings, name = "web_search", forcedProvider?: WebProvider) {
 	async function executeResolvedProvider(provider: ResolvedWebProvider, settings: WebToolsSettings, queries: string[], params: WebSearchInput, signal: AbortSignal | undefined): Promise<any> {
+		const numResults = effectiveNumResults(params);
 		if (provider === "openai-native") return { content: [{ type: "text", text: nativeOpenAiNotice() }], details: { provider: "openai-native" } };
 
 		if (provider === "perplexity") {
@@ -70,14 +77,14 @@ export function createWebSearchToolDefinition(pi: ExtensionAPI, getSettings: (cw
 			for (const query of queries) {
 				const response = await client.search({
 					query,
-					numResults: params.numResults,
+					numResults,
 					includeDomains: params.includeDomains,
 					excludeDomains: params.excludeDomains,
 					startPublishedDate: params.startPublishedDate,
 					endPublishedDate: params.endPublishedDate,
 				}, signal);
 				if (!answer && response.answer) answer = response.answer;
-				for (const result of response.results) all.push({ ...result });
+				for (const result of response.results.slice(0, numResults)) all.push({ ...result });
 			}
 			return { content: [{ type: "text", text: formatProviderBody("perplexity", all, answer) }], details: { provider: "perplexity", answer, results: all } };
 		}
@@ -92,13 +99,13 @@ export function createWebSearchToolDefinition(pi: ExtensionAPI, getSettings: (cw
 					const client = new GeminiApiClient({ apiKey: settings.apiKeys.gemini });
 					response = await client.search({ query, includeDomains: params.includeDomains, excludeDomains: params.excludeDomains }, signal);
 				} else if (settings.browserCookieAccess) {
-					response = await geminiWebSearch({ query }, { preferredBrowser: settings.browserCookies.preferredBrowser, browserProfile: settings.browserCookies.profile, signal });
+					response = await geminiWebSearch({ query, numResults }, { preferredBrowser: settings.browserCookies.preferredBrowser, browserProfile: settings.browserCookies.profile, signal });
 					sourceLabel = "gemini-web";
 				} else {
 					throw new Error("Gemini provider requires GEMINI_API_KEY or browserCookieAccess=true with a signed-in Firefox/Zen/Chrome.");
 				}
 				if (!answer && response.answer) answer = response.answer;
-				for (const result of response.results) all.push({ ...result });
+				for (const result of response.results.slice(0, numResults)) all.push({ ...result });
 			}
 			return { content: [{ type: "text", text: formatProviderBody(sourceLabel, all, answer) }], details: { provider: sourceLabel, answer, results: all } };
 		}
@@ -107,8 +114,8 @@ export function createWebSearchToolDefinition(pi: ExtensionAPI, getSettings: (cw
 			const client = new DuckDuckGoClient();
 			const all = [] as any[];
 			for (const query of queries) {
-				const response = await client.search({ query, numResults: params.numResults, includeDomains: params.includeDomains, excludeDomains: params.excludeDomains }, signal);
-				for (const result of response.results) all.push({ ...result });
+				const response = await client.search({ query, numResults, includeDomains: params.includeDomains, excludeDomains: params.excludeDomains }, signal);
+				for (const result of response.results.slice(0, numResults)) all.push({ ...result });
 			}
 			return { content: [{ type: "text", text: formatProviderBody("duckduckgo", all) }], details: { provider: "duckduckgo", results: all } };
 		}
@@ -120,7 +127,7 @@ export function createWebSearchToolDefinition(pi: ExtensionAPI, getSettings: (cw
 		for (const query of queries) {
 			const response = await client.search({
 				query,
-				numResults: params.numResults,
+				numResults,
 				textMaxCharacters: params.textMaxCharacters,
 				includeDomains: params.includeDomains,
 				excludeDomains: params.excludeDomains,
@@ -128,7 +135,7 @@ export function createWebSearchToolDefinition(pi: ExtensionAPI, getSettings: (cw
 				endPublishedDate: params.endPublishedDate,
 				includeContent: params.includeContent,
 			}, signal);
-			for (const result of response.results) {
+			for (const result of response.results.slice(0, numResults)) {
 				const stored = storeProviderContent(pi, result, {
 					query,
 					provider,
@@ -146,9 +153,9 @@ export function createWebSearchToolDefinition(pi: ExtensionAPI, getSettings: (cw
 		renderShell: "self" as const,
 		name,
 		label: "Web Search",
-		description: "Unified web search. Supports provider auto|exa|perplexity|gemini|exa-mcp|duckduckgo|openai-native, batch queries, recency/date/domain filters, and optional content storage. Auto prefers configured keyed providers, then no-key Exa MCP/DuckDuckGo, then OpenAI native when supported.",
-		promptSnippet: "Search the web across configured providers; auto uses keyed providers first and no-key direct fallbacks before OpenAI native.",
-		promptGuidelines: ["Use web_search for current web information; prefer web_research for deep evidence-backed findings reports."],
+		description: "Unified web search. Supports provider auto|exa|perplexity|gemini|exa-mcp|duckduckgo|openai-native, batch queries, recency/date/domain filters, and optional content storage. Auto prefers configured keyed providers, then no-key Exa MCP/DuckDuckGo, then Gemini Web/OpenAI native. Defaults to 5 results unless numResults is set.",
+		promptSnippet: "Search the web across configured providers. For simple factual questions, run one targeted search with numResults<=5, answer from the best source, and stop. Use web_research only for deep reports.",
+		promptGuidelines: ["Use web_search for current web information; for simple factual questions do one targeted search with a small result count. Prefer web_research only for deep evidence-backed findings reports."],
 		parameters: webSearchSchema,
 		renderCall(args: WebSearchInput, theme: any, context: any) {
 			if (context?.executionStarted && !context?.isPartial) return emptyComponent();

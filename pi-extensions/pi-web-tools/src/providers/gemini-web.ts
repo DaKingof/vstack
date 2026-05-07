@@ -26,6 +26,7 @@ export interface GeminiWebOptions {
 
 export interface GeminiWebSearchParams {
 	query: string;
+	numResults?: number;
 }
 
 function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
@@ -154,13 +155,14 @@ export async function geminiWebSearch(params: GeminiWebSearchParams, options: Ge
 	const browserResult = await readBrowserCookies({ preferredBrowser: options.preferredBrowser, profile: options.browserProfile, requiredCookies: REQUIRED_COOKIES });
 	if (!browserResult) throw new Error("No browser cookies found for gemini.google.com. Sign into Gemini in Firefox/Zen/Chrome and enable browserCookieAccess.");
 	const client = new GeminiWebClient(browserResult.cookies, options.fetchImpl ?? fetch);
-	const prompt = `Search the web and answer with citations: ${params.query}\n\nFor each source, include the full URL inline so it can be parsed.`;
+	const limit = Math.max(1, Math.floor(params.numResults ?? 5));
+	const prompt = `Search the web and answer with citations: ${params.query}\n\nUse at most ${limit} high-quality sources. For each source, include the full URL inline so it can be parsed. Do not include extra source lists beyond the limit.`;
 	const answer = await client.query(prompt, options);
 	return {
 		answer,
-		results: extractCitations(answer),
+		results: extractCitations(answer).slice(0, limit),
 		raw: { answer, browser: browserResult.browser },
-		metadata: { provider: "gemini-web", browser: browserResult.browser, profile: browserResult.profile, model: options.model ?? "gemini-2.5-flash" },
+		metadata: { provider: "gemini-web", browser: browserResult.browser, profile: browserResult.profile, model: options.model ?? "gemini-2.5-flash", numResults: limit },
 	};
 }
 

@@ -88,7 +88,7 @@ Settings are read from the vstack extension-manager namespace:
 Key toggles:
 
 - `exaAdvancedEnabled` is required to expose `web_answer`, `web_find_similar`, and `code_search` to the active toolset (gated to keep the default surface small). Flip it on per-user or per-project to use them.
-- `web_search provider=auto` tries keyed providers first (`exa`, `perplexity`, `gemini`), then no-key fallbacks (`exa-mcp`, `duckduckgo`), then `openai-native` if supported. Put providers in `enabledProviders` to allow or remove them; set `/web-tools:provider:<name>` to force one for the session.
+- `web_search provider=auto` tries keyed providers first (`exa`, `perplexity`, Gemini API), then no-key fallbacks (`exa-mcp`, `duckduckgo`), then Gemini Web cookie auth when enabled, then `openai-native` if supported. Simple searches default to 5 results; set `numResults` only when you need more. Put providers in `enabledProviders` to allow or remove them; set `/web-tools:provider:<name>` to force one for the session.
 - `browserCookieAccess` opts in to Gemini Web cookie scraping. With `browserCookies.preferredBrowser` set to `auto` (default) / `firefox` / `zen` / `chrome` / `chromium`, the package reads cookies from Firefox/Zen unencrypted SQLite or Chromium-family DBs (libsecret on Linux, Keychain on macOS, DPAPI master key + AES-GCM on Windows).
 - `pdfOcr.enabled` controls whether `pdftoppm` rasterizes scanned PDFs into ImageContent blocks for vision OCR. Defaults on; set to false to skip rasterization on scanned PDFs.
 - `githubClone.enabled` toggles the GitHub clone cache (default on). Repos exceeding `maxRepoSizeMB` automatically fall back to API-based extraction.

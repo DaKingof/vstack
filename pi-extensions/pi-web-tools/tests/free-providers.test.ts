@@ -58,6 +58,19 @@ test("ExaMcpClient calls JSON-RPC MCP endpoint and parses SSE response", async (
 	assert.equal(result.metadata.provider, "exa-mcp");
 });
 
+test("web_search defaults simple searches to five results", async () => {
+	const originalFetch = globalThis.fetch;
+	(globalThis as any).fetch = (async () => new Response(Array.from({ length: 8 }, (_v, i) => `<div class="result"><a class="result__a" href="https://example.com/${i}">Result ${i}</a><div class="result__snippet">Snippet ${i}</div></div>`).join("\n"), { status: 200 })) as typeof fetch;
+	try {
+		const tool = createWebSearchToolDefinition({ appendEntry() {} } as any, () => settings({ enabledProviders: ["duckduckgo"] }));
+		const result = await tool.execute("call", { query: "q", provider: "duckduckgo" }, undefined, undefined, { cwd: process.cwd(), model: { provider: "openai-codex" } } as any);
+		assert.equal(result.details.results.length, 5);
+		assert.match(textOf(result), /Results: 5/);
+	} finally {
+		(globalThis as any).fetch = originalFetch;
+	}
+});
+
 test("web_search non-storing provider tells models to fetch URLs instead of using result numbers as content ids", async () => {
 	const originalFetch = globalThis.fetch;
 	(globalThis as any).fetch = (async () => new Response(`<div class="result"><a class="result__a" href="https://example.com/a">A</a><div class="result__snippet">Alpha</div></div>`, { status: 200 })) as typeof fetch;

@@ -54,8 +54,17 @@ export function providerIsAvailable(provider: ResolvedWebProvider, settings: Web
 export function resolveWebProviderCandidates(requested: WebProvider | undefined, settings: WebToolsSettings, model?: ModelLike): ResolvedWebProvider[] {
 	const desired = requested ?? settings.defaultProvider;
 	if (desired !== "auto") return providerIsAvailable(desired, settings, model) ? [desired] : [];
-	return (["exa", "perplexity", "gemini", "exa-mcp", "duckduckgo", "openai-native"] as const)
-		.filter((provider) => providerIsAvailable(provider, settings, model));
+	const enabled = new Set(settings.enabledProviders);
+	const availability = providerAvailability(settings, model);
+	const candidates: ResolvedWebProvider[] = [];
+	if (enabled.has("exa") && availability.exaDirect) candidates.push("exa");
+	if (enabled.has("perplexity") && availability.perplexity) candidates.push("perplexity");
+	if (enabled.has("gemini") && availability.geminiApi) candidates.push("gemini");
+	if (enabled.has("exa-mcp") && availability.exaMcp) candidates.push("exa-mcp");
+	if (enabled.has("duckduckgo") && availability.duckduckgo) candidates.push("duckduckgo");
+	if (enabled.has("gemini") && !availability.geminiApi && availability.geminiWeb) candidates.push("gemini");
+	if (enabled.has("openai-native") && availability.openAiNative) candidates.push("openai-native");
+	return candidates;
 }
 
 export function resolveWebProvider(requested: WebProvider | undefined, settings: WebToolsSettings, model?: ModelLike): ProviderResolution {
