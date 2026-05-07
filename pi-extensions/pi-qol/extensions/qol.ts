@@ -21,8 +21,25 @@ const QUESTION_SERVICE_SYMBOL = Symbol.for("vstack.pi-questions.service");
 const QOL_NOTIFICATION_SERVICE_SYMBOL = Symbol.for("vstack.pi-qol.notification-service");
 const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 const CAVEMAN_BRIDGE_SYMBOL = Symbol.for("vstack.pi.caveman");
+const PI_AGENTS_STATUSLINE_SYMBOL = Symbol.for("vstack.pi-agents-tmux.statusline");
 const CAVEMAN_ICON_ACTIVE = "\uee9a";
 const CAVEMAN_ICON_INACTIVE = "\u{f19e0}";
+
+type AgentAsciiColor = "red" | "green" | "yellow" | "blue" | "magenta" | "cyan";
+
+interface PiAgentsStatuslineBridge {
+	getCurrentSubagent(cwd?: string): { name: string; color?: string } | undefined;
+}
+
+const AGENT_ASCII_COLOR_SEQUENCE: AgentAsciiColor[] = ["magenta", "green", "blue", "cyan", "yellow", "red"];
+const AGENT_ASCII_BG: Record<AgentAsciiColor, { fg: number; bg: number }> = {
+	red: { fg: 37, bg: 41 },
+	green: { fg: 37, bg: 42 },
+	yellow: { fg: 30, bg: 43 },
+	blue: { fg: 37, bg: 44 },
+	magenta: { fg: 37, bg: 45 },
+	cyan: { fg: 30, bg: 46 },
+};
 
 interface CavemanBridge {
 	isActive(): boolean;
@@ -40,6 +57,53 @@ function readCavemanBridge(): CavemanBridge | undefined {
 	const host = globalThis as unknown as Record<PropertyKey, unknown>;
 	const value = host[CAVEMAN_BRIDGE_SYMBOL];
 	return value && typeof value === "object" ? (value as CavemanBridge) : undefined;
+}
+
+function readPiAgentsStatuslineBridge(): PiAgentsStatuslineBridge | undefined {
+	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const value = host[PI_AGENTS_STATUSLINE_SYMBOL];
+	return value && typeof value === "object" && typeof (value as PiAgentsStatuslineBridge).getCurrentSubagent === "function"
+		? (value as PiAgentsStatuslineBridge)
+		: undefined;
+}
+
+function normalizeAgentAsciiColor(value: string | undefined): AgentAsciiColor | undefined {
+	const normalized = value?.trim().toLowerCase().replace(/[^a-z]/g, "");
+	switch (normalized) {
+		case "red": return "red";
+		case "green": return "green";
+		case "yellow":
+		case "orange": return "yellow";
+		case "blue": return "blue";
+		case "magenta":
+		case "purple":
+		case "violet": return "magenta";
+		case "cyan":
+		case "teal": return "cyan";
+		default: return undefined;
+	}
+}
+
+function fallbackAgentAsciiColor(name: string): AgentAsciiColor {
+	let hash = 0;
+	for (const char of name) hash = ((hash * 31) + char.charCodeAt(0)) >>> 0;
+	return AGENT_ASCII_COLOR_SEQUENCE[hash % AGENT_ASCII_COLOR_SEQUENCE.length] ?? "magenta";
+}
+
+function ansiAgentBg(color: AgentAsciiColor, text: string): string {
+	const token = AGENT_ASCII_BG[color];
+	return `\x1b[${token.fg};${token.bg}m${text}\x1b[39;49m`;
+}
+
+function subagentStatuslineMarker(cwd: string, maxInnerWidth = 24): { plain: string; styled: string } | undefined {
+	const bridgeInfo = readPiAgentsStatuslineBridge()?.getCurrentSubagent(cwd);
+	const envName = process.env.PI_SUBAGENT_CHILD_AGENT?.trim();
+	const rawName = bridgeInfo?.name?.trim() || envName;
+	if (!rawName) return undefined;
+	const color = normalizeAgentAsciiColor(bridgeInfo?.color) ?? normalizeAgentAsciiColor(process.env.PI_SUBAGENT_CHILD_COLOR) ?? fallbackAgentAsciiColor(rawName);
+	const inner = truncateToWidth(rawName, Math.max(1, maxInnerWidth), "…");
+	const plain = ` ${inner} `;
+	return { plain, styled: ansiAgentBg(color, plain) };
 }
 const THINKING_TIMER_STORE_SYMBOL = Symbol.for("vstack.pi-qol.thinking-timer.store");
 const THINKING_TIMER_PATCH_SYMBOL = Symbol.for("vstack.pi-qol.thinking-timer.patch");
@@ -1270,12 +1334,14 @@ function renderStatusLine(width: number, ctx: ExtensionContext, git: GitState, p
 	const cavemanSegment = caveman ? ` / ${cavemanGlyph}` : "";
 	const contextSeparator = caveman ? "  / " : "";
 	const leftPlain = `${projectChunk}${thinkingChunk}${cavemanSegment}${contextSeparator}${contextChunk.trimStart()}`;
-	const rightPlain = percent === null ? "…%" : `${percent}%`;
+	const percentPlain = percent === null ? "…%" : `${percent}%`;
+	const subagentMarker = subagentStatuslineMarker(ctx.cwd);
+	const rightPlain = subagentMarker ? `${percentPlain} ${subagentMarker.plain}` : percentPlain;
 	const percentColor = percent === null ? "muted" : percent <= 15 ? "error" : percent <= 30 ? "warning" : "success";
 	const leftColored = caveman
 		? `${theme.fg("accent", projectChunk)}${theme.fg(THINKING_TOKEN[thinkingLevel], thinkingChunk)}${theme.fg("accent", " / ")}${theme.fg(cavemanTone, cavemanGlyph)}${theme.fg("accent", `${contextSeparator}${contextChunk.trimStart()}`)}`
 		: `${theme.fg("accent", projectChunk)}${theme.fg(THINKING_TOKEN[thinkingLevel], thinkingChunk)}${theme.fg("accent", contextChunk)}`;
-	const right = theme.fg(percentColor, rightPlain);
+	const right = subagentMarker ? `${theme.fg(percentColor, percentPlain)} ${subagentMarker.styled}` : theme.fg(percentColor, percentPlain);
 	const minimumGap = 1;
 	const gapWidth = Math.max(minimumGap, width - visibleWidth(leftPlain) - visibleWidth(rightPlain) - 2);
 	const filled = percent === null ? 0 : Math.round(gapWidth * (percent / 100));

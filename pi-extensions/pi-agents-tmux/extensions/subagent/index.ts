@@ -39,6 +39,7 @@ const PACKAGE_ID = "pi-agents-tmux";
 const CONFIG_ID = "@vanillagreen/pi-agents-tmux";
 const SESSION_BRIDGE_PACKAGE_ID = "@vanillagreen/pi-session-bridge";
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-agents-tmux.installed");
+const STATUSLINE_SYMBOL = Symbol.for("vstack.pi-agents-tmux.statusline");
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
@@ -52,6 +53,19 @@ const DEFAULT_RESULT_MAX_LINES = 4_000;
 const TRACE_VIEWER_WIDTH = "92%";
 const TRACE_VIEWER_MAX_HEIGHT = "88%";
 const MALFORMED_COMPLETION_GRACE_MS = 1_500;
+
+type AgentAsciiColor = "red" | "green" | "yellow" | "blue" | "magenta" | "cyan";
+
+interface SubagentStatuslineInfo {
+	name: string;
+	color?: AgentAsciiColor;
+}
+
+interface SubagentStatuslineBridge {
+	getCurrentSubagent(cwd?: string): SubagentStatuslineInfo | undefined;
+}
+
+const AGENT_ASCII_COLOR_SEQUENCE: AgentAsciiColor[] = ["magenta", "green", "blue", "cyan", "yellow", "red"];
 
 // Nerd Font glyphs (Font Awesome subset). All terminal output uses these
 // instead of unicode geometric/emoji shapes so rendering is consistent
@@ -70,6 +84,43 @@ const ICONS = {
 } as const;
 
 type VstackConfig = Record<string, unknown>;
+
+function normalizeAgentAsciiColor(value: string | undefined): AgentAsciiColor | undefined {
+	const normalized = value?.trim().toLowerCase().replace(/[^a-z]/g, "");
+	switch (normalized) {
+		case "red": return "red";
+		case "green": return "green";
+		case "yellow":
+		case "orange": return "yellow";
+		case "blue": return "blue";
+		case "magenta":
+		case "purple":
+		case "violet": return "magenta";
+		case "cyan":
+		case "teal": return "cyan";
+		default: return undefined;
+	}
+}
+
+function defaultAgentAsciiColor(agentName: string, agents: AgentConfig[]): AgentAsciiColor {
+	const names = agents.map((agent) => agent.name).sort((a, b) => a.localeCompare(b));
+	const index = Math.max(0, names.indexOf(agentName));
+	return AGENT_ASCII_COLOR_SEQUENCE[index % AGENT_ASCII_COLOR_SEQUENCE.length] ?? "magenta";
+}
+
+function resolveSubagentStatuslineInfo(agentName: string | undefined, cwd?: string): SubagentStatuslineInfo | undefined {
+	const name = agentName?.trim();
+	if (!name) return undefined;
+	const envColor = normalizeAgentAsciiColor(process.env.PI_SUBAGENT_CHILD_COLOR);
+	try {
+		const agents = discoverAgents(cwd ?? process.cwd(), "both").agents;
+		const agent = agents.find((candidate) => candidate.name === name);
+		const color = normalizeAgentAsciiColor(agent?.color) ?? envColor ?? defaultAgentAsciiColor(name, agents);
+		return { name, color };
+	} catch {
+		return { name, color: envColor };
+	}
+}
 
 function expandHome(input: string): string {
 	if (input === "~") return os.homedir();
@@ -3360,6 +3411,7 @@ async function writeLauncher(
 set -euo pipefail
 cd ${shellQuote(cwd)}
 export PI_SUBAGENT_CHILD_AGENT=${shellQuote(agent.name)}
+${agent.color ? `export PI_SUBAGENT_CHILD_COLOR=${shellQuote(agent.color)}` : "unset PI_SUBAGENT_CHILD_COLOR"}
 export PI_SUBAGENT_PARENT_SESSION_ID=${shellQuote(parentSessionId)}
 # Inherit cached 1Password service-account token if available so the child
 # pi can read op:// refs without triggering the desktop CLI integration
@@ -4524,6 +4576,12 @@ export default function (pi: ExtensionAPI) {
 	if (!settingBoolean("enabled", true)) return;
 
 	const childAgentName = process.env.PI_SUBAGENT_CHILD_AGENT;
+	const statuslineBridge: SubagentStatuslineBridge = {
+		getCurrentSubagent(cwd?: string) {
+			return resolveSubagentStatuslineInfo(childAgentName, cwd);
+		},
+	};
+	(globalThis as unknown as Record<PropertyKey, unknown>)[STATUSLINE_SYMBOL] = statuslineBridge;
 	let pendingChildCompletion: { agent: string; taskId: string; status: string; outboxFile: string } | undefined;
 	let completionPoller: ReturnType<typeof setInterval> | undefined;
 	let completionPollInFlight = false;

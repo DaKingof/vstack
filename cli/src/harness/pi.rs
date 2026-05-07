@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 /// description: "..."
 /// tools: read, grep, find, ls, bash, edit, write
 /// model: claude-opus-4-5
+/// color: green
 /// pane: true
 /// ---
 /// ```
@@ -44,6 +45,9 @@ pub fn generate_agent(
     output.push_str(&format!("description: \"{}\"\n", desc));
     output.push_str(&format!("tools: {}\n", tools));
     output.push_str(&format!("model: {}\n", model));
+    if let Some(ref color) = agent.color {
+        output.push_str(&format!("color: {}\n", color));
+    }
     if matches!(agent.role, AgentRole::Engineer) {
         output.push_str("pane: true\n");
     }
@@ -106,7 +110,7 @@ mod tests {
             description: "Pi test agent".into(),
             model: model.into(),
             role,
-            color: None,
+            color: Some("green".into()),
             body: format!("# {name}\n\nIntro.\n\n## Capabilities\n\nDoes work.\n"),
             source_path: PathBuf::new(),
         }
@@ -157,6 +161,7 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("name: rust"));
         assert!(content.contains("model: openai/gpt-5.5:xhigh"));
+        assert!(content.contains("color: green"));
         assert!(content.contains("tools: read, grep, find, ls, bash, edit, write"));
         assert!(content.contains("pane: true"));
         assert!(content.contains("## Launch Instructions"));

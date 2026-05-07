@@ -18,6 +18,7 @@ export type AgentScope = "user" | "project" | "both";
 export interface AgentConfig {
 	name: string;
 	description: string;
+	color?: string;
 	tools?: string[];
 	model?: string;
 	pane: boolean;
@@ -108,6 +109,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 		agents.push({
 			name,
 			description,
+			color: asString(frontmatter.color),
 			tools: parseTools(frontmatter.tools, name),
 			model: normalizeModel(frontmatter.model),
 			pane: asBoolean(frontmatter.pane ?? frontmatter.persistentPane),
