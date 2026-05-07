@@ -2253,6 +2253,72 @@ interface BatchToolDetails {
 	total: number;
 }
 
+const TOOL_BATCH_MAX_OUTPUT_BYTES = 50 * 1024;
+const TOOL_BATCH_MAX_OUTPUT_LINES = 2_000;
+
+function utf8Length(text: string): number {
+	return Buffer.byteLength(text, "utf8");
+}
+
+function fitPrefix(text: string, maxBytes: number): string {
+	if (utf8Length(text) <= maxBytes) return text;
+	let low = 0;
+	let high = text.length;
+	while (low < high) {
+		const mid = Math.ceil((low + high) / 2);
+		if (utf8Length(text.slice(0, mid)) <= maxBytes) low = mid;
+		else high = mid - 1;
+	}
+	return text.slice(0, low);
+}
+
+function fitSuffix(text: string, maxBytes: number): string {
+	if (utf8Length(text) <= maxBytes) return text;
+	let low = 0;
+	let high = text.length;
+	while (low < high) {
+		const mid = Math.ceil((low + high) / 2);
+		if (utf8Length(text.slice(text.length - mid)) <= maxBytes) low = mid;
+		else high = mid - 1;
+	}
+	return text.slice(text.length - low);
+}
+
+function capBatchItemText(text: string, maxBytes: number, maxLines: number): { text: string; truncated: boolean } {
+	const originalBytes = utf8Length(text);
+	const originalLines = lineCount(text);
+	if (originalBytes <= maxBytes && originalLines <= maxLines) return { text, truncated: false };
+
+	const marker = `[...tool_batch item truncated: showing head and tail within ${maxLines} lines / ${Math.round(maxBytes / 1024)}KB. Original: ${originalLines} lines / ${Math.round(originalBytes / 1024)}KB...]`;
+	const markerBytes = utf8Length(`\n${marker}\n`);
+	const lines = text.split(/\r?\n/);
+	let working: string;
+	if (lines.length > maxLines) {
+		const bodyLines = Math.max(2, maxLines - 1);
+		const headCount = Math.max(1, Math.floor(bodyLines / 2));
+		const tailCount = Math.max(1, bodyLines - headCount);
+		working = [...lines.slice(0, headCount), marker, ...lines.slice(-tailCount)].join("\n");
+	} else {
+		working = text;
+	}
+
+	if (utf8Length(working) > maxBytes) {
+		const contentBudget = Math.max(256, maxBytes - markerBytes);
+		const headBudget = Math.max(128, Math.floor(contentBudget * 0.45));
+		const tailBudget = Math.max(128, contentBudget - headBudget);
+		working = `${fitPrefix(working, headBudget)}\n${marker}\n${fitSuffix(working, tailBudget)}`;
+	}
+	return { text: working, truncated: true };
+}
+
+function batchItemLimits(itemCount: number): { maxBytes: number; maxLines: number } {
+	const count = Math.max(1, itemCount);
+	return {
+		maxBytes: Math.max(2 * 1024, Math.floor((TOOL_BATCH_MAX_OUTPUT_BYTES - 2 * 1024) / count)),
+		maxLines: Math.max(50, Math.floor((TOOL_BATCH_MAX_OUTPUT_LINES - 40) / count)),
+	};
+}
+
 const builtInToolCache = new Map<string, BuiltInToolSet>();
 
 function normalizedCwd(cwd?: string): string {
@@ -2419,19 +2485,21 @@ function registerToolBatch(pi: ExtensionAPI, agent: any, cwd: string): void {
 				};
 			}
 			const concurrency = Math.max(1, Math.min(calls.length, Math.floor(Number(params?.concurrency) || calls.length), maxCalls));
+			const itemLimits = batchItemLimits(calls.length);
 			const items = await mapBatchWithConcurrency(calls, concurrency, async (call, index): Promise<BatchToolItem> => {
 				try {
 					const original = getBuiltInTool(agent, effectiveCwd, call.tool);
 					if (!original?.execute) throw new Error(`Built-in tool unavailable: ${call.tool}`);
 					const result = await original.execute(`${toolCallId}:${index}`, call.args, signal, undefined);
+					const capped = capBatchItemText(textContent(result), itemLimits.maxBytes, itemLimits.maxLines);
 					return {
 						args: call.args,
 						details: result?.details,
 						index,
 						isError: Boolean(result?.isError),
-						resultText: textContent(result),
+						resultText: capped.text,
 						toolName: call.tool,
-						truncated: resultTruncated(result),
+						truncated: resultTruncated(result) || capped.truncated,
 					};
 				} catch (error) {
 					return {
