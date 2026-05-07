@@ -26,7 +26,7 @@
         {
           "key": "enabled",
           "label": "Enable Codex minimal tools",
-          "description": "Register and auto-manage image_generation, view_image, and apply_patch.",
+          "description": "Register image_generation, view_image, and apply_patch. Tools only activate on OpenAI/Codex-like models — they stay hidden on Anthropic/Claude-bridge sessions.",
           "type": "boolean",
           "default": true,
           "category": "General",
@@ -35,8 +35,8 @@
         },
         {
           "key": "autoEnable",
-          "label": "Auto-enable supported tools",
-          "description": "Add this package's supported tools to the active tool set while preserving Pi native tools.",
+          "label": "Auto-add tools to active set",
+          "description": "When a supported OpenAI/Codex model is selected, add this package's enabled tools to the model's active tool list. Off = activate manually.",
           "type": "boolean",
           "default": true,
           "category": "General",
@@ -44,8 +44,8 @@
         },
         {
           "key": "nativeProviderTools",
-          "label": "Use native OpenAI tools",
-          "description": "Rewrite image_generation to native OpenAI Codex Responses tools when supported.",
+          "label": "Native image_generation on Codex",
+          "description": "Rewrite image_generation to OpenAI's Responses-API native tool when the model is openai-codex. Required for image generation to actually work. Does not affect view_image or apply_patch.",
           "type": "boolean",
           "default": true,
           "category": "Provider",

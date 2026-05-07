@@ -62,13 +62,50 @@ When `pi-extension-manager` is installed, settings appear under **Codex Minimal 
 
 Project `.pi/settings.json` overrides user `~/.pi/agent/settings.json`.
 
-Important defaults:
+### General
 
-- `autoEnable`: `true`
-- `nativeProviderTools`: `true`
-- `applyPatchEnabled`: `true`
-- `deferApplyPatchRendering`: `true`
-- `strictPatchMode`: `false`
+| Key | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `true` | Master switch. Registers `image_generation`, `view_image`, and `apply_patch` so Pi knows about them. Tools only *activate* on OpenAI/Codex-like models; they stay hidden on Anthropic / Claude-bridge sessions even when registered. Requires reload. |
+| `autoEnable` | `true` | Active-tool-set management. When a supported model is selected, automatically push this package's enabled tools onto the model's active tool list while preserving Pi native tools (`read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`). Turn off if you want to add tools manually via Pi's tool toggling. |
+
+### Provider
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `nativeProviderTools` | `true` | Outgoing-request rewrite. When the model is `openai-codex`, rewrite `image_generation` to OpenAI's Responses-API native `{type:"image_generation"}` spec instead of sending it as a generic function tool. **Required for image generation to actually produce images on `openai-codex`.** Does not affect `view_image` or `apply_patch`, which always travel as function tools. Requires reload. |
+
+### Images
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `imageGeneration` | `true` | Expose the `image_generation` tool on supported OpenAI Codex image-capable models. Disabling hides the tool entirely. |
+| `imageOutputDir` | `.pi/openai-codex-images` | Directory for saved generated images. Resolved relative to the workspace/repo root unless absolute. The latest image is also mirrored as `latest.<ext>`. |
+| `imageModel` | `gpt-image-2` | Image model used by the optional direct OpenAI Images API fallback. Pick from `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`. Ignored when native Codex `image_generation` is in use. |
+| `directImageApiFallback` | `false` | Allow direct OpenAI Images API generation with `OPENAI_API_KEY` when native Codex `image_generation` is unavailable (e.g. non-Codex provider, or `nativeProviderTools` off). Off by default to keep image generation tied to the active provider. |
+| `viewImage` | `false` | Expose the `view_image` tool on image-capable models. Off by default — Pi's built-in `read` already returns image content blocks for image files, so `view_image` is mainly Codex-CLI prompt parity rather than a functional necessity. Turn on if a model is trained against the `view_image` name and you want it to use that name. |
+| `viewImageWorkspaceOnly` | `false` | Reject `view_image` paths outside `ctx.cwd`. Off by default so Pi's clipboard-paste flow keeps working (clipboard images are written to `/tmp/pi-clipboard-*.png`). Turn on for stricter sandboxing; note that Pi's `read` tool does not enforce this either, so it's mostly defense-in-depth. |
+
+### Patch
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `applyPatchEnabled` | `true` | Expose the `apply_patch` tool on OpenAI/Codex-like models. Pi's `edit`/`write` stay available unless `strictPatchMode` is enabled. |
+| `strictPatchMode` | `false` | Block `edit` and `write` on supported models so all edits must go through `apply_patch`. Off by default; turn on if a model misuses `edit` and you want to force the patch path. |
+| `allowAbsolutePatchPaths` | `false` | Permit absolute paths in `apply_patch`. Off by default so relative paths stay anchored to `ctx.cwd`. |
+| `deferApplyPatchRendering` | `true` | Don't define renderers for `apply_patch`; let `pi-tool-renderer` (preferred) or Pi's fallback renderer handle display. Avoids duplicate formatting when `pi-tool-renderer` is installed. Requires reload. |
+
+### autoEnable vs nativeProviderTools
+
+These two settings sound similar but operate on different layers:
+
+- `autoEnable` decides **which tools the model sees** (active-tool-set management). It's about Pi-side tool routing.
+- `nativeProviderTools` decides **how `image_generation` is encoded in the outgoing provider request** (function tool vs. OpenAI Responses-API native tool). It's about wire format on `openai-codex` only.
+
+You can have one on and the other off:
+
+- `autoEnable=on`, `nativeProviderTools=off` → model sees `image_generation`, but on `openai-codex` it goes as a generic function tool and won't generate images.
+- `autoEnable=off`, `nativeProviderTools=on` → you manually add `image_generation` to the active set; when you do, it's encoded natively.
 
 ## Reloading
 
