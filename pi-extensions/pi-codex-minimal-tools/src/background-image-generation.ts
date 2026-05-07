@@ -12,6 +12,17 @@ import {
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 const BACKGROUND_IMAGE_INSTRUCTIONS = "Generate or edit images with the hosted image_generation tool. Use the user's prompt and any provided reference images. Return the image_generation_call result.";
+const IMAGE_GEN_STATUS_KEY = "codex-image-gen";
+
+interface ActiveImageJob {
+	id: string;
+	startedAt: number;
+	prompt: string;
+	referenceCount: number;
+	imageModel: string;
+}
+
+const activeImageJobs = new Map<string, ActiveImageJob>();
 
 export interface ParsedImageGenCommand {
 	prompt: string;
@@ -65,6 +76,48 @@ function tokenizeArgs(input: string): string[] {
 	}
 	if (current) tokens.push(current);
 	return tokens;
+}
+
+function truncateText(value: string, max = 72): string {
+	return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function renderJobLines(): string[] {
+	const jobs = Array.from(activeImageJobs.values()).sort((a, b) => a.startedAt - b.startedAt);
+	if (jobs.length === 0) return [];
+	return [
+		`Image generation: ${jobs.length} running`,
+		...jobs.slice(0, 4).map((job) => {
+			const ageSeconds = Math.max(0, Math.round((Date.now() - job.startedAt) / 1000));
+			const refs = job.referenceCount > 0 ? ` · ${job.referenceCount} ref` : "";
+			return `• ${job.imageModel}${refs} · ${ageSeconds}s · ${truncateText(job.prompt)}`;
+		}),
+		...(jobs.length > 4 ? [`• +${jobs.length - 4} more`] : []),
+	];
+}
+
+function updateImageGenStatus(ctx: ExtensionCommandContext): void {
+	const count = activeImageJobs.size;
+	ctx.ui.setStatus(IMAGE_GEN_STATUS_KEY, count > 0 ? `image-gen ${count}` : undefined);
+	ctx.ui.setWidget(IMAGE_GEN_STATUS_KEY, count > 0 ? renderJobLines() : undefined, { placement: "belowEditor" });
+}
+
+function startImageJob(ctx: ExtensionCommandContext, parsed: ParsedImageGenCommand, imageModel: string): ActiveImageJob {
+	const job: ActiveImageJob = {
+		id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+		startedAt: Date.now(),
+		prompt: parsed.prompt,
+		referenceCount: parsed.imagePaths.length,
+		imageModel,
+	};
+	activeImageJobs.set(job.id, job);
+	updateImageGenStatus(ctx);
+	return job;
+}
+
+function finishImageJob(ctx: ExtensionCommandContext, jobId: string): void {
+	activeImageJobs.delete(jobId);
+	updateImageGenStatus(ctx);
 }
 
 export function parseImageGenCommandArgs(input: string): ParsedImageGenCommand {
@@ -254,11 +307,15 @@ export function registerBackgroundImageGenerationCommand(pi: ExtensionAPI): void
 				ctx.ui.notify("Usage: /image-gen prompt text [@reference.png]", "warning");
 				return;
 			}
-			ctx.ui.notify(`Queued image generation with ${loadSettings(ctx.cwd).imageModel}${parsed.imagePaths.length ? ` (${parsed.imagePaths.length} reference image${parsed.imagePaths.length === 1 ? "" : "s"})` : ""}.`, "info");
-			void runBackgroundImageGeneration(pi, ctx, parsed).catch((error) => {
-				const message = error instanceof Error ? error.message : String(error);
-				pi.sendMessage({ customType: "codex-image-generation-error", content: `Image generation failed: ${message}`, display: true }, { triggerTurn: false });
-			});
+			const settings = loadSettings(ctx.cwd);
+			const job = startImageJob(ctx, parsed, settings.imageModel);
+			ctx.ui.notify(`Queued image generation with ${settings.imageModel}${parsed.imagePaths.length ? ` (${parsed.imagePaths.length} reference image${parsed.imagePaths.length === 1 ? "" : "s"})` : ""}.`, "info");
+			void runBackgroundImageGeneration(pi, ctx, parsed)
+				.catch((error) => {
+					const message = error instanceof Error ? error.message : String(error);
+					pi.sendMessage({ customType: "codex-image-generation-error", content: `Image generation failed: ${message}`, display: true }, { triggerTurn: false });
+				})
+				.finally(() => finishImageJob(ctx, job.id));
 		},
 	});
 }
