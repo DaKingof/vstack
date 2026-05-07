@@ -2325,6 +2325,13 @@ interface QolSessionSearchResult extends QolSessionSearchSession {
 	snippets: string[];
 }
 
+interface QolSessionSearchHit {
+	message: QolSessionUserMessage;
+	rank: number;
+	result: QolSessionSearchResult;
+	snippet: string;
+}
+
 interface QolParsedSessionQuery {
 	mode: "tokens" | "regex";
 	tokens: Array<{ kind: "fuzzy" | "phrase"; value: string }>;
@@ -2335,7 +2342,7 @@ interface QolParsedSessionQuery {
 interface QolSessionSearchState {
 	cursor: number;
 	query: string;
-	results: QolSessionSearchResult[];
+	results: QolSessionSearchHit[];
 	selected: number;
 	scope: QolSessionSearchScope;
 	total: number;
@@ -3171,6 +3178,90 @@ function searchQolSessions(sessions: QolSessionSearchSession[], query: string, c
 	return results.slice(0, limit);
 }
 
+function resultFromSession(session: QolSessionSearchSession, rank = 0, snippets: string[] = []): QolSessionSearchResult {
+	return { ...session, rank, snippets };
+}
+
+function promptSearchText(session: QolSessionSearchSession, message: QolSessionUserMessage): string {
+	return [session.id, session.name ?? "", session.cwd, session.path, message.text].join("\n");
+}
+
+function matchPromptSearch(session: QolSessionSearchSession, message: QolSessionUserMessage, parsed: QolParsedSessionQuery): { matches: boolean; score: number } {
+	const text = promptSearchText(session, message);
+	if (parsed.mode === "regex") {
+		if (!parsed.regex) return { matches: false, score: 0 };
+		const index = text.search(parsed.regex);
+		return index < 0 ? { matches: false, score: 0 } : { matches: true, score: index * 0.1 };
+	}
+	if (parsed.tokens.length === 0) return { matches: true, score: 0 };
+	let score = 0;
+	let normalized: string | undefined;
+	for (const token of parsed.tokens) {
+		if (token.kind === "phrase") {
+			normalized ??= normalizeSearchText(text);
+			const phrase = normalizeSearchText(token.value);
+			const index = normalized.indexOf(phrase);
+			if (index < 0) return { matches: false, score: 0 };
+			score += index * 0.1;
+			continue;
+		}
+		const tokenScore = simpleFuzzyScore(token.value, text);
+		if (tokenScore === undefined) return { matches: false, score: 0 };
+		score += tokenScore;
+	}
+	return { matches: true, score };
+}
+
+function buildPromptSnippet(message: QolSessionUserMessage, parsed: QolParsedSessionQuery): string {
+	const source = message.text.replace(/\s+/g, " ").trim();
+	if (!source) return "";
+	if (parsed.mode === "regex" && parsed.regex) {
+		parsed.regex.lastIndex = 0;
+		const match = parsed.regex.exec(source);
+		return match ? snippetAround(source, match.index, match[0].length, 220) : source.slice(0, 220);
+	}
+	if (parsed.tokens.length === 0) return source.slice(0, 220);
+	const lower = source.toLowerCase();
+	for (const token of parsed.tokens) {
+		const value = normalizeSearchText(token.value);
+		if (!value) continue;
+		const index = lower.indexOf(value.toLowerCase());
+		if (index >= 0) return snippetAround(source, index, value.length, 220);
+	}
+	return source.slice(0, 220);
+}
+
+function searchQolSessionHits(sessions: QolSessionSearchSession[], query: string, cwd: string): QolSessionSearchHit[] {
+	const limit = Math.max(1, Math.floor(settingNumber("sessionSearch.resultLimit", DEFAULT_SESSION_SEARCH_LIMIT, cwd)));
+	const parsed = parseSessionSearchQuery(query);
+	if (parsed.error) return [];
+	const hits: QolSessionSearchHit[] = [];
+	if (!query.trim()) {
+		for (const session of sessions.slice().sort((a, b) => b.modified.getTime() - a.modified.getTime())) {
+			const messages = userMessagesForResult(resultFromSession(session));
+			const message = messages[messages.length - 1];
+			if (!message) continue;
+			const snippet = buildPromptSnippet(message, parsed);
+			hits.push({ message, rank: 0, result: resultFromSession(session, 0, [snippet]), snippet });
+			if (hits.length >= limit) break;
+		}
+		return hits;
+	}
+	for (const session of sessions) {
+		for (const message of userMessagesForResult(resultFromSession(session))) {
+			const match = matchPromptSearch(session, message, parsed);
+			if (!match.matches) continue;
+			const snippet = buildPromptSnippet(message, parsed);
+			hits.push({ message, rank: match.score, result: resultFromSession(session, match.score, [snippet]), snippet });
+		}
+	}
+	const sortMode = settingString("sessionSearch.sortMode", "relevance", cwd) === "recent" ? "recent" : "relevance" as QolSessionSortMode;
+	hits.sort((a, b) => sortMode === "recent"
+		? b.result.modified.getTime() - a.result.modified.getTime() || a.message.index - b.message.index
+		: a.rank - b.rank || b.result.modified.getTime() - a.result.modified.getTime() || a.message.index - b.message.index);
+	return hits.slice(0, limit);
+}
+
 function styleSessionSnippet(snippet: string, query: string, theme: Theme): string {
 	let styled = snippet;
 	const parsed = parseSessionSearchQuery(query);
@@ -3250,7 +3341,7 @@ class QolSessionSearchComponent {
 		this.searchState = {
 			cursor: query.length,
 			query,
-			results: searchQolSessions(scopedSessions, query, cwd),
+			results: searchQolSessionHits(scopedSessions, query, cwd),
 			selected: 0,
 			scope,
 			total: scopedSessions.length,
@@ -3312,7 +3403,7 @@ class QolSessionSearchComponent {
 	private updateResults(resetSelection = true): void {
 		const state = this.searchState;
 		const scopedSessions = this.sessionsForScope(state.scope);
-		state.results = searchQolSessions(scopedSessions, state.query, this.cwd);
+		state.results = searchQolSessionHits(scopedSessions, state.query, this.cwd);
 		state.total = scopedSessions.length;
 		if (resetSelection) state.selected = 0;
 		this.clampSelection();
@@ -3341,12 +3432,15 @@ class QolSessionSearchComponent {
 		return Math.max(0, messages.length - 1);
 	}
 
-	private openMessages(result: QolSessionSearchResult): void {
+	private openMessages(result: QolSessionSearchResult, preferredMessage?: QolSessionUserMessage): void {
 		const messages = userMessagesForResult(result);
+		const preferredIndex = preferredMessage
+			? messages.findIndex((message) => message.index === preferredMessage.index || (message.entryId && message.entryId === preferredMessage.entryId))
+			: -1;
 		this.messagesState = {
 			messages,
 			result,
-			selected: this.selectedMessageIndex(messages, this.searchState.query),
+			selected: preferredIndex >= 0 ? preferredIndex : this.selectedMessageIndex(messages, this.searchState.query),
 		};
 		this.screen = "messages";
 	}
@@ -3366,9 +3460,37 @@ class QolSessionSearchComponent {
 			return;
 		}
 		if (matchesKey(data, "return") || matchesKey(data, "enter")) {
-			const result = state.results[state.selected];
-			if (!result) return;
-			this.openMessages(result);
+			const hit = state.results[state.selected];
+			if (!hit) return;
+			this.openMessages(hit.result, hit.message);
+			return;
+		}
+		if (data.toLowerCase() === "c") {
+			const hit = state.results[state.selected];
+			if (hit) this.done({ message: hit.message, result: hit.result, type: "copy" });
+			return;
+		}
+		if (data.toLowerCase() === "f") {
+			const hit = state.results[state.selected];
+			if (hit) this.done({ message: hit.message, result: hit.result, type: "resume" });
+			return;
+		}
+		if (data.toLowerCase() === "r") {
+			const hit = state.results[state.selected];
+			if (hit) this.done({ result: hit.result, type: "resume" });
+			return;
+		}
+		if (data.toLowerCase() === "i") {
+			const hit = state.results[state.selected];
+			if (hit) this.done({ customPrompt: this.selectedFocusText(hit.message), message: hit.message, result: hit.result, type: "summarize" });
+			return;
+		}
+		if (data.toLowerCase() === "a") {
+			const hit = state.results[state.selected];
+			if (hit) {
+				this.actionState = { actionIndex: 0, message: hit.message, result: hit.result };
+				this.screen = "actions";
+			}
 			return;
 		}
 		if (matchesKey(data, "up")) {
@@ -3376,7 +3498,7 @@ class QolSessionSearchComponent {
 			return;
 		}
 		if (matchesKey(data, "down")) {
-			state.selected = Math.min(state.results.length - 1, state.selected + 1);
+			state.selected = Math.min(Math.max(0, state.results.length - 1), state.selected + 1);
 			return;
 		}
 		if (matchesKey(data, "-") || matchesKey(data, "pageup")) {
@@ -3384,7 +3506,7 @@ class QolSessionSearchComponent {
 			return;
 		}
 		if (matchesKey(data, "=") || matchesKey(data, "pagedown")) {
-			state.selected = Math.min(state.results.length - 1, state.selected + this.searchMaxVisibleRows());
+			state.selected = Math.min(Math.max(0, state.results.length - 1), state.selected + this.searchMaxVisibleRows());
 			return;
 		}
 		if (matchesKey(data, "left")) {
@@ -3570,58 +3692,103 @@ class QolSessionSearchComponent {
 	}
 
 	private renderSearch(width: number): string[] {
-		const { bottom, divider, empty, filledRow, inner, row, selectedRow, top } = boxParts(width, this.theme);
+		const { bottom, divider, empty, filledRow, inner, row, top } = boxParts(width, this.theme);
 		const state = this.searchState;
-		const lines: string[] = [top("Session Search", `${state.results.length}/${state.total} shown`), empty()];
+		const lines: string[] = [top("Session Search", `${state.results.length} hits`), empty()];
 		const accent = (s: string) => this.theme.fg("accent", s);
 		const dim = (s: string) => this.theme.fg("dim", s);
 		const muted = (s: string) => this.theme.fg("muted", s);
-		const pair = (left: string, right: string) => {
-			const leftWidth = Math.max(1, inner - visibleWidth(right) - 1);
-			const clippedLeft = truncateToWidth(left, leftWidth, "…");
-			const gap = Math.max(1, inner - visibleWidth(clippedLeft) - visibleWidth(right));
-			return `${clippedLeft}${" ".repeat(gap)}${right}`;
-		};
 		const cursorChar = state.query[state.cursor] ?? " ";
 		const queryDisplay = `${state.query.slice(0, state.cursor)}${this.theme.inverse(cursorChar)}${state.query.slice(state.cursor + (state.cursor < state.query.length ? 1 : 0))}`;
 		lines.push(row(this.renderScopeTabs(inner)));
 		lines.push(empty());
 		lines.push(filledRow(` > ${queryDisplay}`));
-		lines.push(row(dim(`${state.total} sessions · re:<pattern> regex · "phrase" exact`)));
+		lines.push(row(dim(`${state.total} sessions searched · fuzzy tokens · re:<pattern> regex · "phrase" exact`)));
 		lines.push(empty(), divider(), empty());
-		if (state.results.length === 0) {
-			lines.push(row(muted(state.query.trim() ? "No sessions match your search" : "No sessions found")), empty());
-		} else {
-			const maxVisible = this.searchMaxVisibleRows();
-			const start = Math.max(0, Math.min(state.selected - Math.floor(maxVisible / 2), state.results.length - maxVisible));
-			const end = Math.min(start + maxVisible, state.results.length);
-			const rowBudget = Math.max(10, inner);
-			for (let i = start; i < end; i++) {
-				const result = state.results[i]!;
-				const selected = i === state.selected;
-				const title = sessionResumeTitle(result);
-				const rightPlain = `${promptCountLabel(sessionUserPromptCount(result))} · ${formatSessionSearchDate(result.modified)}`;
-				const right = selected ? this.theme.fg("text", rightPlain) : dim(rightPlain);
-				const titleBudget = Math.max(12, rowBudget - visibleWidth(right) - 1);
-				const titleText = truncateToWidth(title, titleBudget, "…");
-				const left = selected ? this.theme.bold(accent(titleText)) : this.theme.bold(titleText);
-				const titleRow = pair(left, right);
-				lines.push(selected ? selectedRow(titleRow) : row(titleRow));
 
-				const snippet = state.query.trim() ? (result.snippets[0] || lastUserMessageSnippet(result)) : lastUserMessageSnippet(result);
-				const label = state.query.trim() ? "match" : "last";
-				const snippetPrefix = `${dim(`${label}:`)} `;
-				lines.push(row(`${snippetPrefix}${truncateToWidth(styleSessionSnippet(snippet, state.query, this.theme), inner - visibleWidth(snippetPrefix), "…")}`));
-				if (i < end - 1) lines.push(row(this.theme.fg("borderMuted", "─".repeat(Math.max(8, inner)))));
-			}
-			if (state.results.length > maxVisible) lines.push(empty(), row(dim(`${state.selected + 1}/${state.results.length} ${state.query.trim() ? "matches" : "recent sessions"}`)));
+		if (state.results.length === 0) {
+			lines.push(row(muted(state.query.trim() ? "No prompts match your search" : "No prompts found")), empty());
+		} else {
+			lines.push(...this.renderSearchHitPane(inner, row, dim, muted, accent));
 		}
+
 		lines.push(divider(), empty());
 		lines.push(...this.renderSearchDetailRows(inner, row, dim, muted));
 		lines.push(empty());
-		lines.push(row(`${ansiYellow("-/=")} ${dim("page")}  ${ansiYellow("enter")} ${dim("prompts")}  ${ansiYellow("tab")} ${dim("scope")}  ${ansiYellow("ctrl+u")} ${dim("clear")}  ${ansiYellow("esc")} ${dim("close")}`));
+		lines.push(row(`${ansiYellow("-/=")} ${dim("page")}  ${ansiYellow("enter")} ${dim("all prompts")}  ${ansiYellow("c")} ${dim("copy")}  ${ansiYellow("f")} ${dim("fork")}  ${ansiYellow("r")} ${dim("resume")}  ${ansiYellow("i")} ${dim("inject")}  ${ansiYellow("a")} ${dim("actions")}`));
+		lines.push(row(`${ansiYellow("tab")} ${dim("scope")}  ${ansiYellow("ctrl+u")} ${dim("clear")}  ${ansiYellow("esc")} ${dim("close")}`));
 		lines.push(bottom());
 		return lines;
+	}
+
+	private renderSearchHitPane(
+		inner: number,
+		row: (content?: string) => string,
+		dim: (s: string) => string,
+		muted: (s: string) => string,
+		accent: (s: string) => string,
+	): string[] {
+		const state = this.searchState;
+		const maxVisible = this.searchMaxVisibleRows();
+		const start = Math.max(0, Math.min(state.selected - Math.floor(maxVisible / 2), state.results.length - maxVisible));
+		const end = Math.min(start + maxVisible, state.results.length);
+		const gap = ` ${dim("│")} `;
+		const twoPane = inner >= 72;
+		const rightWidth = twoPane ? Math.max(24, Math.floor(inner * 0.43)) : 0;
+		const leftWidth = twoPane ? Math.max(24, inner - rightWidth - visibleWidth(gap)) : inner;
+		const paneRows = Math.max(1, (end - start) * 3 - 1);
+		const selectedHit = state.results[state.selected];
+		const rightLines = twoPane ? this.renderPromptPreviewLines(selectedHit, rightWidth, paneRows, dim, muted, accent) : [];
+		const fixed = (content: string, colWidth: number, selected = false): string => {
+			const safe = content.replace(/[\r\n\t]+/g, " ");
+			const clipped = truncateToWidth(safe, colWidth, "…");
+			const padded = clipped + " ".repeat(Math.max(0, colWidth - visibleWidth(clipped)));
+			return selected ? this.theme.bg("selectedBg", padded) : padded;
+		};
+		const leftLines: string[] = [];
+		for (let i = start; i < end; i++) {
+			const hit = state.results[i]!;
+			const selected = i === state.selected;
+			const titleText = truncateToWidth(sessionResumeTitle(hit.result), Math.max(8, leftWidth - 18), "…");
+			const title = `${selected ? this.theme.bold(accent(titleText)) : this.theme.bold(titleText)} ${dim(`· #${hit.message.index} · ${formatSessionSearchDate(hit.result.modified)}`)}`;
+			leftLines.push(fixed(title, leftWidth, selected));
+			const snippet = styleSessionSnippet(hit.snippet || hit.message.text, state.query, this.theme);
+			leftLines.push(fixed(`${dim("match:")} ${snippet}`, leftWidth, selected));
+			if (i < end - 1) leftLines.push(fixed(dim("─".repeat(Math.max(8, leftWidth))), leftWidth));
+		}
+		const output: string[] = [];
+		for (let i = 0; i < leftLines.length; i++) {
+			if (twoPane) output.push(row(`${leftLines[i] ?? ""}${gap}${rightLines[i] ?? " ".repeat(rightWidth)}`));
+			else output.push(row(leftLines[i] ?? ""));
+		}
+		if (!twoPane && selectedHit) {
+			output.push(row(dim("─".repeat(Math.max(8, inner)))));
+			for (const line of this.renderPromptPreviewLines(selectedHit, inner, Math.min(5, paneRows), dim, muted, accent)) output.push(row(line));
+		}
+		if (state.results.length > maxVisible) output.push(row(dim(`${state.selected + 1}/${state.results.length} ${state.query.trim() ? "matches" : "recent prompts"}`)));
+		return output;
+	}
+
+	private renderPromptPreviewLines(
+		hit: QolSessionSearchHit | undefined,
+		width: number,
+		maxLines: number,
+		dim: (s: string) => string,
+		muted: (s: string) => string,
+		accent: (s: string) => string,
+	): string[] {
+		const fixed = (content: string): string => {
+			const clipped = truncateToWidth(content.replace(/[\r\n\t]+/g, " "), width, "…");
+			return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
+		};
+		if (!hit) return Array.from({ length: maxLines }, () => fixed(""));
+		const title = `${accent("Full prompt")} ${dim(`#${hit.message.index}`)}`;
+		const cwd = muted(truncateToWidth(shortPathForUi(hit.result.cwd || hit.result.path), width, "…"));
+		const bodyBudget = Math.max(1, maxLines - 3);
+		const body = wrapVisible(styleSessionSnippet(hit.message.text, this.searchState.query, this.theme), width, bodyBudget);
+		const lines = [fixed(title), fixed(cwd), fixed(dim("─".repeat(Math.max(8, width)))), ...body.map(fixed)];
+		while (lines.length < maxLines) lines.push(fixed(""));
+		return lines.slice(0, maxLines);
 	}
 
 	private renderScopeTabs(inner: number): string {
@@ -3647,12 +3814,13 @@ class QolSessionSearchComponent {
 		const selected = state.results[state.selected];
 		const scope = state.scope === "current" ? "current project" : "all sessions";
 		const query = oneLine(state.query);
-		const summary = `${state.results.length}/${state.total} shown · ${scope}${query ? ` · query “${truncateToWidth(query, 28, "…")}”` : ""}`;
+		const summary = `${state.results.length} prompt hits · ${state.total} sessions · ${scope}${query ? ` · query “${truncateToWidth(query, 28, "…")}”` : ""}`;
 		if (!selected) return [row(dim(summary))];
 		const locationPrefix = dim("Session CWD: ");
-		const location = shortPathForUi(selected.cwd || dirname(selected.path));
+		const location = shortPathForUi(selected.result.cwd || dirname(selected.result.path));
 		return [
 			row(locationPrefix + muted(truncateToWidth(location, Math.max(10, inner - visibleWidth(locationPrefix)), "…"))),
+			row(dim(`Selected: ${sessionResumeTitle(selected.result)} · prompt #${selected.message.index}`)),
 			row(dim(summary)),
 		];
 	}
