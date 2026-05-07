@@ -31,6 +31,8 @@ interface CavemanBridge {
 	getLastActiveMode(): string;
 	hasSessionOverride?(): boolean;
 	isStatusBadgeEnabled?(cwd?: string): boolean;
+	cycleMode?(cwd?: string): string;
+	setMode?(mode: string, cwd?: string): string | undefined;
 	subscribe(listener: () => void): () => void;
 }
 
@@ -959,6 +961,16 @@ function statusText(ctx: ExtensionContext, text: string): string | undefined {
 }
 
 function handleQolEditorInput(editor: CustomEditor, ctx: ExtensionContext, data: string): void {
+	if (matchesKey(data, "alt+c")) {
+		const caveman = readCavemanBridge();
+		if (caveman?.cycleMode) {
+			const next = caveman.cycleMode(ctx.cwd);
+			if (typeof next === "string") {
+				try { ctx.ui.notify(next === "off" ? "Caveman off." : `Caveman ${next} active.`, "info"); } catch { /* notify is best-effort */ }
+			}
+			return;
+		}
+	}
 	const fallback = newlineFallbackKey(ctx.cwd);
 	const newlineEnabled = settingBoolean("newlineOnShiftEnter", true, ctx.cwd);
 	const isShiftEnter = matchesKey(data, "shift+enter") || matchesKey(data, "shift+return");

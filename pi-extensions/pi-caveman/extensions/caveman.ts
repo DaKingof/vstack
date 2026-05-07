@@ -23,8 +23,12 @@ interface CavemanBridge {
 	getLastActiveMode(): ActiveMode;
 	hasSessionOverride(): boolean;
 	isStatusBadgeEnabled(cwd?: string): boolean;
+	cycleMode(cwd?: string): Mode;
+	setMode(mode: string, cwd?: string): Mode | undefined;
 	subscribe(listener: () => void): () => void;
 }
+
+const CYCLE_ORDER: readonly Mode[] = ["off", "lite", "full", "ultra", "micro"];
 
 const SUBCOMMAND_DESCRIPTIONS: Record<string, string> = {
 	lite: "Caveman lite — professional, no fluff",
@@ -230,6 +234,16 @@ export default function caveman(pi: ExtensionAPI): void {
 	};
 
 	const host = globalThis as unknown as Record<PropertyKey, unknown>;
+	const applyOverride = (mode: Mode, cwd?: string): Mode | undefined => {
+		if (!settingBoolean("sessionOverrideAllowed", true, cwd)) return undefined;
+		const lastActiveMode: ActiveMode = mode === "off" ? state.lastActiveMode : mode;
+		state = { override: mode, lastActiveMode, updatedAt: new Date().toISOString() };
+		persist();
+		syncStatus(activeCtx);
+		notifyListeners();
+		return mode;
+	};
+
 	const bridge: CavemanBridge = {
 		isActive: () => effectiveMode(state, activeCtx?.cwd) !== "off",
 		getMode: () => effectiveMode(state, activeCtx?.cwd),
@@ -237,6 +251,17 @@ export default function caveman(pi: ExtensionAPI): void {
 		getLastActiveMode: () => state.lastActiveMode,
 		hasSessionOverride: () => state.override !== null,
 		isStatusBadgeEnabled: (cwd) => settingBoolean("showStatusBadge", true, cwd),
+		cycleMode: (cwd) => {
+			const current = effectiveMode(state, cwd ?? activeCtx?.cwd);
+			const index = CYCLE_ORDER.indexOf(current);
+			const next = CYCLE_ORDER[(index + 1) % CYCLE_ORDER.length] ?? "off";
+			return applyOverride(next, cwd ?? activeCtx?.cwd) ?? current;
+		},
+		setMode: (mode, cwd) => {
+			const parsed = normalizeMode(mode);
+			if (!parsed) return undefined;
+			return applyOverride(parsed, cwd ?? activeCtx?.cwd);
+		},
 		subscribe: (listener) => {
 			listeners.add(listener);
 			return () => { listeners.delete(listener); };
