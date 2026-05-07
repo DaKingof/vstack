@@ -3169,12 +3169,7 @@ function resultFromSession(session: QolSessionSearchSession, rank = 0, snippets:
 	return { ...session, rank, snippets };
 }
 
-function promptSearchText(session: QolSessionSearchSession, message: QolSessionUserMessage): string {
-	return [session.id, session.name ?? "", session.cwd, session.path, message.text].join("\n");
-}
-
-function matchPromptSearch(session: QolSessionSearchSession, message: QolSessionUserMessage, parsed: QolParsedSessionQuery): { matches: boolean; score: number } {
-	const text = promptSearchText(session, message);
+function matchTextSearch(text: string, parsed: QolParsedSessionQuery): { matches: boolean; score: number } {
 	if (parsed.mode === "regex") {
 		if (!parsed.regex) return { matches: false, score: 0 };
 		const index = text.search(parsed.regex);
@@ -3197,6 +3192,14 @@ function matchPromptSearch(session: QolSessionSearchSession, message: QolSession
 		score += tokenScore;
 	}
 	return { matches: true, score };
+}
+
+function sessionTitleSearchText(session: QolSessionSearchSession): string {
+	return [session.name ?? "", sessionResumeTitle(session), sessionDisplayName(session)].join("\n");
+}
+
+function matchPromptSearch(_session: QolSessionSearchSession, message: QolSessionUserMessage, parsed: QolParsedSessionQuery): { matches: boolean; score: number } {
+	return matchTextSearch(message.text, parsed);
 }
 
 function buildPromptSnippet(message: QolSessionUserMessage, parsed: QolParsedSessionQuery): string {
@@ -3235,11 +3238,22 @@ function searchQolSessionHits(sessions: QolSessionSearchSession[], query: string
 		return hits;
 	}
 	for (const session of sessions) {
+		let addedPromptHit = false;
 		for (const message of userMessagesForResult(resultFromSession(session))) {
 			const match = matchPromptSearch(session, message, parsed);
 			if (!match.matches) continue;
 			const snippet = buildPromptSnippet(message, parsed);
 			hits.push({ message, rank: match.score, result: resultFromSession(session, match.score, [snippet]), snippet });
+			addedPromptHit = true;
+		}
+		if (!addedPromptHit) {
+			const titleMatch = matchTextSearch(sessionTitleSearchText(session), parsed);
+			if (!titleMatch.matches) continue;
+			const messages = userMessagesForResult(resultFromSession(session));
+			const message = messages[messages.length - 1];
+			if (!message) continue;
+			const snippet = buildPromptSnippet(message, { mode: "tokens", tokens: [] });
+			hits.push({ message, rank: titleMatch.score, result: resultFromSession(session, titleMatch.score, [snippet]), snippet });
 		}
 	}
 	const sortMode = settingString("sessionSearch.sortMode", "relevance", cwd) === "recent" ? "recent" : "relevance" as QolSessionSortMode;
