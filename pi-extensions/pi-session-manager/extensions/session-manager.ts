@@ -37,6 +37,8 @@ type Mode = "browse" | "loading" | "rename" | "confirm-delete" | "confirm-delete
 
 type SessionAction = { type: "resume"; path: string; title: string } | { type: "cancel" };
 type SessionManagerContext = ExtensionCommandContext | ExtensionContext;
+const pendingSessionManagerActions = new Map<string, SessionAction>();
+let pendingSessionManagerActionCounter = 0;
 
 interface VstackModalLock {
 	depth: number;
@@ -1212,6 +1214,33 @@ async function openManager(ctx: SessionManagerContext, pi: ExtensionAPI): Promis
 	}
 }
 
+function queueSessionManagerCommandAction(ctx: SessionManagerContext, action: SessionAction): void {
+	if (action.type !== "resume") return;
+	const id = `sm-${Date.now().toString(36)}-${(++pendingSessionManagerActionCounter).toString(36)}`;
+	pendingSessionManagerActions.set(id, action);
+	ctx.ui.setEditorText(`/sessions:resume-pending ${id}`);
+	ctx.ui.notify(`${action.title || basename(action.path)} — press Enter to resume`, "info");
+}
+
+async function runSessionManagerAction(ctx: SessionManagerContext, action: SessionAction): Promise<boolean> {
+	if (action.type !== "resume") return true;
+	const switchSession = (ctx as { switchSession?: ExtensionCommandContext["switchSession"] }).switchSession;
+	if (typeof switchSession !== "function") return false;
+	if (samePath(action.path, ctx.sessionManager.getSessionFile())) {
+		ctx.ui.notify("Already in this session", "info");
+		return true;
+	}
+	const targetTitle = action.title || basename(action.path);
+	const result = await switchSession.call(ctx, action.path, {
+		withSession: async (replacementCtx) => {
+			clearLegacySessionStatus(replacementCtx);
+			replacementCtx.ui.notify(`Resumed ${targetTitle}`, "info");
+		},
+	});
+	if (result.cancelled) ctx.ui.notify("Session switch cancelled", "info");
+	return true;
+}
+
 async function handleSessionsCommand(_args: string, ctx: SessionManagerContext, pi: ExtensionAPI): Promise<void> {
 	if (!ctx.hasUI) {
 		ctx.ui.notify("/sessions requires interactive UI", "error");
@@ -1224,19 +1253,7 @@ async function handleSessionsCommand(_args: string, ctx: SessionManagerContext, 
 		return;
 	}
 	const action = await openManager(ctx, pi);
-	if (action.type !== "resume") return;
-	if (samePath(action.path, ctx.sessionManager.getSessionFile())) {
-		ctx.ui.notify("Already in this session", "info");
-		return;
-	}
-	const targetTitle = action.title || basename(action.path);
-	const result = await ctx.switchSession(action.path, {
-		withSession: async (replacementCtx) => {
-			clearLegacySessionStatus(replacementCtx);
-			replacementCtx.ui.notify(`Resumed ${targetTitle}`, "info");
-		},
-	});
-	if (result.cancelled) ctx.ui.notify("Session switch cancelled", "info");
+	if (!(await runSessionManagerAction(ctx, action))) queueSessionManagerCommandAction(ctx, action);
 }
 
 export default function sessionManagerExtension(pi: ExtensionAPI): void {
@@ -1253,7 +1270,34 @@ export default function sessionManagerExtension(pi: ExtensionAPI): void {
 
 	pi.registerCommand("sessions", {
 		description: "Pi session browser and resume manager.",
-		handler: async (args, ctx) => handleSessionsCommand(args, ctx, pi),
+		handler: async (args, ctx) => {
+			const trimmed = args.trim();
+			if (trimmed.startsWith("resume-pending")) {
+				const id = trimmed.slice("resume-pending".length).trim();
+				const action = pendingSessionManagerActions.get(id);
+				if (!action) {
+					ctx.ui.notify("No pending session-manager resume action found.", "warning");
+					return;
+				}
+				pendingSessionManagerActions.delete(id);
+				if (!(await runSessionManagerAction(ctx, action))) ctx.ui.notify("Session resume is unavailable in this context.", "error");
+				return;
+			}
+			await handleSessionsCommand(args, ctx, pi);
+		},
+	});
+	pi.registerCommand("sessions:resume-pending", {
+		description: "Run a pending session-manager resume action",
+		handler: async (args, ctx) => {
+			const id = args.trim();
+			const action = pendingSessionManagerActions.get(id);
+			if (!action) {
+				ctx.ui.notify("No pending session-manager resume action found.", "warning");
+				return;
+			}
+			pendingSessionManagerActions.delete(id);
+			if (!(await runSessionManagerAction(ctx, action))) ctx.ui.notify("Session resume is unavailable in this context.", "error");
+		},
 	});
 
 	const shortcut = configuredShortcut();

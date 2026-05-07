@@ -2386,6 +2386,8 @@ let qolSessionSearchCache: QolSessionSearchSession[] = [];
 let qolSessionSearchLoadedAt = 0;
 let qolSessionSearchLoading: Promise<QolSessionSearchSession[]> | undefined;
 const qolSessionUserMessagesCache = new Map<string, QolSessionUserMessage[]>();
+const qolSessionSearchPendingActions = new Map<string, QolSessionPaletteAction>();
+let qolSessionSearchPendingActionCounter = 0;
 
 function getPendingSessionSearchMessage(): QolSessionSearchPendingMessage | undefined {
 	return (globalThis as unknown as Record<PropertyKey, unknown>)[SESSION_SEARCH_PENDING_SYMBOL] as QolSessionSearchPendingMessage | undefined;
@@ -4206,6 +4208,45 @@ function asCommandContext(ctx: ExtensionContext): (ExtensionContext & Partial<Ex
 	return ctx as ExtensionContext & Partial<ExtensionCommandContext>;
 }
 
+function queueSessionSearchCommandAction(ctx: ExtensionContext, action: QolSessionPaletteAction): void {
+	const id = `ss-${Date.now().toString(36)}-${(++qolSessionSearchPendingActionCounter).toString(36)}`;
+	qolSessionSearchPendingActions.set(id, action);
+	ctx.ui.setEditorText(`/search:resume-pending ${id}`);
+	ctx.ui.notify(`${sessionDisplayName(action.result!)} — press Enter to ${action.type === "fork" ? "fork" : "resume"}`, "info");
+}
+
+async function runSessionSearchResumeOrFork(ctx: ExtensionContext, action: QolSessionPaletteAction): Promise<boolean> {
+	if (!action.result || (action.type !== "resume" && action.type !== "fork")) return true;
+	const commandCtx = asCommandContext(ctx);
+	if (typeof commandCtx.switchSession !== "function") return false;
+	const targetTitle = sessionDisplayName(action.result);
+	const selectedMessage = action.type === "fork" ? action.message : undefined;
+	let replacementStarted = false;
+	try {
+		const result = await commandCtx.switchSession(action.result.path, {
+			withSession: async (replacementCtx: any) => {
+				replacementStarted = true;
+				if (selectedMessage) {
+					const manager = replacementCtx.sessionManager as any;
+					if (selectedMessage.entryId && selectedMessage.parentId && typeof manager?.branch === "function") manager.branch(selectedMessage.parentId);
+					else if (selectedMessage.entryId && selectedMessage.parentId === null && typeof manager?.resetLeaf === "function") manager.resetLeaf();
+					replacementCtx.ui.setEditorText(selectedMessage.text);
+					const timer = setTimeout(() => {
+						replacementCtx.ui.notify(`Forked session: ${targetTitle} at prompt #${selectedMessage.index}. Submit to branch from here.`, "info");
+					}, 0);
+					timer.unref?.();
+					return;
+				}
+				replacementCtx.ui.notify(`Resumed session: ${targetTitle}`, "info");
+			},
+		});
+		if (result.cancelled) ctx.ui.notify(selectedMessage ? "Fork cancelled" : "Resume cancelled", "info");
+	} catch (error) {
+		if (!replacementStarted) ctx.ui.notify(`${selectedMessage ? "Fork" : "Resume"} failed: ${stringifyError(error)}`, "error");
+	}
+	return true;
+}
+
 async function createNewSessionWithSearchContext(pi: ExtensionAPI, ctx: ExtensionContext, result: QolSessionSearchResult, customPrompt?: string): Promise<void> {
 	const title = sessionDisplayName(result);
 	const message = await buildSessionSearchContextMessageWithLoader(ctx, result, customPrompt, "New + Context");
@@ -4272,37 +4313,7 @@ async function openQolSessionSearch(pi: ExtensionAPI, ctx: ExtensionContext, ini
 	}
 	if (!action || action.type === "cancel" || !action.result) return;
 	if (action.type === "resume" || action.type === "fork") {
-		const commandCtx = asCommandContext(ctx);
-		if (typeof commandCtx.switchSession === "function") {
-			const targetTitle = sessionDisplayName(action.result);
-			const selectedMessage = action.type === "fork" ? action.message : undefined;
-			let replacementStarted = false;
-			try {
-				const result = await commandCtx.switchSession(action.result.path, {
-					withSession: async (replacementCtx: any) => {
-						replacementStarted = true;
-						if (selectedMessage) {
-							const manager = replacementCtx.sessionManager as any;
-							if (selectedMessage.entryId && selectedMessage.parentId && typeof manager?.branch === "function") manager.branch(selectedMessage.parentId);
-							else if (selectedMessage.entryId && selectedMessage.parentId === null && typeof manager?.resetLeaf === "function") manager.resetLeaf();
-							replacementCtx.ui.setEditorText(selectedMessage.text);
-							const timer = setTimeout(() => {
-								replacementCtx.ui.notify(`Forked session: ${targetTitle} at prompt #${selectedMessage.index}. Submit to branch from here.`, "info");
-							}, 0);
-							timer.unref?.();
-							return;
-						}
-						replacementCtx.ui.notify(`Resumed session: ${targetTitle}`, "info");
-					},
-				});
-				if (result.cancelled) ctx.ui.notify(selectedMessage ? "Fork cancelled" : "Resume cancelled", "info");
-			} catch (error) {
-				if (!replacementStarted) ctx.ui.notify(`${selectedMessage ? "Fork" : "Resume"} failed: ${stringifyError(error)}`, "error");
-			}
-			return;
-		}
-		ctx.ui.setEditorText(`/resume ${quoteSessionSearchArg(action.result.path)}`);
-		ctx.ui.notify(`${sessionDisplayName(action.result)} — ${action.type === "fork" ? "fork" : "resume"} command queued`, "info");
+		if (!(await runSessionSearchResumeOrFork(ctx, action))) queueSessionSearchCommandAction(ctx, action);
 		return;
 	}
 	if (action.type === "copy") {
@@ -4330,10 +4341,6 @@ async function openQolSessionSearch(pi: ExtensionAPI, ctx: ExtensionContext, ini
 			ctx.ui.setStatus(SESSION_SEARCH_STATUS_KEY, undefined);
 		}
 	}
-}
-
-function quoteSessionSearchArg(value: string): string {
-	return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 function renderSessionSearchContextMessage(message: any, options: any, theme: Theme): Text {
@@ -4921,6 +4928,19 @@ export default function qol(pi: ExtensionAPI): void {
 		pi.registerCommand("search:refresh", {
 			description: "Refresh the session search index",
 			handler: async (_args, ctx) => handleSearchCommand("refresh", ctx),
+		});
+		pi.registerCommand("search:resume-pending", {
+			description: "Run a pending session-search resume or fork action",
+			handler: async (args, ctx) => {
+				const id = args.trim();
+				const action = qolSessionSearchPendingActions.get(id);
+				if (!action) {
+					ctx.ui.notify("No pending session-search resume/fork action found.", "warning");
+					return;
+				}
+				qolSessionSearchPendingActions.delete(id);
+				if (!(await runSessionSearchResumeOrFork(ctx, action))) ctx.ui.notify("Session resume/fork is unavailable in this context.", "error");
+			},
 		});
 		const shortcut = sessionSearchShortcut();
 		if (shortcut) {
