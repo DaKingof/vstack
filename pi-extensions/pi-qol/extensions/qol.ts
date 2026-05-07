@@ -2296,17 +2296,6 @@ function statusMessage(ctx: ExtensionContext): string {
 type QolSessionSortMode = "recent" | "relevance";
 type QolSessionSearchScope = "current" | "all";
 
-type QolSessionAction = "resume" | "copy" | "summarize" | "newSession" | "back";
-
-const QOL_SESSION_ACTIONS: QolSessionAction[] = ["resume", "copy", "summarize", "newSession", "back"];
-const QOL_SESSION_ACTION_LABELS: Record<QolSessionAction, string> = {
-	resume: "Fork session from here",
-	copy: "Copy Prompt",
-	summarize: "Inject Context",
-	newSession: "New Session + Context",
-	back: "Back",
-};
-
 interface QolSessionSearchSession {
 	allMessagesText: string;
 	created: Date;
@@ -2363,7 +2352,6 @@ interface QolSessionMessagesState {
 }
 
 interface QolSessionActionState {
-	actionIndex: number;
 	message: QolSessionUserMessage;
 	result: QolSessionSearchResult;
 }
@@ -3488,10 +3476,15 @@ class QolSessionSearchComponent {
 			if (hit) this.done({ customPrompt: this.selectedFocusText(hit.message), message: hit.message, result: hit.result, type: "summarize" });
 			return;
 		}
+		if (matchesKey(data, "alt+n")) {
+			const hit = state.results[state.selected];
+			if (hit) this.done({ customPrompt: this.selectedFocusText(hit.message), message: hit.message, result: hit.result, type: "newSession" });
+			return;
+		}
 		if (matchesKey(data, "alt+a")) {
 			const hit = state.results[state.selected];
 			if (hit) {
-				this.actionState = { actionIndex: 0, message: hit.message, result: hit.result };
+				this.actionState = { message: hit.message, result: hit.result };
 				this.screen = "actions";
 			}
 			return;
@@ -3562,7 +3555,7 @@ class QolSessionSearchComponent {
 		if (matchesKey(data, "return") || matchesKey(data, "enter")) {
 			const message = state.messages[state.selected];
 			if (!message) return;
-			this.actionState = { actionIndex: 0, message, result: state.result };
+			this.actionState = { message, result: state.result };
 			this.screen = "actions";
 			return;
 		}
@@ -3578,6 +3571,16 @@ class QolSessionSearchComponent {
 		if (matchesKey(data, "alt+f")) {
 			const message = state.messages[state.selected];
 			if (message) this.done({ message, result: state.result, type: "resume" });
+			return;
+		}
+		if (matchesKey(data, "alt+i")) {
+			const message = state.messages[state.selected];
+			if (message) this.done({ customPrompt: this.selectedFocusText(message), message, result: state.result, type: "summarize" });
+			return;
+		}
+		if (matchesKey(data, "alt+n")) {
+			const message = state.messages[state.selected];
+			if (message) this.done({ customPrompt: this.selectedFocusText(message), message, result: state.result, type: "newSession" });
 			return;
 		}
 		if (matchesKey(data, "up")) {
@@ -3612,26 +3615,25 @@ class QolSessionSearchComponent {
 			this.screen = "messages";
 			return;
 		}
-		if (matchesKey(data, "tab") || matchesKey(data, "right")) {
-			state.actionIndex = (state.actionIndex + 1) % QOL_SESSION_ACTIONS.length;
+		if (matchesKey(data, "alt+c")) {
+			this.done({ message: state.message, result: state.result, type: "copy" });
 			return;
 		}
-		if (matchesKey(data, "shift+tab") || matchesKey(data, "left")) {
-			state.actionIndex = (state.actionIndex - 1 + QOL_SESSION_ACTIONS.length) % QOL_SESSION_ACTIONS.length;
+		if (matchesKey(data, "alt+f")) {
+			this.done({ message: state.message, result: state.result, type: "resume" });
 			return;
 		}
-		if (matchesKey(data, "return") || matchesKey(data, "enter")) {
-			const action = QOL_SESSION_ACTIONS[state.actionIndex];
-			if (action === "back") {
-				this.screen = "messages";
-				return;
-			}
-			if (action === "resume" || action === "copy") {
-				this.done({ message: state.message, result: state.result, type: action });
-				return;
-			}
-			this.focusState = { cursor: 0, message: state.message, prompt: "", result: state.result, type: action };
-			this.screen = "focus";
+		if (matchesKey(data, "alt+r")) {
+			this.done({ result: state.result, type: "resume" });
+			return;
+		}
+		if (matchesKey(data, "alt+i")) {
+			this.done({ customPrompt: this.selectedFocusText(state.message), message: state.message, result: state.result, type: "summarize" });
+			return;
+		}
+		if (matchesKey(data, "alt+n")) {
+			this.done({ customPrompt: this.selectedFocusText(state.message), message: state.message, result: state.result, type: "newSession" });
+			return;
 		}
 	}
 
@@ -3718,10 +3720,10 @@ class QolSessionSearchComponent {
 
 		lines.push(divider());
 		if (compact) {
-			lines.push(row(`${ansiYellow("enter")} ${dim("prompts")}  ${ansiYellow("alt+c/f/r/i/a")} ${dim("actions")}  ${ansiYellow("tab")} ${dim("scope")}  ${ansiYellow("esc")} ${dim("close")}`));
+			lines.push(row(`${ansiYellow("enter")} ${dim("prompts")}  ${ansiYellow("alt+c/f/r/i/n/a")} ${dim("actions")}  ${ansiYellow("tab")} ${dim("scope")}`));
 		} else {
 			lines.push(row(`${ansiYellow("-/=")} ${dim("page")}  ${ansiYellow("enter")} ${dim("all prompts")}  ${ansiYellow("alt+c")} ${dim("copy")}  ${ansiYellow("alt+f")} ${dim("fork")}  ${ansiYellow("alt+r")} ${dim("resume")}`));
-			lines.push(row(`${ansiYellow("alt+i")} ${dim("inject")}  ${ansiYellow("alt+a")} ${dim("actions")}  ${ansiYellow("tab")} ${dim("scope")}  ${ansiYellow("ctrl+u")} ${dim("clear")}  ${ansiYellow("esc")} ${dim("close")}`));
+			lines.push(row(`${ansiYellow("alt+i")} ${dim("inject")}  ${ansiYellow("alt+n")} ${dim("new+ctx")}  ${ansiYellow("alt+a")} ${dim("actions")}  ${ansiYellow("tab")} ${dim("scope")}  ${ansiYellow("ctrl+u")} ${dim("clear")}`));
 		}
 		lines.push(bottom());
 		return lines;
@@ -3844,7 +3846,8 @@ class QolSessionSearchComponent {
 			lines.push(selected ? selectedRow(messageRow) : row(messageRow));
 		}
 		lines.push(divider(), empty());
-		lines.push(row(`${ansiYellow("-/=")} ${dim("page")}  ${ansiYellow("enter")} ${dim("prompt actions")}  ${ansiYellow("alt+c")} ${dim("copy prompt")}  ${ansiYellow("alt+f")} ${dim("fork from here")}  ${ansiYellow("alt+r")} ${dim("resume")}  ${ansiYellow("esc")} ${dim("sessions")}`));
+		lines.push(row(`${ansiYellow("-/=")} ${dim("page")}  ${ansiYellow("enter")} ${dim("prompt actions")}  ${ansiYellow("alt+c")} ${dim("copy")}  ${ansiYellow("alt+f")} ${dim("fork")}  ${ansiYellow("alt+r")} ${dim("resume")}`));
+		lines.push(row(`${ansiYellow("alt+i")} ${dim("inject")}  ${ansiYellow("alt+n")} ${dim("new+ctx")}`));
 		lines.push(bottom());
 		return lines;
 	}
@@ -3872,14 +3875,9 @@ class QolSessionSearchComponent {
 		for (const help of helpLines) {
 			for (const line of wrapVisible(dim(help), inner, 2)) lines.push(row(line));
 		}
-		lines.push(empty());
-		const actions = QOL_SESSION_ACTIONS.map((action, index) => {
-			const label = QOL_SESSION_ACTION_LABELS[action];
-			return index === state.actionIndex ? this.theme.bold(accent(`[${label}]`)) : dim(`[${label}]`);
-		});
-		for (const line of wrapVisible(actions.join(" "), inner, 2)) lines.push(row(line));
-		lines.push(empty());
-		lines.push(row(`${ansiYellow("tab")}/${ansiYellow("←→")} ${dim("cycle")}  ${ansiYellow("enter")} ${dim("choose")}  ${ansiYellow("esc")} ${dim("prompts")}`));
+		lines.push(empty(), divider(), empty());
+		lines.push(row(`${ansiYellow("alt+c")} ${dim("copy")}  ${ansiYellow("alt+f")} ${dim("fork")}  ${ansiYellow("alt+r")} ${dim("resume")}`));
+		lines.push(row(`${ansiYellow("alt+i")} ${dim("inject")}  ${ansiYellow("alt+n")} ${dim("new+ctx")}`));
 		lines.push(bottom());
 		return lines;
 	}
@@ -3905,7 +3903,7 @@ class QolSessionSearchComponent {
 			for (let i = 0; i < wrapped.length; i++) lines.push(filledRow(`${i === 0 ? prefix : " ".repeat(visibleWidth(prefix))}${wrapped[i]}`));
 		}
 		lines.push(empty(), divider(), empty());
-		lines.push(row(`${ansiYellow("enter")} ${dim(action === "Inject Context" ? "inject context" : "create session with context")}  ${ansiYellow("esc")} ${dim("actions")}`));
+		lines.push(row(`${ansiYellow("enter")} ${dim(action === "Inject Context" ? "inject context" : "create session with context")}`));
 		lines.push(bottom());
 		return lines;
 	}
@@ -3973,7 +3971,7 @@ class QolSessionSearchLoadingComponent {
 			empty(),
 			divider(),
 			empty(),
-			row(`${ansiYellow("esc")} ${dim("cancel")}  ${ansiYellow("ctrl+c")} ${dim("cancel")}`),
+			row(`${ansiYellow("ctrl+c")} ${dim("cancel")}`),
 			bottom(),
 		];
 	}
