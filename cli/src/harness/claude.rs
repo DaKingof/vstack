@@ -31,7 +31,7 @@ pub fn generate_agent(
     let model = agent.model_id("claude-code");
     output.push_str(&format!("model: {}\n", model));
 
-    if let Some(ref color) = agent.color {
+    if let Some(color) = extras.color.as_ref().or(agent.color.as_ref()) {
         output.push_str(&format!("color: {}\n", color));
     }
 

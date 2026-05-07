@@ -351,6 +351,16 @@ fn run_one(global: bool, verbose: bool) -> Result<()> {
         );
     }
 
+    if !global {
+        let agent_color_map: HashMap<String, Option<String>> = all_source_agents
+            .iter()
+            .filter(|agent| lock.entries.contains_key(&agent.name))
+            .map(|agent| (agent.name.clone(), agent.color.clone()))
+            .collect();
+        crate::project_config::write_agent_colors(&project_root, &agent_color_map);
+        project_config = crate::project_config::ProjectConfig::load(&project_root);
+    }
+
     let stats = refresh_items_in_scope(
         global,
         &lock,

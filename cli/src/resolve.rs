@@ -53,7 +53,12 @@ pub fn build_agent_extras(
 ) -> AgentExtras {
     let file_guidance = file_extras.and_then(|e| e.guidance.as_deref());
     let file_instructions = file_extras.and_then(|e| e.instructions.as_deref());
+    let file_color = file_extras.and_then(|e| e.color.as_deref());
     AgentExtras {
+        color: project_config
+            .color_for(agent_name)
+            .or(file_color)
+            .map(String::from),
         guidance: project_config
             .guidance_for(agent_name)
             .or(file_guidance)

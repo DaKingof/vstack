@@ -18,6 +18,10 @@ pub struct ProjectConfig {
     /// updates the generated agent files.
     #[serde(rename = "agent-skills")]
     pub agent_skills: HashMap<String, Vec<String>>,
+    /// Per-agent display colors written to agent frontmatter when supported.
+    /// Empty values are ignored and fall back to source frontmatter.
+    #[serde(rename = "agent-colors")]
+    pub agent_colors: HashMap<String, String>,
     #[serde(rename = "agent-skills-optional")]
     pub agent_skills_optional: HashMap<String, Vec<crate::mapping::OptionalSkill>>,
     #[serde(rename = "agent-launch-instructions", alias = "agent-guidance")]
@@ -79,6 +83,14 @@ impl ProjectConfig {
         self.agent_skills.get(agent_name)
     }
 
+    /// Get the project-level color override for an agent, if one exists.
+    pub fn color_for(&self, agent_name: &str) -> Option<&str> {
+        self.agent_colors
+            .get(agent_name)
+            .map(|s| s.as_str())
+            .filter(|s| !s.trim().is_empty())
+    }
+
     /// Get guidance text for an agent
     pub fn guidance_for(&self, agent_name: &str) -> Option<&str> {
         self.agent_guidance.get(agent_name).map(|s| s.as_str())
@@ -133,9 +145,17 @@ impl ProjectConfig {
             extracted.guidance.is_some() && self.guidance_for(agent_name).is_none();
         let needs_instructions =
             extracted.instructions.is_some() && self.instructions_for(agent_name).is_none();
+        let needs_color = extracted.color.is_some() && self.color_for(agent_name).is_none();
 
-        if !needs_guidance && !needs_instructions {
+        if !needs_guidance && !needs_instructions && !needs_color {
             return;
+        }
+
+        if let Some(ref color) = extracted.color {
+            if needs_color {
+                self.agent_colors
+                    .insert(agent_name.to_string(), color.clone());
+            }
         }
 
         if let Some(ref text) = extracted.guidance {
@@ -155,6 +175,12 @@ impl ProjectConfig {
         let path = project_root.join("vstack.toml");
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
         let mut out = existing.clone();
+
+        if needs_color {
+            if let Some(ref color) = extracted.color {
+                out = upsert_agent_value_in_section(&out, "[agent-colors]", agent_name, color);
+            }
+        }
 
         if needs_guidance {
             if let Some(ref text) = extracted.guidance {
@@ -448,6 +474,54 @@ pub fn write_agent_skills(project_root: &Path, agent_skill_map: &HashMap<String,
     }
 }
 
+/// Write `[agent-colors]` entries to the project's vstack.toml.
+/// Only adds agents that don't already have an entry — never overwrites user edits.
+pub fn write_agent_colors(project_root: &Path, agent_color_map: &HashMap<String, Option<String>>) {
+    let path = project_root.join("vstack.toml");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+
+    let parsed: ProjectConfig = toml::from_str(&existing).unwrap_or_default();
+
+    let mut content = existing.clone();
+    if !content.contains("[agent-colors]") {
+        content.push_str("\n\n# ── Agent Colors ─────────────────────────────────────\n");
+        content.push_str("# Agent display color written to frontmatter when the\n");
+        content.push_str("# target harness supports it. Pi subagent panes use this\n");
+        content.push_str("# for the statusline badge background. Empty = source default.\n");
+        content.push_str("# Common values: red, green, yellow, blue, magenta, cyan.\n");
+        content.push_str("#\n");
+        content.push_str("[agent-colors]\n");
+    }
+
+    let mut agents: Vec<&String> = agent_color_map.keys().collect();
+    agents.sort();
+
+    let mut new_entries = String::new();
+    for agent in agents {
+        if parsed.agent_colors.contains_key(agent.as_str()) {
+            continue;
+        }
+        let color = agent_color_map
+            .get(agent)
+            .and_then(|value| value.as_deref())
+            .unwrap_or("");
+        let escaped = color.replace('\\', "\\\\").replace('"', "\\\"");
+        new_entries.push_str(&format!("{} = \"{}\"\n", agent, escaped));
+    }
+
+    if new_entries.is_empty() {
+        if content != existing {
+            let _ = std::fs::write(&path, content);
+        }
+        return;
+    }
+
+    let out = insert_entries_into_section(&content, "[agent-colors]", &new_entries);
+    if out != existing {
+        let _ = std::fs::write(&path, out);
+    }
+}
+
 /// Write `[agent-skills-optional]` entries to the project's vstack.toml.
 /// Only adds agents that don't already have an entry — never overwrites user edits.
 pub fn write_agent_skills_optional(
@@ -623,6 +697,16 @@ fn create_project_config(path: &Path, agents: &[String], skills: &[String]) {
     out.push_str("[agent-skills]\n");
     // Actual skill lists are written by write_agent_skills() after
     // the mapping is computed, so we just emit the section header here.
+
+    // ── agent-colors ──
+    out.push_str("\n\n# ── Agent Colors ─────────────────────────────────────\n");
+    out.push_str("# Agent display color written to frontmatter when the\n");
+    out.push_str("# target harness supports it. Pi subagent panes use this\n");
+    out.push_str("# for the statusline badge background. Empty = source default.\n");
+    out.push_str("# Common values: red, green, yellow, blue, magenta, cyan.\n");
+    out.push_str("#\n");
+    out.push_str("[agent-colors]\n");
+    // Actual entries are written by write_agent_colors().
 
     // ── agent-skills-optional ──
     out.push_str("\n\n# ── Optional Skills ──────────────────────────────────\n");
@@ -898,6 +982,10 @@ mod tests {
 [agent-skills]
 rust = ["rust-arch", "rust-async", "my-custom-skill"]
 
+[agent-colors]
+rust = "green"
+generalist = ""
+
 [agent-launch-instructions]
 rust = "Use when working on backend Rust services."
 
@@ -910,6 +998,9 @@ rust = "Always run clippy before committing."
         assert_eq!(skills[0], "rust-arch");
         assert_eq!(skills[2], "my-custom-skill");
 
+        assert_eq!(config.color_for("rust"), Some("green"));
+        assert_eq!(config.color_for("generalist"), None);
+
         assert_eq!(
             config.guidance_for("rust"),
             Some("Use when working on backend Rust services.")
@@ -921,6 +1012,7 @@ rust = "Always run clippy before committing."
 
         // Unknown agent returns None
         assert!(config.agent_skills_for("unknown").is_none());
+        assert!(config.color_for("unknown").is_none());
         assert!(config.guidance_for("unknown").is_none());
         assert!(config.instructions_for("unknown").is_none());
     }
@@ -929,8 +1021,38 @@ rust = "Always run clippy before committing."
     fn project_config_missing_file_returns_default() {
         let config = ProjectConfig::load(std::path::Path::new("/nonexistent/path"));
         assert!(config.agent_skills.is_empty());
+        assert!(config.agent_colors.is_empty());
         assert!(config.agent_guidance.is_empty());
         assert!(config.agent_instructions.is_empty());
+    }
+
+    #[test]
+    fn write_agent_colors_adds_missing_entries_without_overwriting() {
+        let dir =
+            std::env::temp_dir().join(format!("vstack_test_agent_colors_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vstack.toml");
+        std::fs::write(
+            &path,
+            "[agent-colors]\nrust = \"blue\"\n\n[agent-skills]\nrust = []\n",
+        )
+        .unwrap();
+
+        let mut colors = HashMap::new();
+        colors.insert("rust".to_string(), Some("green".to_string()));
+        colors.insert("iced".to_string(), Some("magenta".to_string()));
+        write_agent_colors(&dir, &colors);
+
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(updated.contains("rust = \"blue\""));
+        assert!(updated.contains("iced = \"magenta\""));
+
+        let config: ProjectConfig = toml::from_str(&updated).unwrap();
+        assert_eq!(config.color_for("rust"), Some("blue"));
+        assert_eq!(config.color_for("iced"), Some("magenta"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

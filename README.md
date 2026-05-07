@@ -29,7 +29,7 @@ Author skills, agents, and hooks once. Install into Claude Code, Cursor, OpenCod
 - **Global or project scope** — install per user or per project.
 - **Skill dependencies** — required deps install transitively; optional deps stay documentation-only.
 - **Config-driven attribution** — `vstack.toml` maps skills/hooks to agents and roles.
-- **Project customization** — per-agent guidance, custom skills, per-skill instructions, custom hooks. Survives upstream updates.
+- **Project customization** — per-agent guidance, colors, custom skills, per-skill instructions, custom hooks. Survives upstream updates.
 - **Reconciliation** — agents/skills regenerate on changes, preserving user edits.
 - **Lockfile refresh** — `vstack refresh` reinstalls all locked items; `--scope project|global|all` narrows.
 - **Source switching** — multiple package repos persisted in a global registry, swappable from the TUI.
@@ -135,6 +135,12 @@ rust = "Always run clippy before committing."
 [agent-skills]
 rust = ["rust-arch", "rust-cargo", "decider", "github", "worktree"]
 iced = ["iced-rs", "trading-design", "decider", "github", "worktree"]
+
+# Agent display color written to supported agent frontmatter.
+# Pi subagent panes use this for the statusline badge background.
+[agent-colors]
+rust = "green"
+iced = "magenta"
 
 # Project instructions appended to a skill's SKILL.md.
 [skill-instructions]

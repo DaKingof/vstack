@@ -141,6 +141,11 @@ rust = ["rust-arch", "rust-cargo"]
 [agent-skills-optional]
 rust = [{ skill = "rust-async", when = "Async, tokio, channels" }]
 
+# Agent display color written to supported agent frontmatter.
+# Pi subagent panes use this for the statusline badge background.
+[agent-colors]
+rust = "green"
+
 # What the agent should do when first invoked.
 [agent-launch-instructions]
 rust = "Pick up the highest-priority backend issue."

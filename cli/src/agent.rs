@@ -197,6 +197,7 @@ pub fn match_hooks<'a>(
 /// Per-agent customization from project-level config
 #[derive(Debug, Clone, Default)]
 pub struct AgentExtras {
+    pub color: Option<String>,
     pub guidance: Option<String>,
     pub instructions: Option<String>,
     /// Custom hooks from vstack.toml (Claude Code only — command paths)
@@ -241,11 +242,24 @@ pub fn append_section(body: &str, section: &str) -> String {
 /// from an existing generated agent file so they can be preserved across regeneration.
 pub fn extract_user_sections(content: &str) -> AgentExtras {
     AgentExtras {
+        color: extract_frontmatter_color(content),
         guidance: extract_section(content, "## Launch Instructions")
             .or_else(|| extract_section(content, "## When to Use")),
         instructions: extract_section(content, "## Additional Instructions"),
         ..Default::default()
     }
+}
+
+/// Extract an agent `color:` value from YAML frontmatter, if present.
+pub fn extract_frontmatter_color(content: &str) -> Option<String> {
+    let (frontmatter, _) = crate::frontmatter::split_yaml_frontmatter(content).ok()?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&frontmatter).ok()?;
+    value
+        .get("color")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 /// Extract a markdown section's body text between its heading and the next `## ` heading.

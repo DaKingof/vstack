@@ -713,6 +713,12 @@ source (e.g. switching vstack repos, or starting clean), pass --clobber:
             &agent_names,
             &skill_names,
         );
+
+        let agent_color_map: std::collections::HashMap<String, Option<String>> = selected_agents
+            .iter()
+            .map(|agent| (agent.name.clone(), agent.color.clone()))
+            .collect();
+        crate::project_config::write_agent_colors(&config::project_root(), &agent_color_map);
     }
 
     let mut project_config = crate::project_config::ProjectConfig::load(&config::project_root());

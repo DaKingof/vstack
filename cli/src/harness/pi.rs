@@ -45,7 +45,7 @@ pub fn generate_agent(
     output.push_str(&format!("description: \"{}\"\n", desc));
     output.push_str(&format!("tools: {}\n", tools));
     output.push_str(&format!("model: {}\n", model));
-    if let Some(ref color) = agent.color {
+    if let Some(color) = extras.color.as_ref().or(agent.color.as_ref()) {
         output.push_str(&format!("color: {}\n", color));
     }
     if matches!(agent.role, AgentRole::Engineer) {
@@ -148,6 +148,7 @@ mod tests {
 
         let agent = agent_fixture("rust", AgentRole::Engineer, "opus");
         let extras = AgentExtras {
+            color: Some("magenta".into()),
             guidance: Some("Read open issues and start.".into()),
             instructions: Some("Run clippy before commits.".into()),
             custom_hooks: Vec::new(),
@@ -161,7 +162,7 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("name: rust"));
         assert!(content.contains("model: openai/gpt-5.5:xhigh"));
-        assert!(content.contains("color: green"));
+        assert!(content.contains("color: magenta"));
         assert!(content.contains("tools: read, grep, find, ls, bash, edit, write"));
         assert!(content.contains("pane: true"));
         assert!(content.contains("## Launch Instructions"));
