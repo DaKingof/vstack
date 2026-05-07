@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@m
 import { getCapabilities, Image, Text, type Component } from "@mariozechner/pi-tui";
 import { hasOpenAiModelsLoaded } from "./activation.js";
 import { computeNextActiveTools, computeToolCapabilities, modelKey, PACKAGE_TOOL_NAMES, type ModelLike } from "./capabilities.js";
+import { registerOpenAICodexCustomProvider } from "./provider-shim.js";
 import { rewriteNativeOpenAiTools } from "./provider-native-tools.js";
 import { loadSettings, settingsDiagnostics } from "./settings.js";
 import { createApplyPatchToolDefinition } from "./tools/apply-patch.js";
@@ -96,6 +97,7 @@ function statusLines(pi: ExtensionAPI, ctx: ExtensionContext): string[] {
 		`enabled: ${settings.enabled}`,
 		`autoEnable: ${settings.autoEnable}`,
 		`nativeProviderTools: ${settings.nativeProviderTools}`,
+		`native provider shim: ${settings.enabled && settings.nativeProviderTools ? "registered" : "disabled"}`,
 		"tools:",
 		...Object.entries(capabilities).map(([name, capability]) => `- ${name}: ${capability.enabled ? "supported" : "disabled"}${active.has(name) ? ", active" : ""} — ${capability.reason}`),
 	];
@@ -177,8 +179,10 @@ export default function codexMinimalTools(pi: ExtensionAPI): void {
 	if (guard[INSTALL_SYMBOL]) return;
 	guard[INSTALL_SYMBOL] = true;
 
+	let currentCwd = process.cwd();
 	let toolsRegistered = false;
 	const ensureToolsRegistered = (ctx: ExtensionContext): boolean => {
+		currentCwd = ctx.cwd;
 		if (toolsRegistered) return true;
 		const settings = loadSettings(ctx.cwd);
 		if (!settings.enabled || !hasOpenAiModelsLoaded(ctx)) return false;
@@ -187,6 +191,11 @@ export default function codexMinimalTools(pi: ExtensionAPI): void {
 		return true;
 	};
 
+	const initialSettings = loadSettings(currentCwd);
+	if (initialSettings.enabled && initialSettings.nativeProviderTools) {
+		registerOpenAICodexCustomProvider(pi, { getCurrentCwd: () => currentCwd });
+	}
+
 	registerDiagnosticCommand(pi);
 
 	pi.on("session_start", async (_event, ctx) => syncActiveTools(pi, ctx, ensureToolsRegistered(ctx)));
@@ -194,6 +203,7 @@ export default function codexMinimalTools(pi: ExtensionAPI): void {
 	pi.on("thinking_level_select", async (_event, ctx) => syncActiveTools(pi, ctx, ensureToolsRegistered(ctx)));
 
 	pi.on("before_provider_request", (event, ctx) => {
+		currentCwd = ctx.cwd;
 		const settings = loadSettings(ctx.cwd);
 		if (!settings.enabled || !settings.nativeProviderTools || !hasOpenAiModelsLoaded(ctx) || contextModel(ctx)?.provider !== "openai-codex") return undefined;
 		const result = rewriteNativeOpenAiTools(event.payload);

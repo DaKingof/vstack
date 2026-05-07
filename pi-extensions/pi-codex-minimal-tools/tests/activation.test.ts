@@ -12,6 +12,8 @@ function fakePi() {
 		handlers,
 		tools,
 		registerCommand() {},
+		registerProvider() {},
+		registerMessageRenderer() {},
 		registerTool(tool: any) { tools.push(tool); },
 		on(event: string, handler: Function) { (handlers[event] ??= []).push(handler); },
 		getActiveTools() { return activeTools; },

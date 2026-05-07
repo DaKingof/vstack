@@ -12,11 +12,11 @@ Implemented features:
 - `/codex-minimal-tools` — opens the extension-manager settings popup when `pi-extension-manager` is installed; otherwise prints status and active package tools inline.
 - Capability gating that only adds/removes this package's tools and preserves Pi native tools.
 - OpenAI active-model gating: package tools are only active for OpenAI/OpenAI-Codex-like models, even if other providers support images.
-- Native-aware OpenAI Codex provider shim for active `image_generation` tools.
-- Generated image saving under `imageOutputDir` with `latest.<ext>` mirrors.
+- Native-aware OpenAI Codex provider shim for active `image_generation` tools, including response-stream capture for `image_generation_call` results.
+- Generated image saving under `imageOutputDir` with `latest.<ext>` mirrors and an inline display message.
 - Optional direct OpenAI Images API fallback when `directImageApiFallback` is enabled and `OPENAI_API_KEY` is set.
 
-`web_search` moved to the `pi-web-tools` package. Old `pi-codex-minimal-tools` web-search settings are ignored after this migration.
+`web_search` moved to the `pi-web-tools` package. Old `pi-codex-minimal-tools` web-search settings are ignored after this migration. This package's Codex provider shim still calls Pi's normal provider payload hook, so `pi-web-tools` keeps ownership of web-search provider selection, native rewrite gating, and direct-provider fallbacks.
 
 ## Install
 
@@ -73,7 +73,7 @@ Project `.pi/settings.json` overrides user `~/.pi/agent/settings.json`.
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `nativeProviderTools` | `true` | Outgoing-request rewrite. When the model is `openai-codex`, rewrite `image_generation` to OpenAI's Responses-API native `{type:"image_generation"}` spec instead of sending it as a generic function tool. **Required for image generation to actually produce images on `openai-codex`.** Does not affect `view_image` or `apply_patch`, which always travel as function tools. Requires reload. |
+| `nativeProviderTools` | `true` | Registers the OpenAI Codex provider shim and rewrites active `image_generation` to OpenAI's Responses-API native `{type:"image_generation"}` spec instead of sending it as a generic function tool. The shim captures returned `image_generation_call.result` images, saves them, and displays an inline preview. Does not affect `view_image`, `apply_patch`, or `pi-web-tools` web-search routing. Requires reload. |
 
 ### Images
 
@@ -100,7 +100,7 @@ Project `.pi/settings.json` overrides user `~/.pi/agent/settings.json`.
 These two settings sound similar but operate on different layers:
 
 - `autoEnable` decides **which tools the model sees** (active-tool-set management). It's about Pi-side tool routing.
-- `nativeProviderTools` decides **how `image_generation` is encoded in the outgoing provider request** (function tool vs. OpenAI Responses-API native tool). It's about wire format on `openai-codex` only.
+- `nativeProviderTools` decides **how `image_generation` is encoded and captured** (function tool vs. OpenAI Responses-API native tool plus provider-stream image capture). It's about `openai-codex` only.
 
 You can have one on and the other off:
 

@@ -63,8 +63,8 @@ export function createImageGenerationToolDefinition(options: { loadSettings?: (c
 	return {
 		name: "image_generation",
 		label: "Image Generation",
-		description: "Generate images with OpenAI native image_generation on supported openai-codex models. If native handling is unavailable, direct fallback can be enabled with directImageApiFallback and OPENAI_API_KEY.",
-		promptSnippet: "Generate images with OpenAI native image_generation when available.",
+		description: "Generate images with OpenAI native image_generation on supported openai-codex models. Native results are saved under the configured imageOutputDir and mirrored to latest.<ext>. If native handling is unavailable, direct fallback can be enabled with directImageApiFallback and OPENAI_API_KEY.",
+		promptSnippet: "Generate images with OpenAI native image_generation when available; native results are saved under imageOutputDir and mirrored as latest.<ext>.",
 		parameters: imageGenerationToolSchema,
 		async execute(_toolCallId: string, params: ImageGenerationInput, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: { cwd: string }) {
 			const cwd = ctx?.cwd ?? process.cwd();
