@@ -1123,7 +1123,7 @@ class SessionManagerOverlay implements Focusable {
 		const leftFixed = cursor + ui.dim(prefix) + marker;
 		const availableTitle = Math.max(8, inner - visibleWidth(leftFixed) - visibleWidth(right) - 2);
 		let title = truncateToWidth(titleRaw, availableTitle, "…");
-		if (current) title = ui.success(title);
+		if (current) title = this.theme.fg("success", title);
 		else if (isNamed(session)) title = ui.accent(title);
 		if (selected) title = this.theme.bold(title);
 		const left = leftFixed + title;
