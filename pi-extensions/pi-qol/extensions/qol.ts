@@ -3465,27 +3465,27 @@ class QolSessionSearchComponent {
 			this.openMessages(hit.result, hit.message);
 			return;
 		}
-		if (data.toLowerCase() === "c") {
+		if (matchesKey(data, "alt+c")) {
 			const hit = state.results[state.selected];
 			if (hit) this.done({ message: hit.message, result: hit.result, type: "copy" });
 			return;
 		}
-		if (data.toLowerCase() === "f") {
+		if (matchesKey(data, "alt+f")) {
 			const hit = state.results[state.selected];
 			if (hit) this.done({ message: hit.message, result: hit.result, type: "resume" });
 			return;
 		}
-		if (data.toLowerCase() === "r") {
+		if (matchesKey(data, "alt+r")) {
 			const hit = state.results[state.selected];
 			if (hit) this.done({ result: hit.result, type: "resume" });
 			return;
 		}
-		if (data.toLowerCase() === "i") {
+		if (matchesKey(data, "alt+i")) {
 			const hit = state.results[state.selected];
 			if (hit) this.done({ customPrompt: this.selectedFocusText(hit.message), message: hit.message, result: hit.result, type: "summarize" });
 			return;
 		}
-		if (data.toLowerCase() === "a") {
+		if (matchesKey(data, "alt+a")) {
 			const hit = state.results[state.selected];
 			if (hit) {
 				this.actionState = { actionIndex: 0, message: hit.message, result: hit.result };
@@ -3563,16 +3563,16 @@ class QolSessionSearchComponent {
 			this.screen = "actions";
 			return;
 		}
-		if (data.toLowerCase() === "r") {
+		if (matchesKey(data, "alt+r")) {
 			this.done({ result: state.result, type: "resume" });
 			return;
 		}
-		if (data.toLowerCase() === "c") {
+		if (matchesKey(data, "alt+c")) {
 			const message = state.messages[state.selected];
 			if (message) this.done({ message, result: state.result, type: "copy" });
 			return;
 		}
-		if (data.toLowerCase() === "f") {
+		if (matchesKey(data, "alt+f")) {
 			const message = state.messages[state.selected];
 			if (message) this.done({ message, result: state.result, type: "resume" });
 			return;
@@ -3715,8 +3715,8 @@ class QolSessionSearchComponent {
 		lines.push(divider(), empty());
 		lines.push(...this.renderSearchDetailRows(inner, row, dim, muted));
 		lines.push(empty());
-		lines.push(row(`${ansiYellow("-/=")} ${dim("page")}  ${ansiYellow("enter")} ${dim("all prompts")}  ${ansiYellow("c")} ${dim("copy")}  ${ansiYellow("f")} ${dim("fork")}  ${ansiYellow("r")} ${dim("resume")}  ${ansiYellow("i")} ${dim("inject")}  ${ansiYellow("a")} ${dim("actions")}`));
-		lines.push(row(`${ansiYellow("tab")} ${dim("scope")}  ${ansiYellow("ctrl+u")} ${dim("clear")}  ${ansiYellow("esc")} ${dim("close")}`));
+		lines.push(row(`${ansiYellow("-/=")} ${dim("page")}  ${ansiYellow("enter")} ${dim("all prompts")}  ${ansiYellow("alt+c")} ${dim("copy")}  ${ansiYellow("alt+f")} ${dim("fork")}  ${ansiYellow("alt+r")} ${dim("resume")}`));
+		lines.push(row(`${ansiYellow("alt+i")} ${dim("inject")}  ${ansiYellow("alt+a")} ${dim("actions")}  ${ansiYellow("tab")} ${dim("scope")}  ${ansiYellow("ctrl+u")} ${dim("clear")}  ${ansiYellow("esc")} ${dim("close")}`));
 		lines.push(bottom());
 		return lines;
 	}
@@ -3859,7 +3859,7 @@ class QolSessionSearchComponent {
 		}
 		if (state.messages.length > maxVisible) lines.push(empty(), row(dim(`${state.selected + 1}/${state.messages.length} user prompts`)));
 		lines.push(divider(), empty());
-		lines.push(row(`${ansiYellow("-/=")} ${dim("page")}  ${ansiYellow("enter")} ${dim("prompt actions")}  ${ansiYellow("c")} ${dim("copy prompt")}  ${ansiYellow("f")} ${dim("fork from here")}  ${ansiYellow("esc")} ${dim("sessions")}`));
+		lines.push(row(`${ansiYellow("-/=")} ${dim("page")}  ${ansiYellow("enter")} ${dim("prompt actions")}  ${ansiYellow("alt+c")} ${dim("copy prompt")}  ${ansiYellow("alt+f")} ${dim("fork from here")}  ${ansiYellow("alt+r")} ${dim("resume")}  ${ansiYellow("esc")} ${dim("sessions")}`));
 		lines.push(bottom());
 		return lines;
 	}
