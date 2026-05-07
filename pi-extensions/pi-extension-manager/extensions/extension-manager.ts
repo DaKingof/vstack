@@ -76,22 +76,12 @@ interface PackageManifest {
 		prompts?: string[];
 		themes?: string[];
 	};
-	bin?: string | Record<string, string>;
 	vstack?: {
 		extensionManager?: {
 			displayName?: string;
 			settings?: SettingsSchema[];
-			resources?: ResourceMetadata[];
 		};
 	};
-}
-
-interface ResourceMetadata {
-	kind: string;
-	name: string;
-	description?: string;
-	trigger?: string;
-	path?: string;
 }
 
 interface SettingsFile {
@@ -104,7 +94,6 @@ interface SettingsFile {
 
 interface ManagerState {
 	disabledItems: string[];
-	disabledProviders: string[];
 	config: Record<string, Record<string, unknown>>;
 }
 
@@ -203,11 +192,6 @@ interface ManagerActionToggleItem {
 	itemId: string;
 }
 
-interface ManagerActionToggleProvider {
-	type: "toggle-provider";
-	provider: string;
-}
-
 interface ManagerActionResetSetting {
 	type: "reset-setting";
 	itemId: string;
@@ -224,7 +208,7 @@ interface ManagerActionUninstallPackage {
 	itemId: string;
 }
 
-type ManagerAction = ManagerActionEdit | ManagerActionSet | ManagerActionToggleItem | ManagerActionToggleProvider | ManagerActionResetSetting | ManagerActionResetSettings | ManagerActionUninstallPackage | { type: "close" } | undefined;
+type ManagerAction = ManagerActionEdit | ManagerActionSet | ManagerActionToggleItem | ManagerActionResetSetting | ManagerActionResetSettings | ManagerActionUninstallPackage | { type: "close" } | undefined;
 
 function expandHome(input: string): string {
 	if (input === "~") return homedir();
@@ -301,9 +285,6 @@ function managerStateFrom(json: Record<string, unknown>): ManagerState {
 	}
 	return {
 		disabledItems: Array.isArray(manager.disabledItems) ? manager.disabledItems.filter((v): v is string => typeof v === "string") : [],
-		disabledProviders: Array.isArray(manager.disabledProviders)
-			? manager.disabledProviders.filter((v): v is string => typeof v === "string")
-			: [],
 		config: normalizedConfig,
 	};
 }
@@ -313,7 +294,6 @@ function mergedManagerState(files: SettingsFile[]): ManagerState {
 	const project = managerStateFrom(files.find((f) => f.scope === "project")?.json ?? {});
 	return {
 		disabledItems: [...new Set([...user.disabledItems, ...project.disabledItems])],
-		disabledProviders: [...new Set([...user.disabledProviders, ...project.disabledProviders])],
 		config: deepMergeConfig(user.config, project.config),
 	};
 }
@@ -334,7 +314,7 @@ function updateManagerState(file: SettingsFile, updater: (state: ManagerState) =
 	const current = managerStateFrom(file.json);
 	updater(current);
 	manager.disabledItems = current.disabledItems;
-	manager.disabledProviders = current.disabledProviders;
+	delete manager.disabledProviders;
 	manager.config = current.config;
 	writeSettingsFile(file);
 }
@@ -573,12 +553,6 @@ function resolveSource(source: string, baseDir: string): string {
 	return resolve(baseDir, expanded);
 }
 
-function binNames(bin: PackageManifest["bin"]): string[] {
-	if (!bin) return [];
-	if (typeof bin === "string") return [bin];
-	return Object.keys(bin);
-}
-
 function packageDisplayName(manifest: PackageManifest, fallback: string): string {
 	return manifest.vstack?.extensionManager?.displayName || manifest.name || fallback;
 }
@@ -740,12 +714,6 @@ function buildInventory(pi: ExtensionAPI, ctx: ExtensionContext): Inventory {
 						stateReason: packageItem.state === "active" ? "declared in package pi.extensions" : packageItem.stateReason,
 					});
 				}
-				for (const binName of binNames(manifest.bin)) {
-					items.push(makeResourceItem(`bin:${packageName}:${binName}`, binName, "bin", file.scope, normalized.resolved, `${file.scope}:packages`, packageName, `CLI bin from ${packageName}`));
-				}
-				for (const resource of manifest.vstack?.extensionManager?.resources ?? []) {
-					items.push(makeResourceItem(`resource:${packageName}:${resource.kind}:${resource.name}`, resource.name, resource.kind, file.scope, resolve(normalized.resolved, resource.path ?? "."), `${file.scope}:packages`, packageName, resource.description ?? "", resource.trigger));
-				}
 			}
 		}
 		items.push(...collectConfiguredExtensions(file));
@@ -788,44 +756,6 @@ function buildInventory(pi: ExtensionAPI, ctx: ExtensionContext): Inventory {
 		}
 	}
 
-	for (const command of safeCommands(pi)) {
-		const sourceInfo = command.sourceInfo ?? {};
-		const scope = normalizeScope(sourceInfo.scope);
-		items.push({
-			description: command.description ?? "Slash command",
-			displayName: `/${command.name}`,
-			id: `command:${command.name}`,
-			kind: command.source === "skill" ? "skill command" : command.source === "prompt" ? "prompt command" : "slash command",
-			provider: sourceInfo.source ?? command.source ?? "commands",
-			scope,
-			sourceName: sourceInfo.source ?? command.source ?? "commands",
-			sourcePath: sourceInfo.path ?? "<runtime>",
-			state: "active",
-			stateReason: "registered in current runtime",
-			trigger: `/${command.name}`,
-		});
-	}
-
-	const activeTools = new Set(safeActiveTools(pi));
-	const showBuiltins = managerState.config[MANAGER_ID]?.showBuiltinTools === true;
-	for (const tool of safeTools(pi)) {
-		const sourceInfo = tool.sourceInfo ?? {};
-		if (!showBuiltins && sourceInfo.source === "builtin") continue;
-		items.push({
-			description: tool.description ?? "Tool",
-			displayName: tool.name,
-			id: `tool:${tool.name}`,
-			kind: "tool",
-			provider: sourceInfo.source ?? "tools",
-			scope: normalizeScope(sourceInfo.scope),
-			sourceName: sourceInfo.source ?? "tools",
-			sourcePath: sourceInfo.path ?? "<runtime>",
-			state: activeTools.has(tool.name) ? "active" : "disabled",
-			stateReason: activeTools.has(tool.name) ? "active tool" : "not present in active tool set",
-			trigger: tool.name,
-		});
-	}
-
 	applyDisableState(items, managerState);
 	items.sort(compareInventoryItems);
 	return { auditLines, items, managerState, packages: items.filter((item) => item.kind === "package"), settingsFiles };
@@ -852,11 +782,6 @@ function kindRank(kind: string): number {
 	const order: Record<string, number> = {
 		package: 0,
 		"extension module": 1,
-		tool: 2,
-		"slash command": 3,
-		"prompt command": 4,
-		"skill command": 5,
-		bin: 6,
 	};
 	return order[kind] ?? 9;
 }
@@ -880,13 +805,8 @@ function compactPath(path: string): string {
 
 function applyDisableState(items: InventoryItem[], managerState: ManagerState): void {
 	const disabledItems = new Set(managerState.disabledItems);
-	const disabledProviders = new Set(managerState.disabledProviders);
 	for (const item of items) {
 		if (item.state === "shadowed" || item.state === "broken") continue;
-		if (disabledProviders.has(item.provider)) {
-			item.state = "disabled";
-			item.stateReason = `provider disabled: ${item.provider}`;
-		}
 		if (disabledItems.has(item.id)) {
 			item.state = "disabled";
 			item.stateReason = "explicitly disabled in vstack extension manager";
@@ -896,30 +816,6 @@ function applyDisableState(items: InventoryItem[], managerState: ManagerState): 
 
 function normalizeScope(value: unknown): Scope {
 	return value === "user" || value === "project" || value === "temporary" || value === "builtin" ? value : "unknown";
-}
-
-function safeCommands(pi: ExtensionAPI): any[] {
-	try {
-		return pi.getCommands?.() ?? [];
-	} catch {
-		return [];
-	}
-}
-
-function safeTools(pi: ExtensionAPI): any[] {
-	try {
-		return pi.getAllTools?.() ?? [];
-	} catch {
-		return [];
-	}
-}
-
-function safeActiveTools(pi: ExtensionAPI): string[] {
-	try {
-		return pi.getActiveTools?.() ?? [];
-	} catch {
-		return [];
-	}
 }
 
 function getConfigValue(inventory: Inventory, extensionId: string, schema: SettingsSchema): ConfigValue {
@@ -1061,33 +957,44 @@ function selectedPackageForSetting(item: InventoryItem): string | undefined {
 	return item.packageName ?? (item.kind === "package" ? item.displayName : undefined);
 }
 
-function childItemsForPackage(items: InventoryItem[], packageName: string): InventoryItem[] {
-	return items.filter((item) => item.kind !== "package" && itemBelongsToPackage(item, packageName)).sort(compareInventoryItems);
+function managedPackageItemsForPackage(items: InventoryItem[], packageName: string): InventoryItem[] {
+	return items.filter((item) => itemBelongsToPackage(item, packageName) && (item.kind === "package" || item.kind === "extension module")).sort(compareInventoryItems);
+}
+
+function packageExtensions(items: InventoryItem[], packageName: string): InventoryItem[] {
+	return items.filter((item) => item.kind === "extension module" && itemBelongsToPackage(item, packageName)).sort(compareInventoryItems);
+}
+
+function stateMatchesFilter(state: ExtensionState, filter: string): boolean {
+	if (filter === "all") return true;
+	if (filter === "active") return state === "active";
+	if (filter === "inactive") return state !== "active";
+	return true;
+}
+
+function scopeFilterLabel(value: string): string {
+	return value === "temporary" ? "tmp" : value;
 }
 
 function itemSearchText(item: InventoryItem, allItems: InventoryItem[]): string {
 	const own = [item.displayName, item.kind, item.provider, item.description, item.sourcePath, item.stateReason, item.trigger].join("\n");
 	if (item.kind !== "package" || !item.packageName) return own.toLowerCase();
-	const children = childItemsForPackage(allItems, item.packageName)
+	const children = packageExtensions(allItems, item.packageName)
 		.map((child) => [child.displayName, child.kind, child.description, child.trigger, child.sourcePath].join("\n"))
 		.join("\n");
 	return `${own}\n${children}`.toLowerCase();
 }
 
 function packageSummaryMatches(item: InventoryItem, allItems: InventoryItem[], ui: ManagerUiState): boolean {
-	const related = item.packageName ? [item, ...childItemsForPackage(allItems, item.packageName)] : [item];
-	if (ui.kindFilter !== "all" && !related.some((candidate) => candidate.kind === ui.kindFilter)) return false;
-	if (ui.providerFilter !== "all" && !related.some((candidate) => candidate.provider === ui.providerFilter)) return false;
-	if (ui.stateFilter !== "all" && !related.some((candidate) => candidate.state === ui.stateFilter)) return false;
+	const related = item.packageName ? [item, ...packageExtensions(allItems, item.packageName)] : [item];
+	if (!related.some((candidate) => stateMatchesFilter(candidate.state, ui.stateFilter))) return false;
 	if (ui.scopeFilter !== "all" && !related.some((candidate) => candidate.scope === ui.scopeFilter)) return false;
 	return true;
 }
 
 function itemMatchesFilters(item: InventoryItem, allItems: InventoryItem[], ui: ManagerUiState, packageSummary: boolean): boolean {
 	if (packageSummary) return packageSummaryMatches(item, allItems, ui);
-	if (ui.kindFilter !== "all" && item.kind !== ui.kindFilter) return false;
-	if (ui.providerFilter !== "all" && item.provider !== ui.providerFilter) return false;
-	if (ui.stateFilter !== "all" && item.state !== ui.stateFilter) return false;
+	if (!stateMatchesFilter(item.state, ui.stateFilter)) return false;
 	if (ui.scopeFilter !== "all" && item.scope !== ui.scopeFilter) return false;
 	return true;
 }
@@ -1095,12 +1002,12 @@ function itemMatchesFilters(item: InventoryItem, allItems: InventoryItem[], ui: 
 function filteredItems(items: InventoryItem[], ui: ManagerUiState): InventoryItem[] {
 	const query = ui.search.trim().toLowerCase();
 	const packageName = packageNameForTab(ui.topTab);
-	const allPackageSummary = ui.topTab === TAB_ALL && !ui.showResources;
+	const allPackageSummary = ui.topTab === TAB_ALL;
 	const base = packageName
-		? items.filter((item) => itemBelongsToPackage(item, packageName))
+		? managedPackageItemsForPackage(items, packageName)
 		: allPackageSummary
 			? items.filter((item) => item.kind === "package")
-			: items;
+			: [];
 	const fallback = allPackageSummary && base.length === 0 ? items : base;
 	return fallback.filter((item) => {
 		const packageSummary = allPackageSummary && item.kind === "package";
@@ -1118,12 +1025,9 @@ interface ManagerUiState {
 	scroll: number;
 	settingScroll: number;
 	diagnosticsScroll: number;
-	kindFilter: string;
-	providerFilter: string;
 	stateFilter: string;
 	scopeFilter: string;
 	showAudit: boolean;
-	showResources: boolean;
 	editing?: InlineEditState & { itemId: string; settingKey: string };
 }
 
@@ -1273,9 +1177,7 @@ function renderInlineEditValue(editing: InlineEditState): string {
 
 function makeInitialUiState(initialTab: TopTab): ManagerUiState {
 	return {
-		kindFilter: "all",
 		pane: "list",
-		providerFilter: "all",
 		scopeFilter: "all",
 		search: "",
 		selected: 0,
@@ -1283,7 +1185,6 @@ function makeInitialUiState(initialTab: TopTab): ManagerUiState {
 		settingSelected: 0,
 		diagnosticsScroll: 0,
 		showAudit: false,
-		showResources: false,
 		stateFilter: "all",
 		topTab: initialTab,
 		scroll: 0,
@@ -1455,10 +1356,6 @@ async function openManager(pi: ExtensionAPI, ctx: ExtensionCommandContext | Exte
 			if (item) toggleItem(pi, ctx, inventory, item);
 			continue;
 		}
-		if (action.type === "toggle-provider") {
-			toggleProvider(pi, ctx, inventory, action.provider);
-			continue;
-		}
 		if (action.type === "uninstall-package") {
 			const item = inventory.items.find((candidate) => candidate.id === action.itemId);
 			if (!item) continue;
@@ -1501,7 +1398,7 @@ function applyMessage(schema: SettingsSchema): string {
 	return "Setting saved. Restart Pi to fully apply it.";
 }
 
-function toggleItem(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, inventory: Inventory, item: InventoryItem): void {
+function toggleItem(_pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, inventory: Inventory, item: InventoryItem): void {
 	if ((item.id === `package:${MANAGER_ID}` || item.packageName === MANAGER_ID) && item.state !== "disabled") {
 		ctx.ui.notify("Refusing to disable pi-extension-manager from inside itself. Edit settings.json manually if needed.", "warning");
 		return;
@@ -1516,15 +1413,6 @@ function toggleItem(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionCo
 	updateManagerState(file, (state) => {
 		state.disabledItems = [...disabled].sort();
 	});
-
-	if (item.kind === "tool") {
-		const active = new Set(safeActiveTools(pi));
-		if (willDisable) active.delete(item.displayName);
-		else active.add(item.displayName);
-		pi.setActiveTools?.([...active]);
-		ctx.ui.notify(`${item.displayName} ${willDisable ? "disabled" : "enabled"} live.`, "info");
-		return;
-	}
 
 	if (item.kind === "package" && item.packageName) {
 		const changed = setPackageFiltered(item, inventory.settingsFiles, willDisable);
@@ -1599,24 +1487,6 @@ function setPackageExtensionFiltered(item: InventoryItem, files: SettingsFile[],
 	return changed;
 }
 
-function toggleProvider(pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, inventory: Inventory, provider: string): void {
-	const file = findSettingsFile(inventory.settingsFiles, "project");
-	const disabled = new Set(inventory.managerState.disabledProviders);
-	if (disabled.has(provider)) disabled.delete(provider);
-	else disabled.add(provider);
-	updateManagerState(file, (state) => {
-		state.disabledProviders = [...disabled].sort();
-	});
-	const active = new Set(safeActiveTools(pi));
-	const itemDisabled = new Set(inventory.managerState.disabledItems);
-	for (const tool of inventory.items.filter((item) => item.kind === "tool" && item.provider === provider)) {
-		if (disabled.has(provider)) active.delete(tool.displayName);
-		else if (!itemDisabled.has(tool.id)) active.add(tool.displayName);
-	}
-	pi.setActiveTools?.([...active]);
-	ctx.ui.notify(`Provider ${provider} ${disabled.has(provider) ? "disabled" : "enabled"}. Package/module resources require /reload.`, "warning");
-}
-
 function createManagerComponent(
 	pi: ExtensionAPI,
 	ctx: ExtensionCommandContext | ExtensionContext,
@@ -1628,10 +1498,8 @@ function createManagerComponent(
 	done: (value: ManagerAction) => void,
 ) {
 	const topTabs = managerTabs(inventory);
-	const providers = ["all", ...new Set(inventory.items.map((item) => item.provider))].sort();
-	const kinds = ["all", ...new Set(inventory.items.map((item) => item.kind))].sort();
-	const states = ["all", "active", "disabled", "shadowed", "broken"];
-	const scopes = ["all", "project", "user", "temporary", "builtin", "unknown"];
+	const states = ["all", "active", "inactive"];
+	const scopes = ["all", "user", "project", "temporary"];
 
 	function clamp(): void {
 		const layout = getLayout();
@@ -1820,20 +1688,6 @@ function createManagerComponent(
 			requestRender();
 			return;
 		}
-		if (matchesKey(data, "alt+k")) {
-			ui.kindFilter = cycle(kinds, ui.kindFilter, 1);
-			ui.selected = 0;
-			clamp();
-			requestRender();
-			return;
-		}
-		if (matchesKey(data, "alt+p")) {
-			ui.providerFilter = cycle(providers, ui.providerFilter, 1);
-			ui.selected = 0;
-			clamp();
-			requestRender();
-			return;
-		}
 		if (matchesKey(data, "alt+s")) {
 			ui.stateFilter = cycle(states, ui.stateFilter, 1);
 			ui.selected = 0;
@@ -1847,21 +1701,6 @@ function createManagerComponent(
 			clamp();
 			requestRender();
 			return;
-		}
-		if (matchesKey(data, "alt+r")) {
-			ui.showResources = !ui.showResources;
-			ui.selected = 0;
-			ui.scroll = 0;
-			clamp();
-			requestRender();
-			return;
-		}
-		if (matchesKey(data, "alt+t") && selected) {
-			if (selected.kind === "package") {
-				ctx.ui.notify("alt+t toggles a provider group. Select a non-package resource first.", "warning");
-				return;
-			}
-			return done({ type: "toggle-provider", provider: selected.provider });
 		}
 		if (matchesKey(data, "alt+u") && selected && selected.kind === "package") {
 			return done({ type: "uninstall-package", itemId: selected.id });
@@ -2011,7 +1850,7 @@ function renderDiagnostics(inventory: Inventory, width: number, theme: Theme): s
 	const kinds = countBy(inventory.items, (item) => item.kind);
 	const lines = [
 		managerEntityTitle(theme, "Diagnostics"),
-		`Inventory: ${inventory.items.length} resources · ${counts.active ?? 0} active · ${counts.disabled ?? 0} disabled · ${counts.shadowed ?? 0} shadowed · ${counts.broken ?? 0} broken`,
+		`Inventory: ${inventory.items.length} packages/extensions · ${counts.active ?? 0} active · ${counts.disabled ?? 0} disabled · ${counts.shadowed ?? 0} shadowed · ${counts.broken ?? 0} broken`,
 		`Kinds: ${Object.entries(kinds).map(([kind, count]) => `${kind}=${count}`).join(", ")}`,
 		"",
 		managerSectionTitle(theme, "Settings files"),
@@ -2025,7 +1864,7 @@ function renderDiagnostics(inventory: Inventory, width: number, theme: Theme): s
 		for (const line of rest.slice(0, 3)) lines.push(theme.fg("dim", line));
 	}
 	lines.push("", theme.fg("warning", "Runtime note"));
-	lines.push("Pi cannot unload already-loaded extension modules live. Package/module toggles apply after /reload or restart; tool toggles apply live.");
+	lines.push("Pi cannot unload already-loaded extension modules live. Package and extension toggles apply after /reload or restart.");
 	return lines.flatMap((line) => wrapLine(line, width));
 }
 
@@ -2037,23 +1876,18 @@ function renderExtensions(inventory: Inventory, ui: ManagerUiState, width: numbe
 	const left = renderList(list, ui, leftWidth, theme, layout.listRows);
 	const rows = layout.bodyRows;
 	const right = renderInspector(inventory, selected, ui, rightWidth, theme, layout.settingsRows, rows);
-	const view = ui.topTab === TAB_ALL ? (ui.showResources ? "raw resources" : "packages") : "package";
 	const searchText = ` > ${ui.search}${theme.inverse(" ")}`;
 	const searchLine = theme.bg("toolPendingBg", pad(searchText, width));
-	const filterValue = (label: string, value: string): string => `${theme.fg("muted", `${label}:`)} ${value === "all" ? theme.fg("dim", value) : theme.fg("accent", value)}`;
-	const filterLine = `${theme.fg("muted", "view:")} ${theme.fg("text", view)}  ${theme.fg("muted", "filters:")} ${filterValue("kind", ui.kindFilter)}  ${filterValue("provider", ui.providerFilter)}  ${filterValue("state", ui.stateFilter)}  ${filterValue("scope", ui.scopeFilter)}`;
-	const filterKeyLine = `${ansiYellow("alt+k")} ${theme.fg("dim", "kind filter · ")}${ansiYellow("alt+p")} ${theme.fg("dim", "provider filter · ")}${ansiYellow("alt+s")} ${theme.fg("dim", "state filter · ")}${ansiYellow("alt+o")} ${theme.fg("dim", "scope filter")}`;
-	const hintParts = [
-		`${ansiYellow("alt+r")} ${theme.fg("dim", "raw resources")}`,
-	];
+	const filterValue = (label: string, value: string): string => `${theme.fg("muted", `${label}:`)} ${value === "all" ? theme.fg("dim", value) : theme.fg("accent", label === "scope" ? scopeFilterLabel(value) : value)}`;
+	const filterLine = `${theme.fg("muted", "filters:")} ${filterValue("state", ui.stateFilter)}  ${filterValue("scope", ui.scopeFilter)}   ${ansiYellow("alt+s")} ${theme.fg("dim", "state · ")}${ansiYellow("alt+o")} ${theme.fg("dim", "scope")}`;
+	const hintParts: string[] = [];
 	const toggleLabel = itemToggleHintLabel(selected);
 	if (toggleLabel) hintParts.push(`${ansiYellow("alt+x")} ${theme.fg("dim", toggleLabel)}`);
-	if (selected && selected.kind !== "package") hintParts.push(`${ansiYellow("alt+t")} ${theme.fg("dim", "toggle provider group")}`);
 	if (selected?.kind === "package") hintParts.push(`${ansiYellow("alt+u")} ${theme.fg("dim", "uninstall package")}`);
 	if ((selected?.settingsSchema ?? []).some((schema) => schema.type !== "secret")) hintParts.push(`${ansiYellow("alt+shift+x")} ${theme.fg("dim", "reset settings")}`);
 	hintParts.push(`${ansiYellow("delete")} ${theme.fg("dim", "reset setting")}`, `${ansiYellow("←/→")} ${theme.fg("dim", "pane")}`);
 	const hintLine = hintParts.join(theme.fg("dim", " · "));
-	const lines = [searchLine, ...wrapLine(filterLine, width), ...wrapLine(filterKeyLine, width), "", ...wrapLine(hintLine, width), divider(width, theme)];
+	const lines = [searchLine, ...wrapLine(filterLine, width), "", ...wrapLine(hintLine, width), divider(width, theme)];
 	const tableRows = Math.max(1, rows - Math.max(0, lines.length - 5) - footerRows);
 	for (let i = 0; i < tableRows; i += 1) {
 		lines.push(`${pad(left[i] ?? "", leftWidth)} ${theme.fg("dim", "│")} ${truncateToWidth(right[i] ?? "", rightWidth, "")}`);
@@ -2064,7 +1898,7 @@ function renderExtensions(inventory: Inventory, ui: ManagerUiState, width: numbe
 function itemToggleHintLabel(item: InventoryItem | undefined): string | undefined {
 	if (!item || item.state === "broken" || item.state === "shadowed") return undefined;
 	const verb = item.state === "disabled" ? "enable" : "disable";
-	if (item.kind === "package") return `${verb} package`;
+	if (item.kind === "package") return verb;
 	if (item.kind === "extension module") return `${verb} extension`;
 	return `${verb} ${kindLabel(item.kind)}`;
 }
@@ -2076,7 +1910,7 @@ function listDisplayName(item: InventoryItem, ui: ManagerUiState): string {
 }
 
 function renderList(items: InventoryItem[], ui: ManagerUiState, width: number, theme: Theme, listRows: number): string[] {
-	const title = packageNameForTab(ui.topTab) ? "Package" : ui.showResources ? "Resources" : "Packages";
+	const title = packageNameForTab(ui.topTab) ? "Package" : "Packages";
 	const lines = [`${managerPaneTitle(theme, title, ui.pane === "list")} ${theme.fg("dim", `(${items.length})`)}`, ""];
 	if (items.length === 0) {
 		lines.push(theme.fg("dim", "No matching items."));
@@ -2089,7 +1923,10 @@ function renderList(items: InventoryItem[], ui: ManagerUiState, width: number, t
 		const marker = " ";
 		const stateIcon = item.state === "active" ? theme.fg("success", "●") : item.state === "disabled" ? theme.fg("warning", "○") : item.state === "shadowed" ? theme.fg(selected ? "text" : "dim", "◌") : theme.fg("error", "×");
 		const name = selected ? theme.fg("text", listDisplayName(item, ui)) : listDisplayName(item, ui);
-		const meta = managerMutedForSelection(theme, ` ${kindLabel(item.kind)} · ${item.scope}`, selected);
+		const scopeText = scopeFilterLabel(item.scope);
+		const meta = item.kind === "package"
+			? managerMutedForSelection(theme, ` ${scopeText}`, selected)
+			: managerMutedForSelection(theme, ` ${kindLabel(item.kind)} · ${scopeText}`, selected);
 		const updateBadge = item.updateAvailable && item.latestVersion ? ` ${ansiYellow(`↑ ${item.latestVersion}`)}` : "";
 		const row = truncateToWidth(`${marker}${stateIcon} ${name}${meta}${updateBadge}`, width, "…");
 		lines.push(selected ? managerSelectedLine(theme, row, width) : row);
@@ -2104,21 +1941,13 @@ function shortResourceName(item: InventoryItem): string {
 	return item.trigger ?? item.displayName;
 }
 
-function packageResourceLines(inventory: Inventory, item: InventoryItem, width: number, theme: Theme): string[] {
+function packageExtensionLines(inventory: Inventory, item: InventoryItem, width: number, theme: Theme): string[] {
 	if (item.kind !== "package" || !item.packageName) return [];
-	const children = childItemsForPackage(inventory.items, item.packageName);
-	if (children.length === 0) return [];
-	const groups = new Map<string, InventoryItem[]>();
-	for (const child of children) {
-		const label = kindLabel(child.kind);
-		groups.set(label, [...(groups.get(label) ?? []), child]);
-	}
-	const lines = ["", managerSectionTitle(theme, `Resources (${children.length})`)];
-	for (const [label, group] of [...groups.entries()].sort((a, b) => kindRank(a[0]) - kindRank(b[0]) || a[0].localeCompare(b[0]))) {
-		const names = group.slice(0, 4).map(shortResourceName).join(", ");
-		const suffix = group.length > 4 ? `, +${group.length - 4} more` : "";
-		lines.push(truncateToWidth(`${theme.fg("muted", label)} (${group.length}): ${names}${suffix}`, width, "…"));
-	}
+	const extensions = packageExtensions(inventory.items, item.packageName);
+	if (extensions.length === 0) return [];
+	const names = extensions.slice(0, 5).map(shortResourceName).join(", ");
+	const suffix = extensions.length > 5 ? `, +${extensions.length - 5} more` : "";
+	const lines = ["", managerSectionTitle(theme, `Extensions (${extensions.length})`), truncateToWidth(`${names}${suffix}`, width, "…")];
 	return lines;
 }
 
@@ -2128,8 +1957,7 @@ function renderInspector(inventory: Inventory, item: InventoryItem | undefined, 
 		`${managerEntityTitle(theme, item.displayName)} ${theme.fg(stateColor(item.state), item.state)}`,
 		item.description ? theme.fg("text", item.description) : theme.fg("dim", "No description."),
 		"",
-		`${theme.fg("muted", "Kind")}: ${kindLabel(item.kind)}    ${theme.fg("muted", "Scope")}: ${item.scope}`,
-		`${theme.fg("muted", "Provider")}: ${item.provider}`,
+		`${theme.fg("muted", "Kind")}: ${item.kind === "package" ? "package" : kindLabel(item.kind)}    ${theme.fg("muted", "Scope")}: ${scopeFilterLabel(item.scope)}`,
 		`${theme.fg("muted", "Source")}: ${compactPath(item.sourcePath)}`,
 		`${theme.fg("muted", "State")}: ${item.stateReason}`,
 	];
@@ -2150,7 +1978,7 @@ function renderInspector(inventory: Inventory, item: InventoryItem | undefined, 
 	if (item.trigger) detailLines.push(`${theme.fg("muted", "Trigger")}: ${item.trigger}`);
 	if (item.shadowedBy) detailLines.push(`${theme.fg("muted", "Shadowed by")}: ${item.shadowedBy}`);
 	if (item.brokenError) detailLines.push(`${theme.fg("error", "Error")}: ${item.brokenError}`);
-	detailLines.push(...packageResourceLines(inventory, item, width, theme));
+	detailLines.push(...packageExtensionLines(inventory, item, width, theme));
 
 	const schemas = item.settingsSchema ?? [];
 	const settingsHeader = ["", managerPaneTitle(theme, "Settings", ui.pane === "settings"), ""];
@@ -2682,7 +2510,7 @@ export default function extensionManager(pi: ExtensionAPI): void {
 	}
 
 	pi.registerCommand("extensions", {
-		description: "Browse, toggle, inspect, and configure Pi extension-like resources.",
+		description: "Browse, toggle, inspect, and configure Pi extension packages.",
 		handler: async (args, ctx) => {
 			const trimmed = args.trim();
 			const lower = trimmed.toLowerCase();
@@ -2737,13 +2565,6 @@ export default function extensionManager(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		activeCtx = ctx;
 		const inventory = buildInventory(pi, ctx);
-		const disabledTools = new Set(
-			inventory.items.filter((item) => item.kind === "tool" && item.state === "disabled").map((item) => item.displayName),
-		);
-		if (disabledTools.size > 0) {
-			const active = safeActiveTools(pi).filter((tool) => !disabledTools.has(tool));
-			pi.setActiveTools?.(active);
-		}
 
 		const hasUI = (ctx as { hasUI?: boolean }).hasUI;
 		const configEnabled = inventory.managerState.config[MANAGER_ID]?.notifyOnUpdates;

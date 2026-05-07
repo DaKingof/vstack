@@ -31,15 +31,6 @@
           "requiresReload": true
         },
         {
-          "key": "showBuiltinTools",
-          "label": "Show built-in tools",
-          "description": "Include Pi built-in tools in the inventory. Disable for an extension-focused list.",
-          "type": "boolean",
-          "default": false,
-          "category": "Inventory",
-          "apply": "live"
-        },
-        {
           "key": "defaultSaveScope",
           "label": "Default save scope",
           "description": "Where manager setting edits are written when the selected item scope is ambiguous.",
