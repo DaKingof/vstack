@@ -1,6 +1,6 @@
 # pi-extension-manager
 
-![Extension Manager browser](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-extension-manager/assets/extension-manager.png)
+![Extension Manager browser and settings editor](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-extension-manager/assets/extension-manager.gif)
 
 Pi package manager and separate settings editor for vstack-installed Pi packages.
 
