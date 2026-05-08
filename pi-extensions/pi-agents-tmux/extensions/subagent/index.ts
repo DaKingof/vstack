@@ -757,11 +757,7 @@ export default function (pi: ExtensionAPI) {
 			childCurrentTaskFile = undefined;
 		}
 		ctx.ui.setStatus("agent", `${childAgentName} idle`);
-		if (pendingChildCompletion) {
-			const details = pendingChildCompletion;
-			pendingChildCompletion = undefined;
-			pi.sendMessage({ customType: "subagent-self-completion", content: "", details, display: true });
-		}
+		pendingChildCompletion = undefined;
 	});
 
 	pi.on("session_shutdown", () => {
