@@ -1,6 +1,6 @@
 # pi-session-manager
 
-![Session Manager overlay](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-session-manager/assets/session-manager.png)
+![Session Manager overlay and model-change confirmation](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-session-manager/assets/session-manager.gif)
 
 Polished session manager overlay for Pi. It complements Pi's built-in `/resume` picker with vstack settings, inline management actions, and guarded rendering for long or control-character-heavy session text.
 
