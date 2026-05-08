@@ -36,6 +36,7 @@ import {
 } from "./state.js";
 import {
 	ANSI_BELL,
+	ansiGreen,
 	ansiYellow,
 	divider,
 	dotIndicator,
@@ -366,7 +367,11 @@ function renderOverviewTab(snapshot: FlightdeckSnapshot, ui: PopupUiState, width
 	lines.push(searchRow(theme, ui.search, width));
 	lines.push("");
 	if (filtered.length === 0) {
-		lines.push(theme.fg("dim", issues.length === 0 ? "No issues tracked yet. Run /flightdeck start to spawn." : "No matches for current search."));
+		if (issues.length === 0) {
+			lines.push(`${theme.fg("dim", "No issues tracked yet. Run ")}${ansiGreen("'/skill:flightdeck start'")}${theme.fg("dim", " to spawn.")}`);
+		} else {
+			lines.push(theme.fg("dim", "No matches for current search."));
+		}
 		return lines;
 	}
 	const hdr = formatOverviewHeader(theme, width);
