@@ -206,7 +206,7 @@ Extensions can ship an `instructions.md` (declared via `pi.appendSystem` in `pac
 | [`pi-claude-bridge`](pi-extensions/pi-claude-bridge/README.md) | Claude Code provider bridge with prompt-context forwarding. |
 | [`pi-codex-minimal-tools`](pi-extensions/pi-codex-minimal-tools/README.md) | Codex-style image, patch, and image-generation tools alongside Pi natives. |
 | [`pi-extension-manager`](pi-extensions/pi-extension-manager/README.md) | Pi-styled package manager and inline settings editor. |
-| [`pi-flightdeck`](pi-extensions/pi-flightdeck/README.md) | Mission-control dashboard for the `flightdeck` skill. |
+| [`pi-flightdeck`](pi-extensions/pi-flightdeck/README.md) | ⚠️ **WIP — not production ready.** Mission-control dashboard for the `flightdeck` skill. |
 | [`pi-output-policy`](pi-extensions/pi-output-policy/README.md) | Large-output policy with truncation and spill-file preservation. |
 | [`pi-prompt-stash`](pi-extensions/pi-prompt-stash/README.md) | Per-session prompt stash history with stash/pop editor. |
 | [`pi-qol`](pi-extensions/pi-qol/README.md) | Compact statusline, multiline input, image chips, session naming and search. |

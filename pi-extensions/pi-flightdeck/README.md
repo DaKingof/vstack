@@ -1,5 +1,7 @@
 # pi-flightdeck
 
+> ⚠️ **WIP — not production ready.** APIs, settings, and UI are subject to breakage without notice. Use for experimentation only.
+
 Read-only mission-control dashboard for the [`flightdeck`](../../skills/flightdeck) skill.
 
 When Pi is running as the flightdeck **master agent** in a tmux session, this extension surfaces the same on-disk state the daemon and master already maintain — issues, daemon health, decisions, conflicts, and (most importantly) any pending pause-for-user state — without ever mutating it.
