@@ -30,7 +30,7 @@ cli/src/
 ├── installer.rs         Symlink/copy logic, per-harness hook installation, removal
 ├── harness/
 │   ├── mod.rs           Harness enum, detection, routing
-│   ├── claude.rs        → .claude/agents/*.md (skills + hooks frontmatter, "Required Skills")
+│   ├── claude.rs        → .claude/agents/*.md (tools + skills + hooks frontmatter, "Required Skills")
 │   ├── cursor.rs        → .cursor/rules/*.mdc (description + alwaysApply + skills section)
 │   ├── opencode.rs      → .opencode/agents/*.md (YAML frontmatter + skills section)
 │   ├── codex.rs         → .codex/agents/*.toml (developer_instructions + skills section)
@@ -149,14 +149,14 @@ rust = "Read docs/architecture.md before coding."
 [agent-additional-instructions]
 rust = "Always run clippy before committing."
 
-# Generated-frontmatter overrides. Top-level entries apply to every harness.
+# Generated-frontmatter overrides. Top-level entries apply where supported.
 [agent-frontmatter]
 rust = { color = "green" }
 planner = { model = "openai/gpt-5.5", color = "blue" }
 reviewer-perf = { tools = ["read", "grep", "find", "ls", "bash"] }
 
 # Harness-specific generated-frontmatter overrides win over top-level entries.
-# Use exact model/tool ids for the target harness.
+# Use exact model/tool ids for the target harness when formats differ.
 [agent-frontmatter.pi]
 researcher = { model = "openai/gpt-5.5:xhigh", tools = ["read", "grep", "find", "ls", "bash", "edit", "write", "web_research"] }
 
@@ -172,6 +172,12 @@ trading-design = "Dark theme, green/red accents."
 | `opus` | `opus[1m]` | `openai/gpt-5.5` | `gpt-5.5` (xhigh) | `openai/gpt-5.5:xhigh` |
 | `sonnet` | `sonnet` | `openai/gpt-5.5` | `gpt-5.5` (high) | `openai/gpt-5.5:high` |
 | `haiku` | `haiku` | `openai/gpt-5.5` | `gpt-5.5` (medium) | `openai/gpt-5.5:medium` |
+
+## Per-Harness Tool Overrides
+
+- Claude Code and Pi write `tools` from `[agent-frontmatter]` / harness-specific frontmatter into generated agent files.
+- OpenCode uses `permission` for tool access; vstack currently maps role to `mode` and does not emit per-agent permissions.
+- Cursor and Codex do not use the same agent `tools` frontmatter.
 
 ## Rules
 

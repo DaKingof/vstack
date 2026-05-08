@@ -1,4 +1,4 @@
-use crate::agent::{self, Agent};
+use crate::agent::{self, Agent, AgentRole};
 use crate::hook::Hook;
 use anyhow::Result;
 use std::collections::BTreeMap;
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 /// Generate a Claude Code agent file (.claude/agents/<name>.md)
 ///
-/// Format: YAML frontmatter with name, description, model, color, skills, hooks
+/// Format: YAML frontmatter with name, description, model, tools, color, skills, hooks
 /// followed by markdown body.
 pub fn generate_agent(
     agent: &Agent,
@@ -34,6 +34,11 @@ pub fn generate_agent(
         .clone()
         .unwrap_or_else(|| agent.model_id("claude-code"));
     output.push_str(&format!("model: {}\n", model));
+
+    let tools = claude_tools_for(agent, frontmatter.tools.as_deref());
+    if !tools.is_empty() {
+        output.push_str(&format!("tools: {}\n", tools.join(", ")));
+    }
 
     if let Some(color) = frontmatter
         .color
@@ -79,6 +84,76 @@ pub fn generate_agent(
     Ok(path)
 }
 
+fn claude_tools_for(agent: &Agent, override_tools: Option<&[String]>) -> Vec<String> {
+    if let Some(tools) = override_tools {
+        return dedupe_tools(tools.iter().map(|tool| claude_tool_name(tool)).collect());
+    }
+
+    let defaults = match agent.role {
+        AgentRole::Engineer => vec![
+            "Read",
+            "Grep",
+            "Glob",
+            "LS",
+            "Bash",
+            "Edit",
+            "MultiEdit",
+            "Write",
+            "WebFetch",
+            "WebSearch",
+            "TodoWrite",
+            "Task",
+        ],
+        AgentRole::Reviewer | AgentRole::Manager => vec![
+            "Read",
+            "Grep",
+            "Glob",
+            "LS",
+            "Bash",
+            "WebFetch",
+            "WebSearch",
+        ],
+    };
+    defaults.into_iter().map(String::from).collect()
+}
+
+fn claude_tool_name(tool: &str) -> String {
+    match tool
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['_', '-'], "")
+        .as_str()
+    {
+        "read" => "Read".into(),
+        "grep" => "Grep".into(),
+        "glob" | "find" => "Glob".into(),
+        "ls" | "list" => "LS".into(),
+        "bash" => "Bash".into(),
+        "edit" => "Edit".into(),
+        "multiedit" => "MultiEdit".into(),
+        "write" => "Write".into(),
+        "webfetch" => "WebFetch".into(),
+        "websearch" => "WebSearch".into(),
+        "todowrite" => "TodoWrite".into(),
+        "todoread" => "TodoRead".into(),
+        "task" | "agent" => "Task".into(),
+        "notebookread" => "NotebookRead".into(),
+        "notebookedit" => "NotebookEdit".into(),
+        _ => tool.trim().to_string(),
+    }
+}
+
+fn dedupe_tools(tools: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for tool in tools {
+        if !tool.is_empty() && seen.insert(tool.clone()) {
+            out.push(tool);
+        }
+    }
+    out
+}
+
 /// Format installed hooks and custom hooks into Claude Code YAML frontmatter.
 fn format_hooks_yaml_with_custom(hooks: &[Hook], custom: &[agent::CustomHookEntry]) -> String {
     // Group by event → matcher → list of commands
@@ -122,4 +197,71 @@ fn format_hooks_yaml_with_custom(hooks: &[Hook], custom: &[agent::CustomHookEntr
     }
 
     yaml
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::{AgentExtras, AgentFrontmatterOverrides};
+
+    fn agent_fixture(name: &str, role: AgentRole) -> Agent {
+        Agent {
+            name: name.into(),
+            description: "Claude test agent".into(),
+            model: "sonnet".into(),
+            role,
+            color: Some("green".into()),
+            body: format!("# {name}\n\nIntro.\n"),
+            source_path: Default::default(),
+        }
+    }
+
+    #[test]
+    fn generate_agent_writes_default_role_tools() {
+        let dir =
+            std::env::temp_dir().join(format!("vstack_claude_agent_tools_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let agent = agent_fixture("reviewer-arch", AgentRole::Reviewer);
+        let path = generate_agent(&agent, &dir, &[], &[], &[], &AgentExtras::default())
+            .expect("generate ok");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("tools: Read, Grep, Glob, LS, Bash, WebFetch, WebSearch"));
+        assert!(!content.contains("Write"));
+        assert!(!content.contains("Edit"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generate_agent_honors_tools_override_and_normalizes_common_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "vstack_claude_agent_tools_override_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let agent = agent_fixture("rust", AgentRole::Engineer);
+        let extras = AgentExtras {
+            frontmatter: AgentFrontmatterOverrides {
+                tools: Some(vec![
+                    "read".into(),
+                    "grep".into(),
+                    "find".into(),
+                    "bash".into(),
+                    "web_search".into(),
+                    "mcp__custom".into(),
+                ]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("tools: Read, Grep, Glob, Bash, WebSearch, mcp__custom"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

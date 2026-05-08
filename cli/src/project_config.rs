@@ -1381,7 +1381,7 @@ fn agent_frontmatter_heading() -> String {
     out.push_str("# ── Agent Frontmatter ────────────────────────────────\n");
     out.push_str("# Optional generated-frontmatter overrides. Top-level entries\n");
     out.push_str("# apply to every harness; harness-specific tables win. Prefer\n");
-    out.push_str("# harness-specific model values when model id formats differ.\n");
+    out.push_str("# harness-specific model/tool values when formats differ.\n");
     out.push_str("# Supported fields: color, model, tools, pane, mode,\n");
     out.push_str("# sandbox-mode, model-reasoning-effort. Unknown fields ignored.\n");
     out.push_str("# Examples:\n");

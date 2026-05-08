@@ -219,7 +219,7 @@ pub struct AgentFrontmatterOverrides {
     /// Exact harness model id to write. Prefer harness-specific overrides when
     /// providers use different model id formats.
     pub model: Option<String>,
-    /// Pi tool allowlist. Written as the Pi `tools:` frontmatter string.
+    /// Tool allowlist for harnesses that support scoped agent tools (Pi and Claude Code).
     #[serde(default, deserialize_with = "deserialize_optional_tools")]
     pub tools: Option<Vec<String>>,
     /// Pi persistent pane flag.
