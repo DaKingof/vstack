@@ -493,11 +493,9 @@ type AgentBrowserAction =
 	| { type: "close" }
 	| { type: "editFrontmatter"; agentName: string }
 	| { type: "insert"; agentName: string }
-	| { type: "openAgentFile"; filePath: string }
 	| { type: "reload" }
 	| { type: "start"; agentName: string }
-	| { type: "stop"; agentName: string }
-	| { type: "openTranscript"; transcriptPath: string };
+	| { type: "stop"; agentName: string };
 
 type AgentPaneStatus = { entry?: PaneRegistryEntry; live: boolean };
 
@@ -1596,6 +1594,7 @@ function createAgentsBrowserComponent(
 	done: (action: AgentBrowserAction) => void,
 	getActiveItems: () => SubagentDashboardItem[],
 	runtimeRoot: string,
+	openInEditor: (filePath: string | undefined) => void,
 ) {
 	const filtered = () => filterAgentsForBrowser(discovery.agents, ui.search, statuses);
 	const selectedAgent = () => filtered()[ui.selected];
@@ -1635,7 +1634,7 @@ function createAgentsBrowserComponent(
 		if (!record) return;
 		const entry = historyCache.get(record.taskId);
 		const subtab = entry?.items?.[ui.historySubtab];
-		if (subtab?.path) done({ type: "openTranscript", transcriptPath: subtab.path });
+		if (subtab?.path) openInEditor(subtab.path);
 	};
 	const hasActiveTab = () => getActiveItems().length > 0;
 	const switchTab = (delta: number) => {
@@ -1689,7 +1688,7 @@ function createAgentsBrowserComponent(
 	};
 	const openAgentFileSelected = () => {
 		const agent = selectedAgent();
-		if (agent) done({ type: "openAgentFile", filePath: agent.filePath });
+		if (agent) openInEditor(agent.filePath);
 	};
 
 	function handleInput(data: string): void {
@@ -1733,7 +1732,7 @@ function createAgentsBrowserComponent(
 			if (ui.tab === "active" && ui.activeSelected > 0) {
 				const item = getActiveItems()[ui.activeSelected - 1];
 				if (item?.transcriptPath) {
-					done({ type: "openTranscript", transcriptPath: item.transcriptPath });
+					openInEditor(item.transcriptPath);
 					return;
 				}
 			}
@@ -1970,22 +1969,27 @@ async function openAgentsBrowser(
 		const statuses = await loadAgentPaneStatuses(runtimeRoot);
 		const taskRegistry = await readTaskRegistry(runtimeRoot).catch(() => ({} as PaneTaskRegistry));
 		const action = await ctx.ui.custom<AgentBrowserAction>(
-			(tui: TUI, theme: Theme, _keybindings, done) => createAgentsBrowserComponent(discovery, statuses, taskRegistry, ui, theme, () => tui.requestRender(), () => agentBrowserLayout(tui.terminal.rows), done, getActiveItems, runtimeRoot),
+			(tui: TUI, theme: Theme, _keybindings, done) => createAgentsBrowserComponent(
+				discovery,
+				statuses,
+				taskRegistry,
+				ui,
+				theme,
+				() => tui.requestRender(),
+				() => agentBrowserLayout(tui.terminal.rows),
+				done,
+				getActiveItems,
+				runtimeRoot,
+				(filePath) => {
+					const message = openFileInExternalEditor(filePath, ctx.cwd, tui);
+					ctx.ui.notify(message, "info");
+				},
+			),
 			{ overlay: true, overlayOptions: { anchor: "center", maxHeight: AGENTS_BROWSER_MAX_HEIGHT, width: AGENTS_BROWSER_WIDTH } },
 		);
 		initialAgentName = undefined;
 		if (!action || action.type === "close") return;
 		if (action.type === "reload") continue;
-		if (action.type === "openTranscript") {
-			const message = openFileInExternalEditor(action.transcriptPath, ctx.cwd);
-			ctx.ui.notify(message, "info");
-			continue;
-		}
-		if (action.type === "openAgentFile") {
-			const message = openFileInExternalEditor(action.filePath, ctx.cwd);
-			ctx.ui.notify(message, "info");
-			continue;
-		}
 		const agent = discovery.agents.find((candidate) => candidate.name === action.agentName);
 		if (!agent) {
 			ctx.ui.notify(`Unknown agent: ${action.agentName}`, "error");
@@ -4700,12 +4704,20 @@ function renderTraceTabBar(items: TraceViewerItem[], selected: number, width: nu
 	return truncateToWidth(current, width, "");
 }
 
-function openFileInExternalEditor(filePath: string | undefined, cwd: string): string {
+function openFileInExternalEditor(filePath: string | undefined, cwd: string, tui?: TUI): string {
 	if (!filePath) return "No file path for selected view.";
 	const editor = process.env.VISUAL || process.env.EDITOR;
 	if (!editor) return "Set $VISUAL or $EDITOR to open trace files externally.";
-	const proc = spawnSync(`${editor} ${shellQuote(filePath)}`, { cwd, shell: true, stdio: "inherit" });
-	return proc.status === 0 ? `Opened ${filePath}` : `Editor exited with status ${proc.status ?? "unknown"}: ${filePath}`;
+	let status: number | null = null;
+	try {
+		tui?.stop();
+		const proc = spawnSync(`${editor} ${shellQuote(filePath)}`, { cwd, shell: true, stdio: "inherit" });
+		status = proc.status;
+	} finally {
+		tui?.start();
+		tui?.requestRender(true);
+	}
+	return status === 0 ? `Opened ${filePath}` : `Editor exited with status ${status ?? "unknown"}: ${filePath}`;
 }
 
 async function editAgentFrontmatterOverrides(ctx: ExtensionContext, agent: AgentConfig): Promise<string | undefined> {
