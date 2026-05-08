@@ -1123,7 +1123,6 @@ class SessionManagerOverlay implements Focusable {
 			top(),
 			boxRow(centerAnsi(ui.error(this.theme.bold(deleteAll ? "Delete all sessions?" : "Delete session?")), boxInner)),
 			boxRow(centerAnsi(ui.accent(subject), boxInner)),
-			...(deleteAll ? [boxRow(centerAnsi(ui.warning(`${deleteCountLabel} will be deleted`), boxInner))] : []),
 			boxRow(""),
 			boxRow(ui.warning(removeMessage)),
 			boxRow(ui.dim("If trash is unavailable, deletion is permanent.")),
