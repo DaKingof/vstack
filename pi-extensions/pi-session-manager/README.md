@@ -24,11 +24,11 @@ Restart Pi after installation.
 ## What it provides
 
 - Browse current-project sessions or all sessions.
-- Search by fuzzy tokens, quoted phrases, or `re:<regex>` across titles, IDs, paths, cwd, and transcript text.
+- Search by tokens, quoted phrases, or `re:<regex>` using the same prompt-first matching logic as the session search popup: user prompts are matched first, with session title/name fallback.
 - Threaded lineage view using Pi `parentSession` relationships when there is no active search.
-- Resume through `ctx.switchSession()`.
+- Resume through `ctx.switchSession()`, preserving the session's saved model by default. If the current active model differs, a confirmation popup explains the models and lets you continue with either one.
 - Rename sessions using Pi session-info entries; current-session renames go through `pi.setSessionName()`.
-- Delete one session or all shown deletable sessions with confirmation, current-session protection, and optional `trash` CLI fallback.
+- Delete one session or all shown deletable sessions with confirmation, current-session protection, visible delete counts, and optional `trash` CLI fallback.
 - Clean one-line rendering for names, prompts, and paths.
 
 No SQLite, FTS, or native runtime dependencies are used; Pi's `SessionManager.list()` / `listAll()` APIs provide the index data.
@@ -46,15 +46,14 @@ No SQLite, FTS, or native runtime dependencies are used; Pi's `SessionManager.li
 | `↑` / `↓` | Move selection. |
 | `-` / `=` | Page the list. |
 | `Home` / `End` | Jump to first/last result. |
-| `Enter` | Resume selected session. |
-| `Ctrl+R` | Rename selected session inline. |
-| `Ctrl+D` | Delete selected session after confirmation. |
-| `Ctrl+X` | Delete all shown deletable sessions after confirmation. |
+| `Enter` | Resume selected session. If the session model differs from the current active model, choose which model to continue with. |
+| `Alt+R` | Rename selected session inline. |
+| `Delete` | Delete selected session after confirmation. |
+| `Alt+D` | Delete all shown deletable sessions after confirmation. |
 | `Tab` | Toggle current/all scope. |
-| `Ctrl+S` | Cycle threaded/recent/relevance sort. |
-| `Ctrl+N` | Toggle named-only filter. |
-| `Ctrl+P` | Toggle full session path in row metadata. |
-| `Esc` / `Ctrl+C` | Clear search, cancel rename/delete, or close. |
+| `Alt+S` | Cycle threaded/recent/relevance sort. |
+| `Alt+N` | Toggle named-only filter. |
+| `Esc` / `Ctrl+C` | Clear search, cancel rename/delete/model selection, or close. |
 
 The global shortcut defaults to `F1` and opens the manager popup directly. Set `shortcutKey` to `none` to disable it.
 
@@ -75,5 +74,6 @@ Settings are exposed through `pi-extension-manager` under `vstack.extensionManag
 ## Notes
 
 - Session titles mirror Pi `/resume`: explicit session name, first user message, then filename.
+- Search filters the shown list. Delete-all acts only on the currently shown, deletable sessions.
 - If `sessionDir` or `PI_CODING_AGENT_SESSION_DIR` is configured, current scope filters by session `cwd`; all scope shows every session in that directory.
 - Pi's built-in `/resume`, `/tree`, `/fork`, `/clone`, and `/name` remain available.
