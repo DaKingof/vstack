@@ -493,6 +493,7 @@ type AgentBrowserAction =
 	| { type: "close" }
 	| { type: "editFrontmatter"; agentName: string }
 	| { type: "insert"; agentName: string }
+	| { type: "openEditor"; filePath: string }
 	| { type: "reload" }
 	| { type: "start"; agentName: string }
 	| { type: "stop"; agentName: string };
@@ -1989,30 +1990,36 @@ async function openAgentsBrowser(
 		}
 		const statuses = await loadAgentPaneStatuses(runtimeRoot);
 		const taskRegistry = await readTaskRegistry(runtimeRoot).catch(() => ({} as PaneTaskRegistry));
+		let capturedTui: TUI | undefined;
 		const action = await ctx.ui.custom<AgentBrowserAction>(
-			(tui: TUI, theme: Theme, _keybindings, done) => createAgentsBrowserComponent(
-				discovery,
-				statuses,
-				taskRegistry,
-				ui,
-				theme,
-				() => tui.requestRender(),
-				() => agentBrowserLayout(tui.terminal.rows),
-				done,
-				getActiveItems,
-				runtimeRoot,
-				(filePath) => {
-					setImmediate(() => {
-						const message = openFileInExternalEditor(filePath, ctx.cwd, tui);
-						ctx.ui.notify(message, "info");
-					});
-				},
-			),
+			(tui: TUI, theme: Theme, _keybindings, done) => {
+				capturedTui = tui;
+				return createAgentsBrowserComponent(
+					discovery,
+					statuses,
+					taskRegistry,
+					ui,
+					theme,
+					() => tui.requestRender(),
+					() => agentBrowserLayout(tui.terminal.rows),
+					done,
+					getActiveItems,
+					runtimeRoot,
+					(filePath) => {
+						if (filePath) done({ type: "openEditor", filePath });
+					},
+				);
+			},
 			{ overlay: true, overlayOptions: { anchor: "center", maxHeight: AGENTS_BROWSER_MAX_HEIGHT, width: AGENTS_BROWSER_WIDTH } },
 		);
 		initialAgentName = undefined;
 		if (!action || action.type === "close") return;
 		if (action.type === "reload") continue;
+		if (action.type === "openEditor") {
+			const message = openFileInExternalEditor(action.filePath, ctx.cwd, capturedTui);
+			ctx.ui.notify(message, "info");
+			continue;
+		}
 		const agent = discovery.agents.find((candidate) => candidate.name === action.agentName);
 		if (!agent) {
 			ctx.ui.notify(`Unknown agent: ${action.agentName}`, "error");
