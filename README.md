@@ -73,10 +73,12 @@ rust = { color = "green" }
 
 # Harness-specific frontmatter values win over top-level values.
 [agent-frontmatter.pi]
-researcher = { model = "openai/gpt-5.5:xhigh", tools = ["read", "grep", "find", "ls", "bash", "edit", "write", "web_research"] }
+researcher = { color = "purple", model = "openai/gpt-5.5:xhigh", tools = ["read", "grep", "find", "ls", "bash", "edit", "write", "web_research"] }
 ```
 
-Custom safety hooks (`[[custom-hooks]]`) and per-skill instructions (`[skill-instructions]`) follow the same pattern. Direct edits to generated agent or skill files are also picked up automatically — everything survives upstream updates.
+For Pi agents installed through vstack, model/tool/color edits belong in `[agent-frontmatter.pi]`, not in `.pi/agents/<name>.md`; generated agent files are overwritten by `vstack refresh`. The Pi `/agents` popup writes model/tools/color changes to this table for vstack-managed project agents.
+
+Custom safety hooks (`[[custom-hooks]]`) and per-skill instructions (`[skill-instructions]`) follow the same pattern. Direct edits to generated agent or skill files are also picked up automatically where possible, but `vstack.toml` is the stable home for generated frontmatter overrides.
 
 ## Supported Tools
 
@@ -98,8 +100,10 @@ Windows: CLI runs natively; symlink mode falls back to copy.
 |---|---|---|
 | `generalist` | engineer | General maintenance, cleanup, docs, stale references, and project hygiene. |
 | `iced` | engineer | Iced UI implementation and architecture specialist. |
+| `planner` | engineer | Turns requirements and scout findings into ordered implementation plans and plan files. |
 | `researcher` | engineer | Exa-powered research specialist for evidence-backed findings reports. |
 | `rust` | engineer | Rust engineer for systems work, performance, zero-allocation, and low-level design. |
+| `scout` | reviewer | Fast read-only reconnaissance for unfamiliar code before planning or implementation. |
 | `tpm` | manager | Technical program management and roadmap analysis agent. |
 | `reviewer-arch` | reviewer | Reviews boundaries, abstractions, and architectural drift. |
 | `reviewer-doc` | reviewer | Reviews documentation accuracy and stale docs. |

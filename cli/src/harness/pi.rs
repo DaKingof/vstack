@@ -105,20 +105,28 @@ pub fn pi_model_for(model: &str) -> String {
 
 /// Pi tool list for an agent role.
 ///
-/// Engineers get the full read+write toolset; reviewers/managers get a
-/// read-only toolset so they can investigate without mutating the workspace.
+/// All agents get broad read/discovery, batching, and web research tools so
+/// they can gather current context across project and external sources.
+/// Engineers additionally get write/edit tools. Reviewers/managers remain
+/// workspace read-only by default.
 pub fn pi_tools_for(agent: &Agent, skills: &[(String, String)]) -> Vec<String> {
     let mut tools = match agent.role {
         AgentRole::Engineer => vec!["read", "grep", "find", "ls", "bash", "edit", "write"],
         AgentRole::Reviewer | AgentRole::Manager => vec!["read", "grep", "find", "ls", "bash"],
     };
 
+    tools.extend([
+        "tool_batch",
+        "web_search",
+        "web_fetch",
+        "web_research",
+        "web_answer",
+        "code_search",
+        "get_web_content",
+    ]);
+
     let skill_names: std::collections::HashSet<&str> =
         skills.iter().map(|(name, _)| name.as_str()).collect();
-
-    if skill_names.contains("deep-research") {
-        tools.extend(["web_research", "web_search", "web_fetch", "get_web_content"]);
-    }
 
     if skill_names.contains("project-management")
         || skill_names.contains("orchestration")
@@ -196,14 +204,20 @@ mod tests {
         assert!(!tools.iter().any(|tool| tool == "write"));
         assert!(!tools.iter().any(|tool| tool == "edit"));
         assert!(tools.iter().any(|tool| tool == "read"));
+        assert!(tools.iter().any(|tool| tool == "web_search"));
+        assert!(tools.iter().any(|tool| tool == "web_research"));
+        assert!(tools.iter().any(|tool| tool == "code_search"));
     }
 
     #[test]
-    fn pi_tools_deep_research_gets_web_research() {
-        let agent = agent_fixture("researcher", AgentRole::Engineer, "opus");
-        let skills = vec![("deep-research".into(), "Exa research".into())];
-        let tools = pi_tools_for(&agent, &skills);
+    fn pi_tools_all_agents_get_web_research() {
+        let agent = agent_fixture("scout", AgentRole::Reviewer, "haiku");
+        let tools = pi_tools_for(&agent, &[]);
         assert!(tools.iter().any(|tool| tool == "web_research"));
+        assert!(tools.iter().any(|tool| tool == "web_search"));
+        assert!(tools.iter().any(|tool| tool == "web_fetch"));
+        assert!(tools.iter().any(|tool| tool == "web_answer"));
+        assert!(tools.iter().any(|tool| tool == "code_search"));
         assert!(tools.iter().any(|tool| tool == "get_web_content"));
     }
 
@@ -231,6 +245,8 @@ mod tests {
         assert!(content.contains("model: openai/gpt-5.5:xhigh"));
         assert!(content.contains("color: magenta"));
         assert!(content.contains("tools: read, grep, find, ls, bash, edit, write"));
+        assert!(content.contains("web_search"));
+        assert!(content.contains("web_research"));
         assert!(content.contains("pane: true"));
         assert!(content.contains("## Launch Instructions"));
         assert!(content.contains("Read open issues and start."));
@@ -256,6 +272,8 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("model: openai/gpt-5.5:high"));
         assert!(content.contains("tools: read, grep, find, ls, bash"));
+        assert!(content.contains("web_search"));
+        assert!(content.contains("web_research"));
         assert!(!content.contains("pane: true"));
 
         let _ = std::fs::remove_dir_all(&dir);

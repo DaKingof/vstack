@@ -491,7 +491,9 @@ const HISTORY_SUBTAB_LABELS = ["Summary", "Transcript", "Completion", "Task"] as
 type AgentBrowserAction =
 	| { type: "attach"; agentName: string }
 	| { type: "close" }
+	| { type: "editFrontmatter"; agentName: string }
 	| { type: "insert"; agentName: string }
+	| { type: "openAgentFile"; filePath: string }
 	| { type: "reload" }
 	| { type: "start"; agentName: string }
 	| { type: "stop"; agentName: string }
@@ -557,6 +559,233 @@ function isAgentBrowserTextInput(data: string): boolean {
 function compactAgentPath(filePath: string): string {
 	const home = os.homedir();
 	return filePath.startsWith(home) ? `~${filePath.slice(home.length)}` : filePath;
+}
+
+interface AgentFrontmatterEdit {
+	model: string;
+	tools: string[];
+	color: string;
+}
+
+function stripYamlQuotes(value: string): string {
+	const trimmed = value.trim();
+	if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+		return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\'/g, "'");
+	}
+	return trimmed;
+}
+
+function splitMarkdownFrontmatter(raw: string): { frontmatter: string; body: string; hasFrontmatter: boolean } {
+	if (!raw.startsWith("---\n") && raw.trim() !== "---") return { frontmatter: "", body: raw, hasFrontmatter: false };
+	const close = raw.indexOf("\n---", 4);
+	if (close < 0) return { frontmatter: "", body: raw, hasFrontmatter: false };
+	const afterClose = raw.slice(close + 4).replace(/^\r?\n/, "");
+	return { frontmatter: raw.slice(4, close), body: afterClose, hasFrontmatter: true };
+}
+
+function flatYamlField(frontmatter: string, key: string): string | undefined {
+	const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const match = frontmatter.match(new RegExp(`^\\s*${escaped}\\s*:\\s*(.*?)\\s*$`, "m"));
+	return match?.[1] === undefined ? undefined : stripYamlQuotes(match[1]);
+}
+
+function parseToolsList(value: string | undefined): string[] {
+	if (!value) return [];
+	const trimmed = value.trim();
+	const listText = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
+	return listText.split(",").map((tool) => stripYamlQuotes(tool).trim()).filter(Boolean);
+}
+
+function agentCurrentFrontmatterEdit(agent: AgentConfig): AgentFrontmatterEdit {
+	let frontmatter = "";
+	try {
+		frontmatter = splitMarkdownFrontmatter(fs.readFileSync(agent.filePath, "utf-8")).frontmatter;
+	} catch {
+		frontmatter = "";
+	}
+	return {
+		model: flatYamlField(frontmatter, "model") ?? agent.model ?? "",
+		tools: parseToolsList(flatYamlField(frontmatter, "tools") ?? agent.tools?.join(", ")),
+		color: flatYamlField(frontmatter, "color") ?? agent.color ?? "",
+	};
+}
+
+function editableAgentFrontmatterText(agent: AgentConfig): string {
+	const current = agentCurrentFrontmatterEdit(agent);
+	return [
+		"# Edit Pi agent frontmatter overrides. Blank values remove the override.",
+		"# For vstack-managed project agents, this writes [agent-frontmatter.pi] in vstack.toml.",
+		`model: ${current.model}`,
+		`tools: ${current.tools.join(", ")}`,
+		`color: ${current.color}`,
+		"",
+	].join("\n");
+}
+
+function parseEditableAgentFrontmatterText(raw: string): AgentFrontmatterEdit {
+	const fields = new Map<string, string>();
+	for (const line of raw.split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith("#")) continue;
+		const match = trimmed.match(/^([A-Za-z][\w-]*)\s*:\s*(.*)$/);
+		if (!match) throw new Error(`Expected 'key: value' line, got: ${trimmed}`);
+		const key = match[1].toLowerCase();
+		if (key === "model" || key === "tools" || key === "color") fields.set(key, match[2] ?? "");
+	}
+	return {
+		model: stripYamlQuotes(fields.get("model") ?? ""),
+		tools: parseToolsList(fields.get("tools")),
+		color: stripYamlQuotes(fields.get("color") ?? ""),
+	};
+}
+
+function isVstackManagedAgentFile(agent: AgentConfig): boolean {
+	try {
+		const raw = fs.readFileSync(agent.filePath, "utf-8");
+		return raw.includes("Never edit this file directly") && raw.includes("vstack refresh");
+	} catch {
+		return false;
+	}
+}
+
+function projectRootForAgentFile(agent: AgentConfig, cwd: string): string {
+	const normalized = path.resolve(agent.filePath);
+	for (const marker of [`${path.sep}.pi${path.sep}agents${path.sep}`, `${path.sep}.claude${path.sep}agents${path.sep}`]) {
+		const idx = normalized.indexOf(marker);
+		if (idx >= 0) return normalized.slice(0, idx);
+	}
+	let current = path.resolve(cwd);
+	while (true) {
+		if (fs.existsSync(path.join(current, "vstack.toml")) || fs.existsSync(path.join(current, ".vstack-lock.json")) || fs.existsSync(path.join(current, ".git"))) return current;
+		const parent = path.dirname(current);
+		if (parent === current) return path.resolve(cwd);
+		current = parent;
+	}
+}
+
+function vstackTomlPathForAgent(agent: AgentConfig, cwd: string): string | undefined {
+	let current = projectRootForAgentFile(agent, cwd);
+	while (true) {
+		const candidate = path.join(current, "vstack.toml");
+		if (fs.existsSync(candidate)) return candidate;
+		if (fs.existsSync(path.join(current, ".vstack-lock.json")) || fs.existsSync(path.join(current, ".git"))) return candidate;
+		const parent = path.dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
+	}
+}
+
+function tomlString(value: string): string {
+	return `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
+}
+
+function tomlArray(values: string[]): string {
+	return `[${values.map(tomlString).join(", ")}]`;
+}
+
+function splitTopLevelCommas(input: string): string[] {
+	const out: string[] = [];
+	let current = "";
+	let quote: string | undefined;
+	let bracketDepth = 0;
+	let escaped = false;
+	for (const char of input) {
+		if (escaped) { current += char; escaped = false; continue; }
+		if (char === "\\") { current += char; escaped = true; continue; }
+		if (quote) {
+			current += char;
+			if (char === quote) quote = undefined;
+			continue;
+		}
+		if (char === '"' || char === "'") { quote = char; current += char; continue; }
+		if (char === "[") bracketDepth += 1;
+		if (char === "]") bracketDepth = Math.max(0, bracketDepth - 1);
+		if (char === "," && bracketDepth === 0) { out.push(current.trim()); current = ""; continue; }
+		current += char;
+	}
+	if (current.trim()) out.push(current.trim());
+	return out;
+}
+
+function parseInlineTomlTable(value: string): Map<string, string> {
+	const map = new Map<string, string>();
+	const trimmed = value.trim().replace(/^\{/, "").replace(/\}$/, "");
+	for (const part of splitTopLevelCommas(trimmed)) {
+		const idx = part.indexOf("=");
+		if (idx <= 0) continue;
+		map.set(part.slice(0, idx).trim(), part.slice(idx + 1).trim());
+	}
+	return map;
+}
+
+function tomlAgentKey(agentName: string): string {
+	return /^[A-Za-z0-9_-]+$/.test(agentName) ? agentName : tomlString(agentName);
+}
+
+function renderTomlInlineTable(fields: Map<string, string>): string {
+	const preferred = ["color", "model", "tools", "pane", "mode", "sandbox-mode", "model-reasoning-effort"];
+	const keys = [...preferred.filter((key) => fields.has(key)), ...[...fields.keys()].filter((key) => !preferred.includes(key)).sort()];
+	return `{ ${keys.map((key) => `${key} = ${fields.get(key)}`).join(", ")} }`;
+}
+
+function upsertAgentFrontmatterToml(content: string, agentName: string, edit: AgentFrontmatterEdit): string {
+	const section = "[agent-frontmatter.pi]";
+	const lines = content.split(/\r?\n/);
+	let sectionStart = lines.findIndex((line) => line.trim() === section);
+	if (sectionStart < 0) {
+		const prefix = content.endsWith("\n") ? content : `${content}\n`;
+		return upsertAgentFrontmatterToml(`${prefix}\n${section}\n`, agentName, edit);
+	}
+	let sectionEnd = lines.length;
+	for (let i = sectionStart + 1; i < lines.length; i += 1) {
+		if (/^\s*\[[^\]]+\]\s*$/.test(lines[i])) { sectionEnd = i; break; }
+	}
+	const key = tomlAgentKey(agentName);
+	const keyRe = new RegExp(`^\\s*(?:${agentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|${tomlString(agentName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})\\s*=`);
+	const existingIndex = lines.slice(sectionStart + 1, sectionEnd).findIndex((line) => keyRe.test(line));
+	const absoluteIndex = existingIndex >= 0 ? sectionStart + 1 + existingIndex : -1;
+	const existingValue = absoluteIndex >= 0 ? (lines[absoluteIndex].split(/=(.*)/s)[1] ?? "") : "";
+	const fields = parseInlineTomlTable(existingValue.trim());
+	if (edit.color.trim()) fields.set("color", tomlString(edit.color.trim())); else fields.delete("color");
+	if (edit.model.trim()) fields.set("model", tomlString(edit.model.trim())); else fields.delete("model");
+	if (edit.tools.length > 0) fields.set("tools", tomlArray(edit.tools)); else fields.delete("tools");
+	if (fields.size === 0) {
+		if (absoluteIndex >= 0) lines.splice(absoluteIndex, 1);
+	} else {
+		const nextLine = `${key} = ${renderTomlInlineTable(fields)}`;
+		if (absoluteIndex >= 0) lines[absoluteIndex] = nextLine;
+		else lines.splice(sectionEnd, 0, nextLine);
+	}
+	return `${lines.join("\n").replace(/\n*$/, "")}\n`;
+}
+
+function yamlScalar(value: string): string {
+	if (!value) return "";
+	return /^[A-Za-z0-9_./:+-]+$/.test(value) ? value : `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
+}
+
+function upsertYamlField(frontmatter: string, key: string, value: string | undefined): string {
+	const lines = frontmatter.split(/\r?\n/);
+	const keyRe = new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:`);
+	const idx = lines.findIndex((line) => keyRe.test(line));
+	if (!value) {
+		if (idx >= 0) lines.splice(idx, 1);
+		return lines.join("\n");
+	}
+	const line = `${key}: ${value}`;
+	if (idx >= 0) lines[idx] = line;
+	else lines.push(line);
+	return lines.join("\n");
+}
+
+function updateAgentFileFrontmatter(raw: string, edit: AgentFrontmatterEdit): string {
+	const split = splitMarkdownFrontmatter(raw);
+	if (!split.hasFrontmatter) throw new Error("Agent file does not have YAML frontmatter.");
+	let fm = split.frontmatter;
+	fm = upsertYamlField(fm, "model", edit.model.trim() ? yamlScalar(edit.model.trim()) : undefined);
+	fm = upsertYamlField(fm, "tools", edit.tools.length > 0 ? edit.tools.join(", ") : undefined);
+	fm = upsertYamlField(fm, "color", edit.color.trim() ? yamlScalar(edit.color.trim()) : undefined);
+	return `---\n${fm.replace(/\n*$/, "")}\n---\n\n${split.body.replace(/^\n+/, "")}`;
 }
 
 function agentSearchText(agent: AgentConfig, status?: AgentPaneStatus): string {
@@ -1454,6 +1683,14 @@ function createAgentsBrowserComponent(
 		const agent = selectedAgent();
 		if (agent) done({ type: "stop", agentName: agent.name });
 	};
+	const editFrontmatterSelected = () => {
+		const agent = selectedAgent();
+		if (agent) done({ type: "editFrontmatter", agentName: agent.name });
+	};
+	const openAgentFileSelected = () => {
+		const agent = selectedAgent();
+		if (agent) done({ type: "openAgentFile", filePath: agent.filePath });
+	};
 
 	function handleInput(data: string): void {
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
@@ -1504,6 +1741,7 @@ function createAgentsBrowserComponent(
 				openSelectedSubtabFile();
 				return;
 			}
+			openAgentFileSelected();
 			return;
 		}
 		// '-' and '=' are page-step alternates that work in every tab. Put
@@ -1647,6 +1885,7 @@ function createAgentsBrowserComponent(
 		if (matchesKey(data, "home")) { if (ui.pane === "inspector") ui.inspectorScroll = 0; else { ui.selected = 0; ui.scroll = 0; } requestRender(); return; }
 		if (matchesKey(data, "end")) { if (ui.pane === "inspector") ui.inspectorScroll = Number.MAX_SAFE_INTEGER; else { ui.selected = Math.max(0, filtered().length - 1); clamp(); } requestRender(); return; }
 		if (matchesKey(data, "enter") || matchesKey(data, "return")) return insertSelected();
+		if (matchesKey(data, "alt+m") || matchesKey(data, "ctrl+m")) return editFrontmatterSelected();
 		if (matchesKey(data, "alt+p") || matchesKey(data, "ctrl+p")) return startSelected();
 		if (matchesKey(data, "alt+o") || matchesKey(data, "ctrl+o")) return attachSelected();
 		if (matchesKey(data, "alt+x") || matchesKey(data, "ctrl+x")) return stopSelected();
@@ -1677,7 +1916,7 @@ function createAgentsBrowserComponent(
 			return agentFrame(lines, safeWidth, theme, layout.innerRows, "Agents");
 		}
 		clamp();
-		const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane · ")}${ansiYellow("alt+p/o/x")} ${theme.fg("dim", "pane ops")}`;
+		const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane · ")}${ansiYellow("alt+m")} ${theme.fg("dim", "model/tools/color · ")}${ansiYellow("alt+e")} ${theme.fg("dim", "$EDITOR · ")}${ansiYellow("alt+p/o/x")} ${theme.fg("dim", "pane ops")}`;
 		const lines = [
 			tabLine,
 			"",
@@ -1742,12 +1981,22 @@ async function openAgentsBrowser(
 			ctx.ui.notify(message, "info");
 			continue;
 		}
+		if (action.type === "openAgentFile") {
+			const message = openFileInExternalEditor(action.filePath, ctx.cwd);
+			ctx.ui.notify(message, "info");
+			continue;
+		}
 		const agent = discovery.agents.find((candidate) => candidate.name === action.agentName);
 		if (!agent) {
 			ctx.ui.notify(`Unknown agent: ${action.agentName}`, "error");
 			continue;
 		}
 		try {
+			if (action.type === "editFrontmatter") {
+				const message = await editAgentFrontmatterOverrides(ctx, agent);
+				if (message) ctx.ui.notify(message, "info");
+				continue;
+			}
 			if (action.type === "insert") {
 				ctx.ui.pasteToEditor(`Use agent ${agent.name} to: `);
 				return;
@@ -4457,6 +4706,29 @@ function openFileInExternalEditor(filePath: string | undefined, cwd: string): st
 	if (!editor) return "Set $VISUAL or $EDITOR to open trace files externally.";
 	const proc = spawnSync(`${editor} ${shellQuote(filePath)}`, { cwd, shell: true, stdio: "inherit" });
 	return proc.status === 0 ? `Opened ${filePath}` : `Editor exited with status ${proc.status ?? "unknown"}: ${filePath}`;
+}
+
+async function editAgentFrontmatterOverrides(ctx: ExtensionContext, agent: AgentConfig): Promise<string | undefined> {
+	const edited = await ctx.ui.editor(`Edit ${agent.name} frontmatter — model/tools/color`, editableAgentFrontmatterText(agent));
+	if (edited === undefined) return undefined;
+	const parsed = parseEditableAgentFrontmatterText(edited);
+	if (isVstackManagedAgentFile(agent)) {
+		const tomlPath = vstackTomlPathForAgent(agent, ctx.cwd);
+		if (!tomlPath) throw new Error(`Could not locate vstack.toml for vstack-managed agent ${agent.name}.`);
+		await withFileMutationQueue(tomlPath, async () => {
+			let current = "";
+			try { current = await fs.promises.readFile(tomlPath, "utf-8"); } catch {}
+			const next = upsertAgentFrontmatterToml(current, agent.name, parsed);
+			await fs.promises.mkdir(path.dirname(tomlPath), { recursive: true });
+			await fs.promises.writeFile(tomlPath, next, "utf-8");
+		});
+		return `Updated ${agent.name} overrides in ${compactAgentPath(tomlPath)}. Run vstack refresh to regenerate the agent file.`;
+	}
+	await withFileMutationQueue(agent.filePath, async () => {
+		const current = await fs.promises.readFile(agent.filePath, "utf-8");
+		await fs.promises.writeFile(agent.filePath, updateAgentFileFrontmatter(current, parsed), "utf-8");
+	});
+	return `Updated ${agent.name} frontmatter in ${compactAgentPath(agent.filePath)}.`;
 }
 
 async function openTraceViewer(ctx: ExtensionContext, title: string, items: TraceViewerItem[]): Promise<void> {
