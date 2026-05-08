@@ -10,7 +10,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -1255,6 +1255,7 @@ function runUninstall(plan: UninstallPlan, inventory: Inventory): { ok: boolean;
 			const stderr = (result.stderr ?? "").trim() || (result.stdout ?? "").trim() || `exit ${result.status}`;
 			return { ok: false, message: `vstack remove failed: ${stderr}` };
 		}
+		// `vstack remove` already handled APPEND_SYSTEM.md, so no extra cleanup here.
 		return { ok: true, message: `Removed via vstack: ${plan.item.displayName}.` };
 	}
 	if (plan.method.kind === "npm") {
@@ -1268,12 +1269,47 @@ function runUninstall(plan: UninstallPlan, inventory: Inventory): { ok: boolean;
 			return { ok: false, message: `npm uninstall failed: ${stderr}` };
 		}
 		const stripped = removePackageEntryFromSettings(plan.item, inventory.settingsFiles);
+		// Backstop: npm's preuninstall script should have removed the block,
+		// but call removeAppendSystemBlockForUninstall too — idempotent if the
+		// preuninstall already won the race.
+		removeAppendSystemBlockForUninstall(plan.item);
 		return { ok: true, message: `npm uninstall ${plan.method.npmName} succeeded${stripped ? "; removed Pi settings entry." : " (no settings entry to remove)."}` };
 	}
 	const stripped = removePackageEntryFromSettings(plan.item, inventory.settingsFiles);
+	// Orphan branch: settings.json strip is the only underlying cleanup, so
+	// remove any APPEND_SYSTEM.md block keyed by this package name as well.
+	removeAppendSystemBlockForUninstall(plan.item);
 	return stripped
 		? { ok: true, message: `Removed ${plan.item.sourceName} from ${plan.item.scope} settings.json.` }
 		: { ok: false, message: `Could not find a matching entry for ${plan.item.sourceName} in ${plan.item.scope} settings.json.` };
+}
+
+/**
+ * Best-effort APPEND_SYSTEM.md cleanup for an uninstall path that did not
+ * already handle it. Removes by package name only — we do not need the
+ * package's `pi.appendSystem` declaration here, since the marker block is
+ * keyed by name and remove-by-name is idempotent. Tries the scope's Pi dir
+ * (which is where settings.json lives), and additionally the conventional
+ * global Pi dir as a backstop for `npm install -g` packages whose package
+ * dir lives outside any `<scope>/packages/` tree.
+ */
+function removeAppendSystemBlockForUninstall(item: InventoryItem): void {
+	if (!item.packageName) return;
+	const targets = new Set<string>();
+	if (item.packageDir) {
+		const scopeRoot = findAppendSystemScopeRoot(item.packageDir);
+		if (scopeRoot) targets.add(join(scopeRoot, "APPEND_SYSTEM.md"));
+	}
+	const configured = process.env.PI_CODING_AGENT_DIR;
+	const piDir = configured ? resolve(configured.replace(/^~(?=\/|$)/, homedir())) : join(homedir(), ".pi", "agent");
+	if (existsSync(piDir)) targets.add(join(piDir, "APPEND_SYSTEM.md"));
+	for (const target of targets) {
+		try {
+			appendSystemRemove(target, item.packageName);
+		} catch {
+			// Best-effort: never block uninstall on APPEND_SYSTEM.md write errors.
+		}
+	}
 }
 
 function planUpdate(item: InventoryItem, ctx: ExtensionCommandContext | ExtensionContext): UpdatePlan | undefined {
@@ -1404,6 +1440,120 @@ function applyMessage(schema: SettingsSchema): string {
 	return "Setting saved. Restart Pi to fully apply it.";
 }
 
+/**
+ * Pi extension packages can declare `pi.appendSystem` in their package.json,
+ * pointing at a markdown file whose contents are mirrored into the scope's
+ * `APPEND_SYSTEM.md` so models receive extension-specific tool-usage rules.
+ *
+ * On enable/install: upsert a delimited block keyed by package name.
+ * On disable/uninstall: remove that block.
+ *
+ * Marker format matches the vendored `scripts/append-system.mjs` shipped
+ * with each extension and the Rust helpers in vstack's CLI.
+ */
+function syncAppendSystemForPackage(item: InventoryItem, willDisable: boolean): void {
+	if (item.kind !== "package" || !item.packageName || !item.packageDir) return;
+	const pkgJsonPath = join(item.packageDir, "package.json");
+	let manifest: { pi?: { appendSystem?: unknown } } | undefined;
+	try {
+		manifest = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
+	} catch {
+		return;
+	}
+	const rel = manifest?.pi?.appendSystem;
+	if (typeof rel !== "string") return;
+
+	const scopeRoot = findAppendSystemScopeRoot(item.packageDir);
+	if (!scopeRoot) return;
+	const target = join(scopeRoot, "APPEND_SYSTEM.md");
+
+	try {
+		if (willDisable) {
+			appendSystemRemove(target, item.packageName);
+		} else {
+			const sourcePath = resolve(item.packageDir, rel);
+			if (!existsSync(sourcePath)) return;
+			const content = readFileSync(sourcePath, "utf8").trim();
+			if (!content) return;
+			appendSystemUpsert(target, item.packageName, content);
+		}
+	} catch {
+		// Best-effort: never block toggle on APPEND_SYSTEM.md write errors.
+	}
+}
+
+function findAppendSystemScopeRoot(packageDir: string): string | undefined {
+	let dir = resolve(packageDir);
+	while (true) {
+		const parent = dirname(dir);
+		if (parent === dir) return undefined;
+		if (parent.endsWith("/packages") || parent.endsWith("\\packages")) return dirname(parent);
+		dir = parent;
+	}
+}
+
+function appendSystemMarkers(name: string): { begin: string; end: string } {
+	return {
+		begin: `<!-- vstack:append-system ${name} begin -->`,
+		end: `<!-- vstack:append-system ${name} end -->`,
+	};
+}
+
+function appendSystemStripBlock(existing: string, begin: string, end: string): string {
+	// Splice the begin..end span out without touching surrounding newlines,
+	// then collapse 3+ consecutive newlines so a removed sandwiched block
+	// doesn't leave a gap. trim leading/trailing newlines last.
+	let out = "";
+	let rest = existing;
+	while (true) {
+		const start = rest.indexOf(begin);
+		if (start < 0) break;
+		out += rest.slice(0, start);
+		const after = rest.slice(start + begin.length);
+		const endIdx = after.indexOf(end);
+		if (endIdx < 0) {
+			out += begin;
+			rest = after;
+			break;
+		}
+		rest = after.slice(endIdx + end.length);
+	}
+	out += rest;
+	return out.replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "").replace(/\n+$/, "");
+}
+
+function appendSystemUpsert(target: string, name: string, content: string): void {
+	const trimmed = content.trim();
+	if (!trimmed) return appendSystemRemove(target, name);
+	const { begin, end } = appendSystemMarkers(name);
+	const block = `${begin}\n${trimmed}\n${end}`;
+	const existing = existsSync(target) ? readFileSync(target, "utf8") : "";
+	const stripped = appendSystemStripBlock(existing, begin, end);
+	const next = stripped ? `${stripped}\n\n${block}\n` : `${block}\n`;
+	if (next === existing) return;
+	mkdirSync(dirname(target), { recursive: true });
+	writeFileSync(target, next);
+}
+
+function appendSystemRemove(target: string, name: string): void {
+	if (!existsSync(target)) return;
+	const { begin, end } = appendSystemMarkers(name);
+	const existing = readFileSync(target, "utf8");
+	if (!existing.includes(begin)) return;
+	const stripped = appendSystemStripBlock(existing, begin, end);
+	if (stripped) {
+		const next = `${stripped}\n`;
+		if (next === existing) return;
+		writeFileSync(target, next);
+	} else {
+		try {
+			unlinkSync(target);
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
+		}
+	}
+}
+
 function toggleItem(_pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionContext, inventory: Inventory, item: InventoryItem): void {
 	if ((item.id === `package:${MANAGER_ID}` || item.packageName === MANAGER_ID) && item.state !== "disabled") {
 		ctx.ui.notify("Refusing to disable pi-extension-manager from inside itself. Edit settings.json manually if needed.", "warning");
@@ -1422,6 +1572,7 @@ function toggleItem(_pi: ExtensionAPI, ctx: ExtensionCommandContext | ExtensionC
 
 	if (item.kind === "package" && item.packageName) {
 		const changed = setPackageFiltered(item, inventory.settingsFiles, willDisable);
+		syncAppendSystemForPackage(item, willDisable);
 		ctx.ui.notify(changed ? "Package setting updated. Run /reload or restart Pi to apply module loading changes." : "Item toggle saved. Reload may be required.", "warning");
 		return;
 	}

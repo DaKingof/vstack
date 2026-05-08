@@ -15,7 +15,12 @@
       "./extensions/subagent/index.ts"
     ],
     "image": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-agents-tmux/assets/agents-tmux-demo.gif",
-    "video": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-agents-tmux/assets/agents-tmux-demo.mp4"
+    "video": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-agents-tmux/assets/agents-tmux-demo.mp4",
+    "appendSystem": "./instructions.md"
+  },
+  "scripts": {
+    "postinstall": "node scripts/append-system.mjs install",
+    "preuninstall": "node scripts/append-system.mjs remove"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -25,6 +30,8 @@
   },
   "files": [
     "extensions/",
+    "scripts/",
+    "instructions.md",
     "README.md",
     "package.json"
   ],

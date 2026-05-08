@@ -13,7 +13,12 @@
     "extensions": [
       "./extensions/task-panel.ts"
     ],
-    "image": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-task-panel/assets/panel-expanded.png"
+    "image": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-task-panel/assets/panel-expanded.png",
+    "appendSystem": "./instructions.md"
+  },
+  "scripts": {
+    "postinstall": "node scripts/append-system.mjs install",
+    "preuninstall": "node scripts/append-system.mjs remove"
   },
   "vstack": {
     "extensionManager": {
@@ -140,6 +145,8 @@
   "files": [
     "extensions/",
     "assets/",
+    "scripts/",
+    "instructions.md",
     "README.md",
     "package.json"
   ],

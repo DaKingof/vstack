@@ -14,7 +14,12 @@
     "extensions": [
       "./extensions/background-tasks.ts"
     ],
-    "image": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-background-tasks/assets/spawn-tasks.png"
+    "image": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-background-tasks/assets/spawn-tasks.png",
+    "appendSystem": "./instructions.md"
+  },
+  "scripts": {
+    "postinstall": "node scripts/append-system.mjs install",
+    "preuninstall": "node scripts/append-system.mjs remove"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -25,6 +30,8 @@
   "files": [
     "extensions/",
     "assets/",
+    "scripts/",
+    "instructions.md",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
     "package.json"

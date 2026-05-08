@@ -14,7 +14,12 @@
     "extensions": [
       "./extensions/questions.ts"
     ],
-    "image": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-questions/assets/questions-workflow.gif"
+    "image": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-questions/assets/questions-workflow.gif",
+    "appendSystem": "./instructions.md"
+  },
+  "scripts": {
+    "postinstall": "node scripts/append-system.mjs install",
+    "preuninstall": "node scripts/append-system.mjs remove"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -23,6 +28,8 @@
   "files": [
     "extensions/",
     "assets/",
+    "scripts/",
+    "instructions.md",
     "README.md",
     "package.json"
   ],

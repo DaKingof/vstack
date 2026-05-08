@@ -30,10 +30,10 @@ pub fn read_source_index(global: bool) -> Result<SourceIndex> {
     if !path.exists() {
         return Ok(SourceIndex::new());
     }
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let parsed: SourceIndex = serde_json::from_str(&raw)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let parsed: SourceIndex =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
     Ok(parsed)
 }
 
@@ -140,6 +140,12 @@ pub struct PiExtension {
     /// `bin` map from package.json. Names → relative script paths.
     #[serde(default)]
     pub bin: std::collections::BTreeMap<String, String>,
+    /// `pi.appendSystem` from package.json — relative path to a markdown
+    /// file whose contents are upserted into the scope's `APPEND_SYSTEM.md`
+    /// on install (and removed on uninstall) so models get extension-
+    /// specific tool-usage guidance even without per-call hook plumbing.
+    #[serde(default)]
+    pub append_system: Option<String>,
     /// Directory containing the package's `package.json`.
     #[serde(skip)]
     pub source_dir: PathBuf,
@@ -164,6 +170,8 @@ struct RawPackage {
 struct PiManifest {
     #[serde(default)]
     extensions: Vec<String>,
+    #[serde(default, rename = "appendSystem")]
+    append_system: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,7 +192,10 @@ impl PiExtension {
         let parsed: RawPackage = serde_json::from_str(&raw)
             .with_context(|| format!("parsing {}", pkg_path.display()))?;
 
-        let pi_extensions = parsed.pi.map(|m| m.extensions).unwrap_or_default();
+        let (pi_extensions, append_system) = parsed
+            .pi
+            .map(|m| (m.extensions, m.append_system))
+            .unwrap_or_default();
 
         let bin = match parsed.bin {
             Some(BinField::Single(path)) => {
@@ -203,6 +214,7 @@ impl PiExtension {
             keywords: parsed.keywords,
             pi_extensions,
             bin,
+            append_system,
             source_dir: dir.to_path_buf(),
         })
     }
@@ -241,23 +253,38 @@ pub fn discover_pi_extensions(dir: &Path) -> Result<Vec<PiExtension>> {
 /// Stale locks pre-dating the move still key on the unscoped names, so each
 /// scoped name lists its unscoped predecessor (and any earlier aliases).
 const PI_EXTENSION_RENAMES: &[(&str, &[&str])] = &[
-    ("@vanillagreen/pi-agents-tmux",         &["pi-agents-tmux", "pi-subagents-tmux", "pi-subagents"]),
-    ("@vanillagreen/pi-background-tasks",    &["pi-background-tasks"]),
-    ("@vanillagreen/pi-caveman",             &["pi-caveman"]),
-    ("@vanillagreen/pi-claude-bridge",       &["pi-claude-bridge"]),
-    ("@vanillagreen/pi-codex-minimal-tools", &["pi-codex-minimal-tools"]),
-    ("@vanillagreen/pi-extension-manager",   &["pi-extension-manager"]),
-    ("@vanillagreen/pi-flightdeck",          &["pi-flightdeck"]),
-    ("@vanillagreen/pi-output-policy",       &["pi-output-policy"]),
-    ("@vanillagreen/pi-prompt-stash",        &["pi-prompt-stash", "prompt-stash"]),
-    ("@vanillagreen/pi-qol",                 &["pi-qol"]),
-    ("@vanillagreen/pi-questions",           &["pi-questions"]),
-    ("@vanillagreen/pi-session-bridge",      &["pi-session-bridge"]),
-    ("@vanillagreen/pi-session-manager",     &["pi-session-manager"]),
-    ("@vanillagreen/pi-skills-manager",      &["pi-skills-manager"]),
-    ("@vanillagreen/pi-task-panel",          &["pi-task-panel"]),
-    ("@vanillagreen/pi-tool-renderer",       &["pi-tool-renderer"]),
-    ("@vanillagreen/pi-web-tools",           &["pi-web-tools"]),
+    (
+        "@vanillagreen/pi-agents-tmux",
+        &["pi-agents-tmux", "pi-subagents-tmux", "pi-subagents"],
+    ),
+    (
+        "@vanillagreen/pi-background-tasks",
+        &["pi-background-tasks"],
+    ),
+    ("@vanillagreen/pi-caveman", &["pi-caveman"]),
+    ("@vanillagreen/pi-claude-bridge", &["pi-claude-bridge"]),
+    (
+        "@vanillagreen/pi-codex-minimal-tools",
+        &["pi-codex-minimal-tools"],
+    ),
+    (
+        "@vanillagreen/pi-extension-manager",
+        &["pi-extension-manager"],
+    ),
+    ("@vanillagreen/pi-flightdeck", &["pi-flightdeck"]),
+    ("@vanillagreen/pi-output-policy", &["pi-output-policy"]),
+    (
+        "@vanillagreen/pi-prompt-stash",
+        &["pi-prompt-stash", "prompt-stash"],
+    ),
+    ("@vanillagreen/pi-qol", &["pi-qol"]),
+    ("@vanillagreen/pi-questions", &["pi-questions"]),
+    ("@vanillagreen/pi-session-bridge", &["pi-session-bridge"]),
+    ("@vanillagreen/pi-session-manager", &["pi-session-manager"]),
+    ("@vanillagreen/pi-skills-manager", &["pi-skills-manager"]),
+    ("@vanillagreen/pi-task-panel", &["pi-task-panel"]),
+    ("@vanillagreen/pi-tool-renderer", &["pi-tool-renderer"]),
+    ("@vanillagreen/pi-web-tools", &["pi-web-tools"]),
 ];
 
 /// Legacy package names that should be removed from the same scope before the
@@ -397,6 +424,7 @@ pub fn install_pi_extension(ext: &PiExtension, global: bool) -> Result<Option<Pa
     install_bin_links(ext, &dest, global)?;
     register_in_pi_settings(&ext.name, &dest, global)?;
     let _ = update_source_index(ext, global);
+    let _ = install_append_system_for(ext, &dest, global);
 
     Ok(Some(dest))
 }
@@ -408,7 +436,9 @@ fn find_vstack_repo_root(source_dir: &Path) -> Option<PathBuf> {
     let mut dir = source_dir.to_path_buf();
     while dir.pop() {
         if dir.join("pi-extensions").is_dir()
-            && (dir.join("Cargo.toml").exists() || dir.join(".git").exists() || dir.join("vstack.toml").exists())
+            && (dir.join("Cargo.toml").exists()
+                || dir.join(".git").exists()
+                || dir.join("vstack.toml").exists())
         {
             return Some(dir);
         }
@@ -502,6 +532,12 @@ pub fn remove_pi_extension(name: &str, global: bool) -> Result<Vec<PathBuf>> {
         removed.push(crate::config::pi_settings_path(global));
     }
     let _ = remove_from_source_index(name, global);
+    match remove_append_system_for(name, global) {
+        Ok(AppendSystemRemoveOutcome::Updated | AppendSystemRemoveOutcome::Deleted) => {
+            removed.push(append_system_path(global));
+        }
+        Ok(AppendSystemRemoveOutcome::NoOp) | Err(_) => {}
+    }
     Ok(removed)
 }
 
@@ -691,6 +727,174 @@ const COPY_DIR_SKIP_NAMES: &[&str] = &[
 
 fn should_skip_copy_entry(name: &str) -> bool {
     COPY_DIR_SKIP_NAMES.contains(&name)
+}
+
+/// Path to the scope's `APPEND_SYSTEM.md`. Pi reads global from
+/// `<pi_global_dir>/APPEND_SYSTEM.md` (where pi_global_dir respects
+/// `PI_CODING_AGENT_DIR`) and project from `<project>/.pi/APPEND_SYSTEM.md`,
+/// matching pi-claude-bridge `prompt-context.ts`. Both layouts share the
+/// scope root with `packages/`, so the same shape works in both scopes.
+pub fn append_system_path(global: bool) -> PathBuf {
+    if global {
+        crate::config::pi_global_dir().join("APPEND_SYSTEM.md")
+    } else {
+        crate::config::pi_project_dir().join("APPEND_SYSTEM.md")
+    }
+}
+
+fn append_system_block_markers(name: &str) -> (String, String) {
+    (
+        format!("<!-- vstack:append-system {name} begin -->"),
+        format!("<!-- vstack:append-system {name} end -->"),
+    )
+}
+
+fn append_system_strip_block(existing: &str, begin: &str, end: &str) -> String {
+    // Splice the begin..end span out of `existing` without touching the
+    // surrounding newlines. The collapse pass below normalizes any
+    // resulting 3+ consecutive newlines down to one blank line so a
+    // sandwiched block doesn't leave a gap when removed.
+    let mut out = String::with_capacity(existing.len());
+    let mut rest = existing;
+    while let Some(start) = rest.find(begin) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + begin.len()..];
+        match after.find(end) {
+            Some(end_idx) => {
+                rest = &after[end_idx + end.len()..];
+            }
+            None => {
+                // Unterminated marker — leave it alone rather than risk
+                // dropping unrelated content.
+                out.push_str(begin);
+                rest = after;
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+
+    let mut collapsed = String::with_capacity(out.len());
+    let mut prev_nl = 0;
+    for ch in out.chars() {
+        if ch == '\n' {
+            prev_nl += 1;
+            if prev_nl > 2 {
+                continue;
+            }
+        } else {
+            prev_nl = 0;
+        }
+        collapsed.push(ch);
+    }
+    collapsed
+        .trim_start_matches('\n')
+        .trim_end_matches('\n')
+        .to_string()
+}
+
+/// Insert or replace the named block in `target` and return whether the
+/// file changed. Block boundaries use HTML comment markers so the file
+/// stays valid markdown. Creates the file (and parent dir) if missing.
+pub fn append_system_upsert(target: &Path, name: &str, content: &str) -> Result<bool> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Ok(matches!(
+            append_system_remove(target, name)?,
+            AppendSystemRemoveOutcome::Updated | AppendSystemRemoveOutcome::Deleted
+        ));
+    }
+    let (begin, end) = append_system_block_markers(name);
+    let block = format!("{begin}\n{trimmed}\n{end}");
+
+    let existing = match std::fs::read_to_string(target) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let stripped = append_system_strip_block(&existing, &begin, &end);
+    let next = if stripped.is_empty() {
+        format!("{block}\n")
+    } else {
+        format!("{stripped}\n\n{block}\n")
+    };
+    if next == existing {
+        return Ok(false);
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(target, &next).with_context(|| format!("writing {}", target.display()))?;
+    Ok(true)
+}
+
+/// Outcome of removing a named block from an APPEND_SYSTEM.md file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppendSystemRemoveOutcome {
+    /// File missing or block not present — no change.
+    NoOp,
+    /// Block removed; file still has other content.
+    Updated,
+    /// Block removed; the file would be empty so it was deleted.
+    Deleted,
+}
+
+/// Remove the named block from `target` if present. Missing file is a
+/// no-op. When removing the block leaves an empty file, delete the file
+/// rather than leaving an empty placeholder behind.
+pub fn append_system_remove(target: &Path, name: &str) -> Result<AppendSystemRemoveOutcome> {
+    let existing = match std::fs::read_to_string(target) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(AppendSystemRemoveOutcome::NoOp),
+        Err(e) => return Err(e.into()),
+    };
+    let (begin, end) = append_system_block_markers(name);
+    if !existing.contains(&begin) {
+        return Ok(AppendSystemRemoveOutcome::NoOp);
+    }
+    let stripped = append_system_strip_block(&existing, &begin, &end);
+    if stripped.is_empty() {
+        match std::fs::remove_file(target) {
+            Ok(()) => Ok(AppendSystemRemoveOutcome::Deleted),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AppendSystemRemoveOutcome::Deleted),
+            Err(e) => Err(e.into()),
+        }
+    } else {
+        let next = format!("{stripped}\n");
+        if next == existing {
+            return Ok(AppendSystemRemoveOutcome::NoOp);
+        }
+        std::fs::write(target, &next).with_context(|| format!("writing {}", target.display()))?;
+        Ok(AppendSystemRemoveOutcome::Updated)
+    }
+}
+
+/// Run `append_system_upsert` for a Pi extension, reading the markdown body
+/// from `<package_dir>/<pi.appendSystem>`. Best-effort: a missing or empty
+/// file is silently skipped. Returns `Ok(true)` if the file changed.
+pub fn install_append_system_for(
+    ext: &PiExtension,
+    package_dir: &Path,
+    global: bool,
+) -> Result<bool> {
+    let Some(rel) = ext.append_system.as_deref() else {
+        return Ok(false);
+    };
+    let source = package_dir.join(rel);
+    let content = match std::fs::read_to_string(&source) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    if content.trim().is_empty() {
+        return Ok(false);
+    }
+    append_system_upsert(&append_system_path(global), &ext.name, &content)
+}
+
+/// Drop the named block from the scope's APPEND_SYSTEM.md. Best-effort.
+pub fn remove_append_system_for(name: &str, global: bool) -> Result<AppendSystemRemoveOutcome> {
+    append_system_remove(&append_system_path(global), name)
 }
 
 fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
@@ -986,10 +1190,8 @@ mod tests {
 
     #[test]
     fn install_pi_agents_tmux_migrates_legacy_subagent_packages() {
-        let sandbox = std::env::temp_dir().join(format!(
-            "vstack_pi_agents_migrate_{}",
-            std::process::id()
-        ));
+        let sandbox =
+            std::env::temp_dir().join(format!("vstack_pi_agents_migrate_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&sandbox);
         std::fs::create_dir_all(&sandbox).unwrap();
         let oldest_src = sandbox.join("src").join("pi-subagents");
@@ -1322,6 +1524,92 @@ mod tests {
         assert_eq!(ext.name, "pi-qol");
         assert!(ext.bin.is_empty(), "qol has no CLI bin");
         assert_eq!(ext.pi_extensions, vec!["./extensions/qol.ts".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn append_system_upsert_and_remove_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("vstack_append_sys_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("APPEND_SYSTEM.md");
+
+        // First insert: file is created with one block.
+        let changed = append_system_upsert(&target, "@scope/pkg", "## pkg\nrule.\n").unwrap();
+        assert!(changed);
+        let body = std::fs::read_to_string(&target).unwrap();
+        assert!(body.contains("<!-- vstack:append-system @scope/pkg begin -->"));
+        assert!(body.contains("## pkg"));
+        assert!(body.trim_end().ends_with("end -->"));
+
+        // Idempotent re-upsert: same content, no change.
+        let changed = append_system_upsert(&target, "@scope/pkg", "## pkg\nrule.\n").unwrap();
+        assert!(!changed);
+
+        // Updated content replaces the previous block, no duplicate markers.
+        let changed = append_system_upsert(&target, "@scope/pkg", "## pkg v2\n").unwrap();
+        assert!(changed);
+        let body = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(body.matches("begin -->").count(), 1);
+        assert!(body.contains("## pkg v2"));
+        assert!(!body.contains("## pkg\nrule."));
+
+        // Pre-existing user content above is preserved across upserts.
+        std::fs::write(&target, format!("# user rules\nkeep me.\n\n{body}")).unwrap();
+        let changed = append_system_upsert(&target, "@scope/pkg", "## pkg v3\n").unwrap();
+        assert!(changed);
+        let body = std::fs::read_to_string(&target).unwrap();
+        assert!(body.starts_with("# user rules\nkeep me."));
+        assert!(body.contains("## pkg v3"));
+        assert_eq!(body.matches("begin -->").count(), 1);
+
+        // Second package adds a separate block.
+        let changed = append_system_upsert(&target, "@scope/other", "## other\n").unwrap();
+        assert!(changed);
+        let body = std::fs::read_to_string(&target).unwrap();
+        assert!(body.contains("@scope/pkg begin"));
+        assert!(body.contains("@scope/other begin"));
+
+        // Removing one block leaves the other and the user content intact.
+        let outcome = append_system_remove(&target, "@scope/pkg").unwrap();
+        assert_eq!(outcome, AppendSystemRemoveOutcome::Updated);
+        let body = std::fs::read_to_string(&target).unwrap();
+        assert!(!body.contains("@scope/pkg"));
+        assert!(body.contains("@scope/other begin"));
+        assert!(body.starts_with("# user rules"));
+
+        // Remove again: no-op.
+        let outcome = append_system_remove(&target, "@scope/pkg").unwrap();
+        assert_eq!(outcome, AppendSystemRemoveOutcome::NoOp);
+
+        // Removing the last block when no user content remains deletes the file.
+        std::fs::write(
+            &target,
+            "<!-- vstack:append-system @scope/only begin -->\nrule.\n<!-- vstack:append-system @scope/only end -->\n",
+        )
+        .unwrap();
+        let outcome = append_system_remove(&target, "@scope/only").unwrap();
+        assert_eq!(outcome, AppendSystemRemoveOutcome::Deleted);
+        assert!(!target.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pi_extension_parses_append_system() {
+        let dir =
+            std::env::temp_dir().join(format!("vstack_pi_appsys_parse_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write_pkg(
+            &dir,
+            r#"{
+                "name": "@scope/test",
+                "version": "0.1.0",
+                "pi": { "extensions": ["./extensions/x.ts"], "appendSystem": "./instructions.md" }
+            }"#,
+        );
+        let ext = PiExtension::from_dir(&dir).unwrap();
+        assert_eq!(ext.append_system.as_deref(), Some("./instructions.md"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
