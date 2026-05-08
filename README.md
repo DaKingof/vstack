@@ -117,7 +117,7 @@ Windows: CLI runs natively; symlink mode falls back to copy.
 | `planner` | engineer | Turns requirements and scout findings into ordered implementation plans and plan files. |
 | `researcher` | engineer | Exa-powered research specialist for evidence-backed findings reports. |
 | `rust` | engineer | Rust engineer for systems work, performance, zero-allocation, and low-level design. |
-| `scout` | reviewer | Fast read-only reconnaissance for unfamiliar code before planning or implementation. |
+| `scout` | reviewer | Fast reconnaissance for unfamiliar code before planning or implementation; may write requested report artifacts. |
 | `tpm` | manager | Technical program management and roadmap analysis agent. |
 | `reviewer-arch` | reviewer | Reviews boundaries, abstractions, and architectural drift. |
 | `reviewer-doc` | reviewer | Reviews documentation accuracy and stale docs. |

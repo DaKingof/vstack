@@ -1073,8 +1073,7 @@ function renderAgentInspector(agent: AgentConfig | undefined, statuses: Map<stri
 		`${theme.fg("muted", "Kind")}: ${agent.pane ? "persistent pane" : "bg"}    ${theme.fg("muted", "Scope")}: ${agent.source}`,
 	);
 	pushWrapped(lines, `${theme.fg("muted", "Model")}: ${agent.model ?? "default"}`);
-	pushWrapped(lines, `${theme.fg("muted", "Tools")}: ${agent.tools?.join(", ") ?? "default"}`);
-	if (agent.denyTools && agent.denyTools.length > 0) pushWrapped(lines, `${theme.fg("muted", "Deny tools")}: ${agent.denyTools.join(", ")}`);
+	pushWrapped(lines, `${theme.fg("muted", "Deny tools")}: ${agent.denyTools && agent.denyTools.length > 0 ? agent.denyTools.join(", ") : "none"}`);
 	pushWrapped(lines, `${theme.fg("muted", "Path")}: ${compactAgentPath(agent.filePath)}`);
 	pushWrapped(lines, `${theme.fg("muted", "State")}: ${agentStatusLabel(agent, status, theme)}`);
 	if (status?.entry) {

@@ -26,7 +26,8 @@ pub fn generate_agent(
         .sandbox_mode
         .as_deref()
         .unwrap_or(match agent.role {
-            AgentRole::Reviewer => "read-only",
+            // Reviewers still need to write report artifacts; prompts constrain them to report-only work.
+            AgentRole::Reviewer => "workspace-write",
             AgentRole::Engineer => "danger-full-access",
             AgentRole::Manager => "danger-full-access",
         });

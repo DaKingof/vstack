@@ -39,7 +39,7 @@ pub fn generate_agent(
         .model
         .clone()
         .unwrap_or_else(|| pi_model_for(&agent.model));
-    let deny_tools = pi_deny_tools_for(agent, &frontmatter);
+    let deny_tools = pi_deny_tools_for(&frontmatter);
     let tools = pi_tools_with_overrides(agent, skills, &frontmatter, &deny_tools);
 
     let mut output = String::new();
@@ -108,12 +108,13 @@ pub fn pi_model_for(model: &str) -> String {
 ///
 /// All agents get broad read/discovery, batching, and web research tools so
 /// they can gather current context across project and external sources.
-/// Engineers additionally get write/edit tools. Reviewers/managers remain
-/// workspace read-only by default.
+/// All agents get write/edit tools so they can produce report artifacts.
+/// Agent prompts still constrain reviewer/manager agents to report-only work.
 pub fn pi_tools_for(agent: &Agent, skills: &[(String, String)]) -> Vec<String> {
     let mut tools = match agent.role {
-        AgentRole::Engineer => vec!["read", "grep", "find", "ls", "bash", "edit", "write"],
-        AgentRole::Reviewer | AgentRole::Manager => vec!["read", "grep", "find", "ls", "bash"],
+        AgentRole::Engineer | AgentRole::Reviewer | AgentRole::Manager => {
+            vec!["read", "grep", "find", "ls", "bash", "edit", "write"]
+        }
     };
 
     tools.extend([
@@ -158,25 +159,22 @@ fn pi_tools_with_overrides(
     subtract_denied_pi_tools(tools, deny_tools)
 }
 
-fn pi_deny_tools_for(agent: &Agent, frontmatter: &agent::AgentFrontmatterOverrides) -> Vec<String> {
+fn pi_deny_tools_for(frontmatter: &agent::AgentFrontmatterOverrides) -> Vec<String> {
     let tools = frontmatter
         .deny_tools
         .clone()
-        .unwrap_or_else(|| pi_default_deny_tools_for(agent));
+        .unwrap_or_else(pi_default_deny_tools_for);
     dedupe_pi_tool_names(tools)
 }
 
-fn pi_default_deny_tools_for(agent: &Agent) -> Vec<String> {
-    let mut tools = vec![
+fn pi_default_deny_tools_for() -> Vec<String> {
+    let tools = vec![
         "subagent".into(),
         "get_subagent_result".into(),
         "steer_subagent".into(),
         "stop_subagent".into(),
         "question".into(),
     ];
-    if matches!(agent.role, AgentRole::Reviewer | AgentRole::Manager) {
-        tools.extend(["edit".into(), "write".into(), "apply_patch".into()]);
-    }
     tools
 }
 
@@ -254,11 +252,11 @@ mod tests {
     }
 
     #[test]
-    fn pi_tools_reviewer_is_read_only() {
+    fn pi_tools_reviewer_can_write_reports() {
         let agent = agent_fixture("reviewer-arch", AgentRole::Reviewer, "sonnet");
         let tools = pi_tools_for(&agent, &[]);
-        assert!(!tools.iter().any(|tool| tool == "write"));
-        assert!(!tools.iter().any(|tool| tool == "edit"));
+        assert!(tools.iter().any(|tool| tool == "write"));
+        assert!(tools.iter().any(|tool| tool == "edit"));
         assert!(tools.iter().any(|tool| tool == "read"));
         assert!(tools.iter().any(|tool| tool == "web_search"));
         assert!(tools.iter().any(|tool| tool == "web_research"));
@@ -363,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_agent_reviewer_omits_pane_and_uses_read_tools() {
+    fn generate_agent_reviewer_omits_pane_and_can_write_reports() {
         let dir =
             std::env::temp_dir().join(format!("vstack_pi_agent_reviewer_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -375,8 +373,10 @@ mod tests {
 
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("model: openai-codex/gpt-5.5:high"));
-        assert!(content.contains("tools: read, grep, find, ls, bash"));
-        assert!(content.contains("deny-tools: subagent, get_subagent_result, steer_subagent, stop_subagent, question, edit, write, apply_patch"));
+        assert!(content.contains("tools: read, grep, find, ls, bash, edit, write"));
+        assert!(content.contains(
+            "deny-tools: subagent, get_subagent_result, steer_subagent, stop_subagent, question"
+        ));
         assert!(content.contains("web_search"));
         assert!(content.contains("web_research"));
         assert!(!content.contains("pane: true"));

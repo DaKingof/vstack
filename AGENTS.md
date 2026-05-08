@@ -55,7 +55,7 @@ skill-templates/         Templates for new skills
 
 - **Everything is discovered dynamically.** The CLI scans `agents/`, `skills/`, `hooks/`, `pi-extensions/` at runtime. No hardcoded lists.
 - **Canonical source is harness-agnostic.** Agents, skills, and hooks contain no harness-specific syntax. Translation happens in `cli/src/harness/`.
-- **Agent `role` drives access control.** `reviewer` → read-only/subagent. `engineer` → full access/primary. `manager` → analysis only.
+- **Agent `role` drives access control.** `reviewer` → report-only/subagent (may write report artifacts, not product code). `engineer` → full access/primary. `manager` → analysis/report artifacts only.
 - **Skill dependencies use frontmatter.** `dependencies: { required: [...], optional: [...] }` in SKILL.md.
 - **Hooks diverge by harness.** Claude Code gets native shell hooks + settings.json + agent frontmatter. Cursor gets safety `.mdc` rules. OpenCode gets `.opencode/agents/*.md` + instructions. Codex gets inline prose in `developer_instructions`. Pi has no native hook runtime — safety prose is appended to the agent body instead.
 - **Pi extensions are npm-shaped packages.** vstack copies them to `~/.pi/agent/packages/<name>` (or `.pi/packages/<name>`) and registers the path in Pi's `settings.json` `packages` array.

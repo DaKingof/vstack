@@ -108,16 +108,8 @@ fn claude_disallowed_tools_for(agent: &Agent, deny_tools: Option<&[String]>) -> 
     }
     let tools: Vec<String> = match agent.role {
         // Claude Code subagents should not recursively spawn other subagents.
-        AgentRole::Engineer => vec!["Task".into()],
-        // Reviewer/manager agents are read-only by default. Bash remains allowed
-        // for searches/diagnostics; write-capable tools are denied natively.
-        AgentRole::Reviewer | AgentRole::Manager => vec![
-            "Edit".into(),
-            "MultiEdit".into(),
-            "Write".into(),
-            "NotebookEdit".into(),
-            "Task".into(),
-        ],
+        // Write-capable tools stay available so any agent can produce report artifacts.
+        AgentRole::Engineer | AgentRole::Reviewer | AgentRole::Manager => vec!["Task".into()],
     };
     dedupe_tools(tools)
 }
@@ -233,7 +225,7 @@ mod tests {
             .expect("generate ok");
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.contains("\ntools:"));
-        assert!(content.contains("disallowedTools: Edit, MultiEdit, Write, NotebookEdit, Task"));
+        assert!(content.contains("disallowedTools: Task"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
