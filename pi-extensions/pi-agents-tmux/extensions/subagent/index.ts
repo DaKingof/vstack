@@ -206,7 +206,7 @@ function settingString(key: string, fallback: string, cwd?: string): string {
 }
 
 function subagentToolAccess(cwd?: string): "frontmatter" | "all" {
-	return settingString("subagentToolAccess", "frontmatter", cwd) === "all" ? "all" : "frontmatter";
+	return settingString("subagentToolAccess", "all", cwd) === "frontmatter" ? "frontmatter" : "all";
 }
 
 function subagentModelSource(cwd?: string): "frontmatter" | "parent" {

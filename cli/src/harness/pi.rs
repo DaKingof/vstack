@@ -39,7 +39,8 @@ pub fn generate_agent(
         .model
         .clone()
         .unwrap_or_else(|| pi_model_for(&agent.model));
-    let tools = pi_tools_with_overrides(agent, skills, &frontmatter);
+    let deny_tools = pi_deny_tools_for(agent, &frontmatter);
+    let tools = pi_tools_with_overrides(agent, skills, &frontmatter, &deny_tools);
 
     let mut output = String::new();
     output.push_str("---\n");
@@ -48,6 +49,9 @@ pub fn generate_agent(
     let desc = agent.description.replace('\\', "\\\\").replace('"', "\\\"");
     output.push_str(&format!("description: \"{}\"\n", desc));
     output.push_str(&format!("tools: {}\n", tools.join(", ")));
+    if !deny_tools.is_empty() {
+        output.push_str(&format!("deny-tools: {}\n", deny_tools.join(", ")));
+    }
     output.push_str(&format!("model: {}\n", model));
     if let Some(color) = frontmatter
         .color
@@ -145,18 +149,37 @@ fn pi_tools_with_overrides(
     agent: &Agent,
     skills: &[(String, String)],
     frontmatter: &agent::AgentFrontmatterOverrides,
+    deny_tools: &[String],
 ) -> Vec<String> {
     let tools = frontmatter
         .tools
         .clone()
         .unwrap_or_else(|| pi_tools_for(agent, skills));
-    subtract_denied_pi_tools(tools, frontmatter.deny_tools.as_deref())
+    subtract_denied_pi_tools(tools, deny_tools)
 }
 
-fn subtract_denied_pi_tools(tools: Vec<String>, deny_tools: Option<&[String]>) -> Vec<String> {
-    let Some(deny_tools) = deny_tools else {
-        return tools;
+fn pi_deny_tools_for(agent: &Agent, frontmatter: &agent::AgentFrontmatterOverrides) -> Vec<String> {
+    let mut tools: Vec<String> = match agent.role {
+        AgentRole::Engineer => Vec::new(),
+        AgentRole::Reviewer | AgentRole::Manager => {
+            vec!["edit".into(), "write".into(), "apply_patch".into()]
+        }
     };
+    if let Some(deny_tools) = frontmatter.deny_tools.as_ref() {
+        tools.extend(deny_tools.iter().map(|tool| tool.trim().to_string()));
+    }
+    let mut seen = std::collections::HashSet::new();
+    tools
+        .into_iter()
+        .filter(|tool| !tool.trim().is_empty())
+        .filter(|tool| seen.insert(normalize_pi_tool_name(tool)))
+        .collect()
+}
+
+fn subtract_denied_pi_tools(tools: Vec<String>, deny_tools: &[String]) -> Vec<String> {
+    if deny_tools.is_empty() {
+        return tools;
+    }
     let denied: std::collections::HashSet<String> = deny_tools
         .iter()
         .map(|tool| normalize_pi_tool_name(tool))
@@ -280,6 +303,7 @@ mod tests {
         assert!(content.contains("model: openai-codex/gpt-5.5:xhigh"));
         assert!(content.contains("color: magenta"));
         assert!(content.contains("tools: read, grep, find, ls, bash, edit, write"));
+        assert!(!content.contains("deny-tools:"));
         assert!(content.contains("web_search"));
         assert!(content.contains("web_research"));
         assert!(content.contains("pane: true"));
@@ -316,6 +340,7 @@ mod tests {
             .unwrap();
         assert!(!tools_line.contains("bash"));
         assert!(!tools_line.contains("apply_patch"));
+        assert!(content.contains("deny-tools: bash, apply-patch"));
         assert!(tools_line.contains("read"));
         assert!(tools_line.contains("write"));
 
@@ -336,6 +361,7 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("model: openai-codex/gpt-5.5:high"));
         assert!(content.contains("tools: read, grep, find, ls, bash"));
+        assert!(content.contains("deny-tools: edit, write, apply_patch"));
         assert!(content.contains("web_search"));
         assert!(content.contains("web_research"));
         assert!(!content.contains("pane: true"));

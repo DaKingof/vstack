@@ -950,7 +950,7 @@ fn project_config_header() -> String {
     out.push_str("# every install and refresh.\n");
     out.push_str("#\n");
     out.push_str("# Skills live in [agent-skills]. Generated frontmatter\n");
-    out.push_str("# overrides like model, tools, deny-tools, color, and pane live in\n");
+    out.push_str("# overrides like model, deny-tools, tools, color, and pane live in\n");
     out.push_str("# [agent-frontmatter] or [agent-frontmatter.pi].\n");
     out.push_str("#\n");
     out.push_str("# After editing, run:  vstack refresh\n");
@@ -1383,8 +1383,11 @@ fn agent_frontmatter_heading() -> String {
     out.push_str("# ── Agent Frontmatter ────────────────────────────────\n");
     out.push_str("# Optional generated-frontmatter overrides. Top-level entries\n");
     out.push_str("# apply to every harness; harness-specific tables win. Prefer\n");
-    out.push_str("# harness-specific model/tool values when formats differ.\n");
-    out.push_str("# Supported fields: color, model, tools, deny-tools, pane, mode,\n");
+    out.push_str("# harness-specific model/tool values when formats differ. Prefer\n");
+    out.push_str(
+        "# deny-tools for maintainable restrictions; use tools only for strict allowlists.\n",
+    );
+    out.push_str("# Supported fields: color, model, deny-tools, tools, pane, mode,\n");
     out.push_str("# sandbox-mode, model-reasoning-effort. Unknown fields ignored.\n");
     out.push_str("# Examples:\n");
     out.push_str("# rust = { color = \"green\" }\n");

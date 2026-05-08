@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 /// Generate a Claude Code agent file (.claude/agents/<name>.md)
 ///
-/// Format: YAML frontmatter with name, description, model, tools, color, skills, hooks
-/// followed by markdown body.
+/// Format: YAML frontmatter with name, description, model, tools/disallowedTools,
+/// color, skills, hooks followed by markdown body.
 pub fn generate_agent(
     agent: &Agent,
     dir: &Path,
@@ -35,13 +35,17 @@ pub fn generate_agent(
         .unwrap_or_else(|| agent.model_id("claude-code"));
     output.push_str(&format!("model: {}\n", model));
 
-    let tools = claude_tools_for(
-        agent,
-        frontmatter.tools.as_deref(),
-        frontmatter.deny_tools.as_deref(),
-    );
-    if !tools.is_empty() {
-        output.push_str(&format!("tools: {}\n", tools.join(", ")));
+    if let Some(tools) = claude_tools_override(frontmatter.tools.as_deref()) {
+        if !tools.is_empty() {
+            output.push_str(&format!("tools: {}\n", tools.join(", ")));
+        }
+    }
+    let disallowed_tools = claude_disallowed_tools_for(agent, frontmatter.deny_tools.as_deref());
+    if !disallowed_tools.is_empty() {
+        output.push_str(&format!(
+            "disallowedTools: {}\n",
+            disallowed_tools.join(", ")
+        ));
     }
 
     if let Some(color) = frontmatter
@@ -88,57 +92,29 @@ pub fn generate_agent(
     Ok(path)
 }
 
-fn claude_tools_for(
-    agent: &Agent,
-    override_tools: Option<&[String]>,
-    deny_tools: Option<&[String]>,
-) -> Vec<String> {
-    let tools = if let Some(tools) = override_tools {
-        dedupe_tools(tools.iter().map(|tool| claude_tool_name(tool)).collect())
-    } else {
-        let defaults = match agent.role {
-            AgentRole::Engineer => vec![
-                "Read",
-                "Grep",
-                "Glob",
-                "LS",
-                "Bash",
-                "Edit",
-                "MultiEdit",
-                "Write",
-                "WebFetch",
-                "WebSearch",
-                "TodoWrite",
-                "Task",
-            ],
-            AgentRole::Reviewer | AgentRole::Manager => vec![
-                "Read",
-                "Grep",
-                "Glob",
-                "LS",
-                "Bash",
-                "WebFetch",
-                "WebSearch",
-            ],
-        };
-        defaults.into_iter().map(String::from).collect()
-    };
-    subtract_denied_claude_tools(tools, deny_tools)
+fn claude_tools_override(override_tools: Option<&[String]>) -> Option<Vec<String>> {
+    override_tools
+        .map(|tools| dedupe_tools(tools.iter().map(|tool| claude_tool_name(tool)).collect()))
 }
 
-fn subtract_denied_claude_tools(tools: Vec<String>, deny_tools: Option<&[String]>) -> Vec<String> {
-    let Some(deny_tools) = deny_tools else {
-        return tools;
+fn claude_disallowed_tools_for(agent: &Agent, deny_tools: Option<&[String]>) -> Vec<String> {
+    let mut tools: Vec<String> = match agent.role {
+        // Claude Code subagents should not recursively spawn other subagents.
+        AgentRole::Engineer => vec!["Task".into()],
+        // Reviewer/manager agents are read-only by default. Bash remains allowed
+        // for searches/diagnostics; write-capable tools are denied natively.
+        AgentRole::Reviewer | AgentRole::Manager => vec![
+            "Edit".into(),
+            "MultiEdit".into(),
+            "Write".into(),
+            "NotebookEdit".into(),
+            "Task".into(),
+        ],
     };
-    let denied: std::collections::HashSet<String> = deny_tools
-        .iter()
-        .map(|tool| claude_tool_name(tool))
-        .filter(|tool| !tool.is_empty())
-        .collect();
-    tools
-        .into_iter()
-        .filter(|tool| !denied.contains(tool))
-        .collect()
+    if let Some(deny_tools) = deny_tools {
+        tools.extend(deny_tools.iter().map(|tool| claude_tool_name(tool)));
+    }
+    dedupe_tools(tools)
 }
 
 fn claude_tool_name(tool: &str) -> String {
@@ -241,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_agent_writes_default_role_tools() {
+    fn generate_agent_writes_default_role_disallowed_tools() {
         let dir =
             std::env::temp_dir().join(format!("vstack_claude_agent_tools_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -251,9 +227,8 @@ mod tests {
         let path = generate_agent(&agent, &dir, &[], &[], &[], &AgentExtras::default())
             .expect("generate ok");
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("tools: Read, Grep, Glob, LS, Bash, WebFetch, WebSearch"));
-        assert!(!content.contains("Write"));
-        assert!(!content.contains("Edit"));
+        assert!(!content.contains("\ntools:"));
+        assert!(content.contains("disallowedTools: Edit, MultiEdit, Write, NotebookEdit, Task"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -285,12 +260,13 @@ mod tests {
         let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("tools: Read, Grep, Glob, Bash, WebSearch, mcp__custom"));
+        assert!(content.contains("disallowedTools: Task"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn generate_agent_applies_deny_tools_after_defaults() {
+    fn generate_agent_emits_native_disallowed_tools() {
         let dir = std::env::temp_dir().join(format!(
             "vstack_claude_agent_deny_tools_{}",
             std::process::id()
@@ -308,20 +284,8 @@ mod tests {
         };
         let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
         let content = std::fs::read_to_string(&path).unwrap();
-        let tools_line = content
-            .lines()
-            .find(|line| line.starts_with("tools:"))
-            .unwrap();
-        let tools: Vec<&str> = tools_line
-            .trim_start_matches("tools:")
-            .split(',')
-            .map(|tool| tool.trim())
-            .collect();
-        assert!(!tools.contains(&"Bash"));
-        assert!(!tools.contains(&"Task"));
-        assert!(!tools.contains(&"Write"));
-        assert!(tools.contains(&"Read"));
-        assert!(tools.contains(&"Edit"));
+        assert!(!content.contains("\ntools:"));
+        assert!(content.contains("disallowedTools: Task, Bash, Write"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -175,7 +175,7 @@ trading-design = "Dark theme, green/red accents."
 
 ## Per-Harness Tool Overrides
 
-- Claude Code and Pi write native `tools` allowlists into generated agent files. Vstack also accepts `deny-tools` in `[agent-frontmatter]` / harness-specific frontmatter and subtracts those tools before writing native files.
+- Prefer `deny-tools` for tool restrictions. Claude Code writes it as native `disallowedTools`; Pi writes `deny-tools` for `pi-agents-tmux`, whose default is active parent tools minus denials. `tools` remains supported for rare strict allowlists.
 - OpenCode uses `permission` for tool access; vstack currently maps role to `mode` and does not emit per-agent permissions.
 - Cursor and Codex do not use the same agent `tools` frontmatter.
 

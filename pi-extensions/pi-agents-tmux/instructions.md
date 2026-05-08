@@ -1,6 +1,6 @@
 ## pi-agents-tmux — using `subagent`, `steer_subagent`, `get_subagent_result`, `stop_subagent`
 
-The `subagent` tool delegates work to a project-defined agent (loaded from `.pi/agents`, with `.claude/agents` as a compatibility source). Some agents run in persistent tmux panes (`pane: true` in their frontmatter) and survive across turns; others are one-shot. Child tool access comes from `tools:` unless `subagentToolAccess=all`; `deny-tools:` and the recursive/prompt tool denylist are always subtracted.
+The `subagent` tool delegates work to a project-defined agent (loaded from `.pi/agents`, with `.claude/agents` as a compatibility source). Some agents run in persistent tmux panes (`pane: true` in their frontmatter) and survive across turns; others are one-shot. Child tool access defaults to inherited active parent tools; `deny-tools:` and the recursive/prompt tool denylist are always subtracted. Set `subagentToolAccess=frontmatter` only for strict `tools:` allowlists.
 
 When to use `subagent`:
 - Isolated context for a focused task — the parent does not need the agent's intermediate tool output, only its result.
