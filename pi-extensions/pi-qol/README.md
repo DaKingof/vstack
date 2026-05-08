@@ -63,6 +63,7 @@ Settings are exposed through `pi-extension-manager` under **QOL**.
 - `replaceFooter`: hide Pi's default footer while QOL's compact statusline is active; default on.
 - `compactPrompt`: use the compact `π` prompt editor; default on.
 - `showSessionNameTitle`: show the named session above the prompt, or in tmux's pane title/border; default on.
+- `showSessionNameWindow`: also rename the current tmux window to `π <session>` so it appears in the tmux status line. Disables `automatic-rename` for the window while active and restores it on shutdown. Requires `showSessionNameTitle`; default on.
 - `inputBottomPaddingLines`: blank lines below the compact prompt; default `0`.
 - Git display knobs: `gitRefreshTimeoutMs`, `showDirtyMarker`.
 - If `pi-caveman` is loaded, QOL reads its bridge to show a Caveman icon in the statusline and to make `Alt+C` cycle Caveman modes. The Caveman package's `showStatusBadge` setting also controls this QOL badge.

@@ -61,6 +61,16 @@
           "requiresReload": true
         },
         {
+          "key": "showSessionNameWindow",
+          "label": "Sync session name to tmux window name",
+          "description": "Also rename the current tmux window to \"π <session>\" so the session name shows in the tmux status line. Disables tmux automatic-rename for this window while active and restores the original window name and automatic-rename setting on shutdown.",
+          "type": "boolean",
+          "default": true,
+          "category": "Statusline",
+          "apply": "reload",
+          "requiresReload": true
+        },
+        {
           "key": "inputBottomPaddingLines",
           "label": "Input bottom padding",
           "description": "Blank lines below the compact prompt. Default is 0 for no extra space.",

@@ -1307,6 +1307,14 @@ function setTmuxWindowOption(target: string, option: string, value: string): voi
 	execFile("tmux", ["set-option", "-wq", "-t", target, option, value], { timeout: 1000 }, () => undefined);
 }
 
+function readTmuxWindowName(target: string, callback: (name: string | undefined) => void): void {
+	execFile("tmux", ["display-message", "-p", "-t", target, "#{window_name}"], { timeout: 1000 }, (error, stdout) => callback(error ? undefined : stdout.replace(/\r?\n$/, "")));
+}
+
+function setTmuxWindowName(target: string, name: string): void {
+	execFile("tmux", ["rename-window", "-t", target, name], { timeout: 1000 }, () => undefined);
+}
+
 function cavemanIconTone(mode: string, active: boolean): "muted" | "text" | "success" | "thinkingHigh" | "error" {
 	if (!active) return "muted";
 	switch (mode) {
@@ -4576,6 +4584,10 @@ export default function qol(pi: ExtensionAPI): void {
 	let tmuxChangedPaneBorderStatus = false;
 	let tmuxChangedPaneBorderFormat = false;
 	let tmuxLastPaneTitle: string | undefined;
+	let tmuxOriginalWindowNameTitle: string | undefined;
+	let tmuxOriginalAutomaticRename: string | undefined;
+	let tmuxChangedAutomaticRename = false;
+	let tmuxLastWindowNameTitle: string | undefined;
 	let lastSessionTitle: string | undefined;
 
 	const requestRender = () => activeTui?.requestRender();
@@ -4602,9 +4614,17 @@ export default function qol(pi: ExtensionAPI): void {
 		const target = tmuxPaneTitleTarget;
 		if (!target) return;
 		const nextTitle = sessionTitle ? formatTmuxSessionTitle(sessionTitle) : tmuxOriginalPaneTitle;
-		if (nextTitle === undefined || nextTitle === tmuxLastPaneTitle) return;
-		tmuxLastPaneTitle = nextTitle;
-		setTmuxPaneTitle(target, nextTitle);
+		if (nextTitle !== undefined && nextTitle !== tmuxLastPaneTitle) {
+			tmuxLastPaneTitle = nextTitle;
+			setTmuxPaneTitle(target, nextTitle);
+		}
+		if (settingBoolean("showSessionNameWindow", true, ctx.cwd)) {
+			const nextWindow = sessionTitle ? formatTmuxSessionTitle(sessionTitle) : tmuxOriginalWindowNameTitle;
+			if (nextWindow !== undefined && nextWindow !== tmuxLastWindowNameTitle) {
+				tmuxLastWindowNameTitle = nextWindow;
+				setTmuxWindowName(target, nextWindow);
+			}
+		}
 	};
 
 	const installSessionTitle = (ctx: ExtensionContext) => {
@@ -4633,6 +4653,21 @@ export default function qol(pi: ExtensionAPI): void {
 					setTmuxWindowOption(tmuxTarget, "pane-border-format", TMUX_SESSION_TITLE_BORDER_FORMAT);
 				}
 			});
+			if (settingBoolean("showSessionNameWindow", true, ctx.cwd)) {
+				readTmuxWindowName(tmuxTarget, (name) => {
+					if (tmuxPaneTitleTarget !== tmuxTarget) return;
+					tmuxOriginalWindowNameTitle = name;
+					syncSessionTitle(ctx);
+				});
+				readTmuxWindowOption(tmuxTarget, "automatic-rename", (value) => {
+					if (tmuxPaneTitleTarget !== tmuxTarget) return;
+					tmuxOriginalAutomaticRename = value;
+					if (value !== "off") {
+						tmuxChangedAutomaticRename = true;
+						setTmuxWindowOption(tmuxTarget, "automatic-rename", "off");
+					}
+				});
+			}
 			return;
 		}
 		ctx.ui.setHeader((tui, theme) => {
@@ -4658,6 +4693,8 @@ export default function qol(pi: ExtensionAPI): void {
 		if (tmuxPaneTitleTarget && tmuxOriginalPaneTitle !== undefined) setTmuxPaneTitle(tmuxPaneTitleTarget, tmuxOriginalPaneTitle);
 		if (tmuxPaneTitleTarget && tmuxChangedPaneBorderStatus && tmuxOriginalPaneBorderStatus !== undefined) setTmuxWindowOption(tmuxPaneTitleTarget, "pane-border-status", tmuxOriginalPaneBorderStatus);
 		if (tmuxPaneTitleTarget && tmuxChangedPaneBorderFormat && tmuxOriginalPaneBorderFormat !== undefined) setTmuxWindowOption(tmuxPaneTitleTarget, "pane-border-format", tmuxOriginalPaneBorderFormat);
+		if (tmuxPaneTitleTarget && tmuxOriginalWindowNameTitle !== undefined && tmuxLastWindowNameTitle !== undefined) setTmuxWindowName(tmuxPaneTitleTarget, tmuxOriginalWindowNameTitle);
+		if (tmuxPaneTitleTarget && tmuxChangedAutomaticRename && tmuxOriginalAutomaticRename !== undefined) setTmuxWindowOption(tmuxPaneTitleTarget, "automatic-rename", tmuxOriginalAutomaticRename);
 		tmuxPaneTitleTarget = undefined;
 		tmuxOriginalPaneTitle = undefined;
 		tmuxOriginalPaneBorderStatus = undefined;
@@ -4665,6 +4702,10 @@ export default function qol(pi: ExtensionAPI): void {
 		tmuxChangedPaneBorderStatus = false;
 		tmuxChangedPaneBorderFormat = false;
 		tmuxLastPaneTitle = undefined;
+		tmuxOriginalWindowNameTitle = undefined;
+		tmuxOriginalAutomaticRename = undefined;
+		tmuxChangedAutomaticRename = false;
+		tmuxLastWindowNameTitle = undefined;
 		lastSessionTitle = undefined;
 		ctx.ui.setStatus(SESSION_MANAGER_STATUS_KEY, undefined);
 		ctx.ui.setWidget("statusline", undefined);
