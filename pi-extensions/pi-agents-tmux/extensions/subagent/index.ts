@@ -2021,7 +2021,7 @@ async function openAgentsBrowser(
 		try {
 			if (action.type === "editFrontmatter") {
 				const message = await editAgentFrontmatterOverrides(ctx, agent);
-				if (message) ctx.ui.notify(message, "info");
+				if (message) await showAgentEditConfirmation(ctx, message);
 				continue;
 			}
 			if (action.type === "insert") {
@@ -4797,6 +4797,31 @@ async function openTraceViewer(ctx: ExtensionContext, title: string, items: Trac
 			return lines.slice(0, rows);
 		},
 	}), { overlay: true, overlayOptions: { anchor: "center", width: TRACE_VIEWER_WIDTH, maxHeight: TRACE_VIEWER_MAX_HEIGHT } });
+}
+
+async function showAgentEditConfirmation(ctx: ExtensionContext, message: string): Promise<void> {
+	if (!ctx.hasUI) {
+		ctx.ui.notify(message, "info");
+		return;
+	}
+	await ctx.ui.custom<void>((tui: TUI, theme: Theme, _kb, done) => ({
+		invalidate() {},
+		handleInput(data: string) {
+			if (matchesKey(data, "return") || matchesKey(data, "enter") || matchesKey(data, "escape") || matchesKey(data, "backspace") || matchesKey(data, "ctrl+c")) done();
+		},
+		render(width: number): string[] {
+			const frameWidth = Math.max(44, Math.min(width, 96));
+			const innerWidth = Math.max(1, frameWidth - 4);
+			const lines = [
+				theme.fg("success", "Agent metadata updated"),
+				"",
+				...wrapTextWithAnsi(message, innerWidth),
+				"",
+				`${ansiYellow("enter")} ${theme.fg("dim", "return to agents · ")}${ansiYellow("esc")} ${theme.fg("dim", "return")}`,
+			];
+			return simpleFrame(lines, frameWidth, theme, "Agents").slice(0, Math.max(8, Math.floor(tui.terminal.rows * 0.45)));
+		},
+	}), { overlay: true, overlayOptions: { anchor: "center", width: "72%", maxHeight: "40%" } });
 }
 
 async function traceViewerItems(record: PaneTaskRecord): Promise<TraceViewerItem[]> {
