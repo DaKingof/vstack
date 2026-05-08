@@ -4016,7 +4016,25 @@ function formatCompletionGroup(completions: PaneCompletionDetails[]): string {
 	return [`# Agent completions (${completions.length})`, "", ...completions.map(formatCompletionDetails)].join("\n\n---\n\n");
 }
 
+const paneCompletionPollLocks = new Set<string>();
+const emittedPaneCompletionKeys = new Set<string>();
+
+function paneCompletionDedupKey(runtimeRoot: string, agent: string, taskId: string): string {
+	return `${normalizedPath(runtimeRoot)}\0${agent}\0${taskId}`;
+}
+
 async function pollPaneCompletions(runtimeRoot: string, pi: ExtensionAPI, triggerTurn = false): Promise<number> {
+	const lockKey = normalizedPath(runtimeRoot);
+	if (paneCompletionPollLocks.has(lockKey)) return 0;
+	paneCompletionPollLocks.add(lockKey);
+	try {
+		return await pollPaneCompletionsUnlocked(runtimeRoot, pi, triggerTurn);
+	} finally {
+		paneCompletionPollLocks.delete(lockKey);
+	}
+}
+
+async function pollPaneCompletionsUnlocked(runtimeRoot: string, pi: ExtensionAPI, triggerTurn = false): Promise<number> {
 	const root = outboxRoot(runtimeRoot);
 	let agentDirs: fs.Dirent[];
 	try {
@@ -4051,9 +4069,16 @@ async function pollPaneCompletions(runtimeRoot: string, pi: ExtensionAPI, trigge
 				if (!parsed.completion) continue;
 				const completion = parsed.completion;
 				const agentName = completion.agent || agentDir.name;
+				const taskId = completion.taskId || path.basename(filePath, path.extname(filePath));
+				const dedupKey = paneCompletionDedupKey(runtimeRoot, agentName, taskId);
+				const existing = tasks[taskId];
+				const alreadyEmitted = emittedPaneCompletionKeys.has(dedupKey)
+					|| Boolean(existing && existing.agent === agentName && isTerminalTaskStatus(existing.status) && (existing.completedAt || existing.completionArchivePath));
 				const archivePath = await archiveCompletion(runtimeRoot, agentName, filePath);
+				if (alreadyEmitted) continue;
 				const detail = paneCompletionDetailsFromCompletion(completion, agentDir.name, filePath, archivePath, registry, tasks);
 				completions.push(detail);
+				emittedPaneCompletionKeys.add(dedupKey);
 				tasks = await updateTaskRegistry(runtimeRoot, (records) => {
 					const existing = records[detail.taskId];
 					records[detail.taskId] = {
@@ -4087,6 +4112,8 @@ async function pollPaneCompletions(runtimeRoot: string, pi: ExtensionAPI, trigge
 					completionPath: detail.archivePath ?? detail.sourcePath,
 				});
 			} catch (error) {
+				const code = typeof error === "object" && error && "code" in error ? (error as { code?: unknown }).code : undefined;
+				if (!parseFailure && code === "ENOENT") continue;
 				// Leave malformed or concurrently-written files in place for the agent/user to fix,
 				// but surface stable parse failures in the task registry and dashboard.
 				let oldEnough = true;
