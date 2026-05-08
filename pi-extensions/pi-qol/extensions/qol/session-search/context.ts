@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { SessionManager, Text, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { acquireVstackModalLock } from "../bridges.js";
 import { generateQolSummary, serializeMessagesForSummary } from "../compaction.js";
 import {
