@@ -1107,7 +1107,7 @@ class SessionManagerOverlay implements Focusable {
 		const optionRow = (index: 0 | 1, label: string) => {
 			const selected = this.deleteConfirmSelection === index;
 			const prefix = selected ? "› " : "  ";
-			const labelText = selected ? this.theme.fg("text", label) : index === 0 ? ui.error(label) : ui.dim(label);
+			const labelText = index === 0 ? ui.error(label) : selected ? this.theme.fg("text", label) : ui.dim(label);
 			const content = `${ui.warning(prefix)}${labelText}`;
 			const padded = padAnsi(content, boxInner);
 			return selected ? this.theme.bg(index === 0 ? "toolErrorBg" : "selectedBg", padded) : padded;
