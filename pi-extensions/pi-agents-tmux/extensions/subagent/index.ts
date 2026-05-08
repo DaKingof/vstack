@@ -1981,8 +1981,10 @@ async function openAgentsBrowser(
 				getActiveItems,
 				runtimeRoot,
 				(filePath) => {
-					const message = openFileInExternalEditor(filePath, ctx.cwd, tui);
-					ctx.ui.notify(message, "info");
+					setImmediate(() => {
+						const message = openFileInExternalEditor(filePath, ctx.cwd, tui);
+						ctx.ui.notify(message, "info");
+					});
 				},
 			),
 			{ overlay: true, overlayOptions: { anchor: "center", maxHeight: AGENTS_BROWSER_MAX_HEIGHT, width: AGENTS_BROWSER_WIDTH } },
@@ -4706,12 +4708,14 @@ function renderTraceTabBar(items: TraceViewerItem[], selected: number, width: nu
 
 function openFileInExternalEditor(filePath: string | undefined, cwd: string, tui?: TUI): string {
 	if (!filePath) return "No file path for selected view.";
-	const editor = process.env.VISUAL || process.env.EDITOR;
+	const editorCmd = process.env.VISUAL || process.env.EDITOR;
+	if (!editorCmd) return "Set $VISUAL or $EDITOR to open trace files externally.";
+	const [editor, ...editorArgs] = editorCmd.split(/\s+/).filter((part) => part.length > 0);
 	if (!editor) return "Set $VISUAL or $EDITOR to open trace files externally.";
 	let status: number | null = null;
 	try {
 		tui?.stop();
-		const proc = spawnSync(`${editor} ${shellQuote(filePath)}`, { cwd, shell: true, stdio: "inherit" });
+		const proc = spawnSync(editor, [...editorArgs, filePath], { cwd, stdio: "inherit", shell: process.platform === "win32" });
 		status = proc.status;
 	} finally {
 		tui?.start();
