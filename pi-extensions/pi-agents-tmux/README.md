@@ -108,7 +108,6 @@ Arguments support autocomplete, including known agent names for `show`, `start`,
 - In the inspector, `↑/↓`, `-/=`, `Home/End` scroll the system prompt preview.
 - `Enter` inserts `Use agent <name> to: ` into the editor.
 - `Alt+M` edits the selected agent's Pi `model`, `tools`, and `color` frontmatter. For vstack-managed project agents, changes are written to `[agent-frontmatter.pi]` in `vstack.toml` instead of the generated agent file.
-- `Alt+E` opens the selected agent file in `$VISUAL`/`$EDITOR`.
 - For `pane: true` agents, `Ctrl+P` starts/reuses a pane, `Ctrl+O` attaches, and `Ctrl+X` stops it.
 - `Esc` clears search or closes.
 

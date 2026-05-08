@@ -494,7 +494,6 @@ type AgentBrowserAction =
 	| { type: "close" }
 	| { type: "editFrontmatter"; agentName: string }
 	| { type: "insert"; agentName: string }
-	| { type: "openEditor"; filePath: string }
 	| { type: "reload" }
 	| { type: "start"; agentName: string }
 	| { type: "stop"; agentName: string };
@@ -1617,7 +1616,6 @@ function createAgentsBrowserComponent(
 	done: (action: AgentBrowserAction) => void,
 	getActiveItems: () => SubagentDashboardItem[],
 	runtimeRoot: string,
-	openInEditor: (filePath: string | undefined) => void,
 ) {
 	const filtered = () => filterAgentsForBrowser(discovery.agents, ui.search, statuses);
 	const selectedAgent = () => filtered()[ui.selected];
@@ -1652,13 +1650,7 @@ function createAgentsBrowserComponent(
 		if (ui.historySelected >= ui.historyScroll + layout.listRows) ui.historyScroll = ui.historySelected - layout.listRows + 1;
 		ui.historyScroll = Math.max(0, Math.min(ui.historyScroll, Math.max(0, total - layout.listRows)));
 	};
-	const openSelectedSubtabFile = () => {
-		const record = historyRecords[ui.historySelected];
-		if (!record) return;
-		const entry = historyCache.get(record.taskId);
-		const subtab = entry?.items?.[ui.historySubtab];
-		if (subtab?.path) openInEditor(subtab.path);
-	};
+
 	const hasActiveTab = () => getActiveItems().length > 0;
 	const switchTab = (delta: number) => {
 		const next = tabNext(ui.tab, hasActiveTab(), delta);
@@ -1709,11 +1701,6 @@ function createAgentsBrowserComponent(
 		const agent = selectedAgent();
 		if (agent) done({ type: "editFrontmatter", agentName: agent.name });
 	};
-	const openAgentFileSelected = () => {
-		const agent = selectedAgent();
-		if (agent) openInEditor(agent.filePath);
-	};
-
 	function handleInput(data: string): void {
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 			if (ui.tab !== "active" && ui.search) { ui.search = ""; ui.selected = 0; ui.scroll = 0; requestRender(); return; }
@@ -1749,21 +1736,6 @@ function createAgentsBrowserComponent(
 			}
 			ui.pane = "inspector";
 			requestRender();
-			return;
-		}
-		if (matchesKey(data, "alt+e") || matchesKey(data, "ctrl+e")) {
-			if (ui.tab === "active" && ui.activeSelected > 0) {
-				const item = getActiveItems()[ui.activeSelected - 1];
-				if (item?.transcriptPath) {
-					openInEditor(item.transcriptPath);
-					return;
-				}
-			}
-			if (ui.tab === "history") {
-				openSelectedSubtabFile();
-				return;
-			}
-			openAgentFileSelected();
 			return;
 		}
 		// '-' and '=' are page-step alternates that work in every tab. Put
@@ -1873,7 +1845,6 @@ function createAgentsBrowserComponent(
 			if (matchesKey(data, "end")) { if (ui.pane === "inspector") ui.inspectorScroll = Number.MAX_SAFE_INTEGER; else { ui.historySelected = Math.max(0, historyRecords.length - 1); ui.historySubtab = 0; clampHistory(); loadHistoryRecord(historyRecords[ui.historySelected]); } requestRender(); return; }
 			if (matchesKey(data, "enter") || matchesKey(data, "return")) {
 				if (ui.pane === "list") { ui.pane = "inspector"; loadHistoryRecord(historyRecords[ui.historySelected]); requestRender(); return; }
-				openSelectedSubtabFile();
 				return;
 			}
 			return;
@@ -1925,7 +1896,7 @@ function createAgentsBrowserComponent(
 		if (ui.tab === "active" && !hasActive) ui.tab = ui.scope;
 		const tabLine = renderAgentBrowserTabs(ui.tab, hasActive, bodyWidth, theme);
 		if (ui.tab === "active") {
-			const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane · ")}${ansiYellow("alt+e")} ${theme.fg("dim", "edit")}`;
+			const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane")}`;
 			const lines = [tabLine, "", ...renderActiveTabBody(activeItems, runtimeRoot, ui, bodyWidth, theme, layout), agentDivider(bodyWidth, theme), ...wrapTextWithAnsi(footer, bodyWidth)];
 			return agentFrame(lines, safeWidth, theme, layout.innerRows, "Agents");
 		}
@@ -1933,12 +1904,12 @@ function createAgentsBrowserComponent(
 			clampHistory();
 			loadHistoryRecord(historyRecords[ui.historySelected]);
 			const arrowsLabel = ui.pane === "inspector" ? "sections · " : "pane · ";
-			const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", arrowsLabel)}${ansiYellow("alt+e")} ${theme.fg("dim", "edit")}`;
+			const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", arrowsLabel.replace(/ +$/, ""))}`;
 			const lines = [tabLine, "", ...renderHistoryTabBody(historyRecords, historyCache, ui, bodyWidth, theme, layout), agentDivider(bodyWidth, theme), ...wrapTextWithAnsi(footer, bodyWidth)];
 			return agentFrame(lines, safeWidth, theme, layout.innerRows, "Agents");
 		}
 		clamp();
-		const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane · ")}${ansiYellow("alt+m")} ${theme.fg("dim", "model/tools/color · ")}${ansiYellow("alt+e")} ${theme.fg("dim", "$EDITOR · ")}${ansiYellow("alt+p/o/x")} ${theme.fg("dim", "pane ops")}`;
+		const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane · ")}${ansiYellow("alt+m")} ${theme.fg("dim", "model/tools/color · ")}${ansiYellow("alt+p/o/x")} ${theme.fg("dim", "pane ops")}`;
 		const lines = [
 			tabLine,
 			"",
@@ -1991,36 +1962,24 @@ async function openAgentsBrowser(
 		}
 		const statuses = await loadAgentPaneStatuses(runtimeRoot);
 		const taskRegistry = await readTaskRegistry(runtimeRoot).catch(() => ({} as PaneTaskRegistry));
-		let capturedTui: TUI | undefined;
 		const action = await ctx.ui.custom<AgentBrowserAction>(
-			(tui: TUI, theme: Theme, _keybindings, done) => {
-				capturedTui = tui;
-				return createAgentsBrowserComponent(
-					discovery,
-					statuses,
-					taskRegistry,
-					ui,
-					theme,
-					() => tui.requestRender(),
-					() => agentBrowserLayout(tui.terminal.rows),
-					done,
-					getActiveItems,
-					runtimeRoot,
-					(filePath) => {
-						if (filePath) done({ type: "openEditor", filePath });
-					},
-				);
-			},
+			(tui: TUI, theme: Theme, _keybindings, done) => createAgentsBrowserComponent(
+				discovery,
+				statuses,
+				taskRegistry,
+				ui,
+				theme,
+				() => tui.requestRender(),
+				() => agentBrowserLayout(tui.terminal.rows),
+				done,
+				getActiveItems,
+				runtimeRoot,
+			),
 			{ overlay: true, overlayOptions: { anchor: "center", maxHeight: AGENTS_BROWSER_MAX_HEIGHT, width: AGENTS_BROWSER_WIDTH } },
 		);
 		initialAgentName = undefined;
 		if (!action || action.type === "close") return;
 		if (action.type === "reload") continue;
-		if (action.type === "openEditor") {
-			const message = openFileInExternalEditor(action.filePath, ctx.cwd, capturedTui);
-			ctx.ui.notify(message, "info");
-			continue;
-		}
 		const agent = discovery.agents.find((candidate) => candidate.name === action.agentName);
 		if (!agent) {
 			ctx.ui.notify(`Unknown agent: ${action.agentName}`, "error");
@@ -4735,30 +4694,6 @@ function renderTraceTabBar(items: TraceViewerItem[], selected: number, width: nu
 	return truncateToWidth(current, width, "");
 }
 
-function openFileInExternalEditor(filePath: string | undefined, cwd: string, tui?: TUI): string {
-	if (!filePath) return "No file path for selected view.";
-	const editorCmd = process.env.VISUAL || process.env.EDITOR;
-	if (!editorCmd) return "Set $VISUAL or $EDITOR to open trace files externally.";
-	if (process.env.TMUX) {
-		const shellCommand = `cd ${shellQuote(cwd)} && ${editorCmd} ${shellQuote(filePath)}`;
-		const proc = spawnSync("tmux", ["display-popup", "-E", "-w", "90%", "-h", "90%", shellCommand], { stdio: "inherit" });
-		tui?.requestRender(true);
-		return proc.status === 0 ? `Opened ${filePath}` : `Editor exited with status ${proc.status ?? "unknown"}: ${filePath}`;
-	}
-	const [editor, ...editorArgs] = editorCmd.split(/\s+/).filter((part) => part.length > 0);
-	if (!editor) return "Set $VISUAL or $EDITOR to open trace files externally.";
-	let status: number | null = null;
-	try {
-		tui?.stop();
-		const proc = spawnSync(editor, [...editorArgs, filePath], { cwd, stdio: "inherit", shell: process.platform === "win32" });
-		status = proc.status;
-	} finally {
-		tui?.start();
-		tui?.requestRender(true);
-	}
-	return status === 0 ? `Opened ${filePath}` : `Editor exited with status ${status ?? "unknown"}: ${filePath}`;
-}
-
 async function editAgentFrontmatterOverrides(ctx: ExtensionContext, agent: AgentConfig): Promise<string | undefined> {
 	const edited = await ctx.ui.editor(`Edit ${agent.name} frontmatter — model/tools/color`, editableAgentFrontmatterText(agent));
 	if (edited === undefined) return undefined;
@@ -4790,7 +4725,6 @@ async function openTraceViewer(ctx: ExtensionContext, title: string, items: Trac
 		return;
 	}
 	const state: TraceViewerState = { items: items.length ? items : [{ label: "Empty", text: "No traces found." }], selected: 0, scroll: 0, title };
-	let notice = "";
 	await ctx.ui.custom<void>((tui, theme, _kb, done) => ({
 		invalidate() {},
 		handleInput(data: string) {
@@ -4802,12 +4736,10 @@ async function openTraceViewer(ctx: ExtensionContext, title: string, items: Trac
 			if (matchesKey(data, "=") || matchesKey(data, "pagedown" as any) || matchesKey(data, "page_down" as any)) { state.scroll += tracePageRows; tui.requestRender(); return; }
 			if (matchesKey(data, "left")) { state.selected = (state.selected + state.items.length - 1) % state.items.length; state.scroll = 0; tui.requestRender(); return; }
 			if (matchesKey(data, "right") || matchesKey(data, "tab")) { state.selected = (state.selected + 1) % state.items.length; state.scroll = 0; tui.requestRender(); return; }
-			if (matchesKey(data, "enter") || matchesKey(data, "return")) { notice = openFileInExternalEditor(state.items[state.selected]?.path, ctx.cwd); tui.requestRender(); return; }
 		},
 		render(width: number): string[] {
 			const rows = Math.min(30, Math.max(12, Math.floor(tui.terminal.rows * 0.72)));
 			const lines = traceViewerLines(state, width, rows, theme);
-			if (notice) lines.splice(Math.max(1, lines.length - 2), 0, theme.fg(notice.startsWith("Opened") ? "success" : "warning", notice));
 			return lines.slice(0, rows);
 		},
 	}), { overlay: true, overlayOptions: { anchor: "center", width: TRACE_VIEWER_WIDTH, maxHeight: TRACE_VIEWER_MAX_HEIGHT } });
