@@ -266,7 +266,7 @@ Use this whenever § 4.3 or § 4.4 launches a pane through `open-terminal`.
    |-----------|---------------------|---------------|
    | Normal/complex implementation | Claude Code, strongest reasoning | `--harness claude --model 'opus[1m]' --effort max` |
    | OpenAI/Codex-preferred implementation | Codex, strongest reasoning | `--harness codex --model gpt-5.5 --effort xhigh` |
-   | Pi-native orchestration / Pi extension work | Pi, strongest OpenAI reasoning | `--harness pi --model openai/gpt-5.5 --effort xhigh` |
+   | Pi-native orchestration / Pi extension work | Pi, strongest OpenAI reasoning | `--harness pi --model openai-codex/gpt-5.5 --effort xhigh` |
    | OpenCode-preferred implementation | OpenCode, strong model + variant | `--harness opencode --model openai/gpt-5.5 --effort xhigh` |
    | User wants their configured defaults | Harness default | `--harness [HARNESS]` only |
 

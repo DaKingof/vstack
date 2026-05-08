@@ -87,7 +87,7 @@ reviewer-perf = { tools = ["read", "grep", "find", "ls", "bash"] }
 
 # Harness-specific frontmatter values win over top-level values.
 [agent-frontmatter.pi]
-researcher = { color = "purple", model = "openai/gpt-5.5:xhigh", tools = ["read", "grep", "find", "ls", "bash", "edit", "write", "web_research"] }
+researcher = { color = "purple", model = "openai-codex/gpt-5.5:xhigh", tools = ["read", "grep", "find", "ls", "bash", "edit", "write", "web_research"] }
 ```
 
 Claude Code and Pi emit `tools` into agent frontmatter; OpenCode uses permissions instead, and Cursor/Codex do not have the same per-agent tools frontmatter. For Pi agents installed through vstack, frontmatter edits belong in `[agent-frontmatter.pi]`, not in `.pi/agents/<name>.md`; generated agent files are overwritten by `vstack refresh`. The Pi `/agents` popup writes model/tools/color changes to this table for vstack-managed project agents and refreshes the project agent immediately.

@@ -1437,7 +1437,7 @@ fn agent_frontmatter_pi_heading() -> String {
     out.push_str("# vstack-managed project agents.\n");
     out.push_str("# Examples:\n");
     out.push_str("# rust = { color = \"orange\" }\n");
-    out.push_str("# planner = { model = \"openai/gpt-5.5:high\", tools = [\"read\", \"grep\", \"find\", \"ls\", \"bash\", \"edit\", \"write\", \"web_search\", \"web_research\"] }\n");
+    out.push_str("# planner = { model = \"openai-codex/gpt-5.5:high\", tools = [\"read\", \"grep\", \"find\", \"ls\", \"bash\", \"edit\", \"write\", \"web_search\", \"web_research\"] }\n");
     out
 }
 
@@ -1986,7 +1986,7 @@ rust = "Always run clippy before committing."
 researcher = { color = "purple", model = "generic-model" }
 
 [agent-frontmatter.pi]
-researcher = { model = "openai/gpt-5.5:xhigh", tools = "read, grep, web_research" }
+researcher = { model = "openai-codex/gpt-5.5:xhigh", tools = "read, grep, web_research" }
 
 [agent-frontmatter.claude]
 researcher = { model = "opus[1m]" }
@@ -1997,7 +1997,7 @@ researcher = { model = "opus[1m]" }
         let config = ProjectConfig::load(&dir);
         let pi = config.frontmatter_for("researcher", "pi");
         assert_eq!(pi.color.as_deref(), Some("purple"));
-        assert_eq!(pi.model.as_deref(), Some("openai/gpt-5.5:xhigh"));
+        assert_eq!(pi.model.as_deref(), Some("openai-codex/gpt-5.5:xhigh"));
         assert_eq!(
             pi.tools,
             Some(vec!["read".into(), "grep".into(), "web_research".into()])

@@ -130,7 +130,7 @@ Always create as a parent + sub-issue pair. Parent coordinates, child implements
 5. **Launch**: Ask user for harness/model/effort profile. Recommend one of:
    - Claude max: `--harness claude --model 'opus[1m]' --effort max`
    - Codex xhigh: `--harness codex --model gpt-5.5 --effort xhigh`
-   - Pi xhigh: `--harness pi --model openai/gpt-5.5 --effort xhigh`
+   - Pi xhigh: `--harness pi --model openai-codex/gpt-5.5 --effort xhigh`
    - OpenCode xhigh: `--harness opencode --model openai/gpt-5.5 --effort xhigh` (`open-terminal` maps effort to `--variant`)
    - Harness defaults: `--harness [HARNESS]`
    - `I'll launch it myself`

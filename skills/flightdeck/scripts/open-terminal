@@ -103,7 +103,7 @@ while [[ $# -gt 0 ]]; do
       echo "  claude:   --model 'opus[1m]' --effort max"
       echo "  codex:    --model gpt-5.5 --effort xhigh"
       echo "  opencode: --model openai/gpt-5.5 --effort xhigh"
-      echo "  pi:       --model openai/gpt-5.5 --effort xhigh"
+      echo "  pi:       --model openai-codex/gpt-5.5 --effort xhigh"
       echo ""
       echo "Environment:"
       echo "  GH_ISSUE_PATTERN          Regex for issue IDs (default: [A-Z]+-[0-9]+)"

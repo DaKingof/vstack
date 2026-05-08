@@ -158,7 +158,7 @@ reviewer-perf = { tools = ["read", "grep", "find", "ls", "bash"] }
 # Harness-specific generated-frontmatter overrides win over top-level entries.
 # Use exact model/tool ids for the target harness when formats differ.
 [agent-frontmatter.pi]
-researcher = { model = "openai/gpt-5.5:xhigh", tools = ["read", "grep", "find", "ls", "bash", "edit", "write", "web_research"] }
+researcher = { model = "openai-codex/gpt-5.5:xhigh", tools = ["read", "grep", "find", "ls", "bash", "edit", "write", "web_research"] }
 
 # Project instructions prepended to a skill's SKILL.md.
 [skill-instructions]
@@ -169,9 +169,9 @@ trading-design = "Dark theme, green/red accents."
 
 | Canonical | Claude Code | OpenCode | Codex | Pi |
 |-----------|-------------|----------|-------|-----|
-| `opus` | `opus[1m]` | `openai/gpt-5.5` | `gpt-5.5` (xhigh) | `openai/gpt-5.5:xhigh` |
-| `sonnet` | `sonnet` | `openai/gpt-5.5` | `gpt-5.5` (high) | `openai/gpt-5.5:high` |
-| `haiku` | `haiku` | `openai/gpt-5.5` | `gpt-5.5` (medium) | `openai/gpt-5.5:medium` |
+| `opus` | `opus[1m]` | `openai/gpt-5.5` | `gpt-5.5` (xhigh) | `openai-codex/gpt-5.5:xhigh` |
+| `sonnet` | `sonnet` | `openai/gpt-5.5` | `gpt-5.5` (high) | `openai-codex/gpt-5.5:high` |
+| `haiku` | `haiku` | `openai/gpt-5.5` | `gpt-5.5` (medium) | `openai-codex/gpt-5.5:medium` |
 
 ## Per-Harness Tool Overrides
 

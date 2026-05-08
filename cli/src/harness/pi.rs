@@ -96,9 +96,9 @@ pub fn generate_agent(
 /// the model id. Users can still override per-agent in source frontmatter.
 pub fn pi_model_for(model: &str) -> String {
     match model.to_lowercase().as_str() {
-        "opus" => "openai/gpt-5.5:xhigh".into(),
-        "sonnet" => "openai/gpt-5.5:high".into(),
-        "haiku" => "openai/gpt-5.5:medium".into(),
+        "opus" => "openai-codex/gpt-5.5:xhigh".into(),
+        "sonnet" => "openai-codex/gpt-5.5:high".into(),
+        "haiku" => "openai-codex/gpt-5.5:medium".into(),
         other => other.into(),
     }
 }
@@ -182,9 +182,9 @@ mod tests {
 
     #[test]
     fn pi_model_mapping() {
-        assert_eq!(pi_model_for("opus"), "openai/gpt-5.5:xhigh");
-        assert_eq!(pi_model_for("sonnet"), "openai/gpt-5.5:high");
-        assert_eq!(pi_model_for("haiku"), "openai/gpt-5.5:medium");
+        assert_eq!(pi_model_for("opus"), "openai-codex/gpt-5.5:xhigh");
+        assert_eq!(pi_model_for("sonnet"), "openai-codex/gpt-5.5:high");
+        assert_eq!(pi_model_for("haiku"), "openai-codex/gpt-5.5:medium");
         assert_eq!(pi_model_for("custom-id"), "custom-id");
     }
 
@@ -242,7 +242,7 @@ mod tests {
 
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("name: rust"));
-        assert!(content.contains("model: openai/gpt-5.5:xhigh"));
+        assert!(content.contains("model: openai-codex/gpt-5.5:xhigh"));
         assert!(content.contains("color: magenta"));
         assert!(content.contains("tools: read, grep, find, ls, bash, edit, write"));
         assert!(content.contains("web_search"));
@@ -270,7 +270,7 @@ mod tests {
         let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
 
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("model: openai/gpt-5.5:high"));
+        assert!(content.contains("model: openai-codex/gpt-5.5:high"));
         assert!(content.contains("tools: read, grep, find, ls, bash"));
         assert!(content.contains("web_search"));
         assert!(content.contains("web_research"));
