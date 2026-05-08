@@ -50,6 +50,7 @@ Restart Pi after installation.
 | `/context` | Show inline context-window usage, model/context limit, and estimated category breakdowns. |
 | `/search [query]` | Open previous-session search, optionally prefilled with a query. |
 | `/search:refresh` | Refresh the session search cache. |
+| `/search:resume-pending <id>` | Internal recovery command inserted into the editor when a resume/fork action must be confirmed by pressing Enter. |
 | `/handoff <goal>` | Draft a focused handoff prompt for a new session. |
 
 `/qol` and `/search` arguments support autocomplete.

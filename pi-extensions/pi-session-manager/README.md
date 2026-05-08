@@ -38,6 +38,7 @@ No SQLite, FTS, or native runtime dependencies are used; Pi's `SessionManager.li
 | Command | Action |
 | --- | --- |
 | `/sessions` | Open the manager using the configured default scope; switch Current/All with the tabs. |
+| `/sessions:resume-pending <id>` | Internal recovery command inserted into the editor when a resume action must be confirmed by pressing Enter. |
 
 ## Keys
 
