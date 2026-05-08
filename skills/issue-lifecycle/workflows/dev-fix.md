@@ -91,7 +91,7 @@ If validation failures exist, append: `[validate: FAILING_CHECK]`
 **Action**: Update the relevant documentation. Three options depending on what you learned:
 
 - **Architecture docs** → Update if patterns, APIs, or documented behavior changed.
-- **Project config** → Add to `./vstack.toml` (`[skill-instructions]` for skill-level context, `[agent-additional-instructions]` for persistent agent rules, `[agent-launch-instructions]` for execute-on-launch directives). Run `vstack refresh` to apply.
+- **Project config** → Add to `./vstack.toml` (`[skill-instructions]` for skill-level context, `[agent-additional-instructions]` for persistent agent rules, `[agent-launch-instructions]` for launch/startup instructions). Run `vstack refresh` to apply.
 
 Criteria: Would this save 5+ minutes in a future session? If yes, update. One surgical addition per lesson. No verbose examples.
 

@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Project-level agent customization config.
@@ -155,6 +155,12 @@ impl ProjectConfig {
             .get(agent_name)
             .map(|s| s.as_str())
             .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                self.agent_frontmatter
+                    .get(agent_name)
+                    .and_then(|entry| entry.color.as_deref())
+                    .filter(|s| !s.trim().is_empty())
+            })
     }
 
     /// Get global + harness-specific frontmatter overrides for an agent.
@@ -270,7 +276,7 @@ impl ProjectConfig {
 
         if needs_color {
             if let Some(ref color) = extracted.color {
-                out = upsert_agent_value_in_section(&out, "[agent-colors]", agent_name, color);
+                out = upsert_agent_frontmatter_field(&out, agent_name, "color", color);
             }
         }
 
@@ -296,6 +302,8 @@ impl ProjectConfig {
             }
         }
 
+        out = dedupe_agent_frontmatter_sections(&out);
+
         if out != existing {
             let _ = std::fs::write(&path, out);
         }
@@ -317,18 +325,7 @@ fn upsert_agent_value_in_section(
     agent_name: &str,
     text: &str,
 ) -> String {
-    // Escape ALL chars that would produce invalid TOML inside a single
-    // double-quoted string. Notably `\n` MUST be escaped — otherwise a
-    // multi-line value silently produces a malformed file that subsequent
-    // parses treat as empty, causing this function to be re-invoked and
-    // append fresh duplicates of the body lines on every install.
-    let escaped = text
-        .replace('\\', "\\\\")
-        .replace('\r', "\\r")
-        .replace('\n', "\\n")
-        .replace('\t', "\\t")
-        .replace('"', "\\\"");
-    let new_line = format!("{} = \"{}\"", agent_name, escaped);
+    let new_line = format!("{} = {}", agent_name, format_toml_string_value(text));
     let key_prefix = format!("{} =", agent_name);
     let key_prefix_tight = format!("{}=", agent_name);
 
@@ -338,13 +335,16 @@ fn upsert_agent_value_in_section(
     let mut wrote_replacement = false;
     let mut found_any = false;
 
-    for line in &lines {
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
         let trimmed = line.trim();
 
         if trimmed.starts_with('[') && !trimmed.starts_with("# [") {
             // Section transition
             in_section = trimmed == section_header;
             result.push(line.to_string());
+            i += 1;
             continue;
         }
 
@@ -357,10 +357,23 @@ fn upsert_agent_value_in_section(
                 result.push(new_line.clone());
                 wrote_replacement = true;
             }
+            if starts_toml_multiline_value(trimmed) {
+                i += 1;
+                while i < lines.len() {
+                    if closes_toml_multiline_value(lines[i].trim()) {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            i += 1;
             continue;
         }
 
         result.push(line.to_string());
+        i += 1;
     }
 
     let mut out = result.join("\n");
@@ -372,6 +385,227 @@ fn upsert_agent_value_in_section(
         // Section didn't have an entry yet — append one.
         let entry = format!("{}\n", new_line);
         out = insert_entries_into_section(&out, section_header, &entry);
+    }
+    out
+}
+
+fn format_toml_string_value(text: &str) -> String {
+    if text.contains('\n') {
+        let escaped = text.replace('\\', "\\\\").replace("\"\"\"", "\\\"\\\"\\\"");
+        format!("\"\"\"\n{}\"\"\"", escaped.trim_end_matches('\n'))
+    } else {
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+            .replace('"', "\\\"");
+        format!("\"{}\"", escaped)
+    }
+}
+
+fn starts_toml_multiline_value(trimmed_line: &str) -> bool {
+    let Some((_, value)) = trimmed_line.split_once('=') else {
+        return false;
+    };
+    let value = value.trim_start();
+    if let Some(rest) = value.strip_prefix("\"\"\"") {
+        return !rest.contains("\"\"\"");
+    }
+    if let Some(rest) = value.strip_prefix("'''") {
+        return !rest.contains("'''");
+    }
+    false
+}
+
+fn closes_toml_multiline_value(trimmed_line: &str) -> bool {
+    trimmed_line.ends_with("\"\"\"") || trimmed_line.ends_with("'''")
+}
+
+fn toml_inline_string(value: &str) -> String {
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('\r', "\\r")
+            .replace('\n', "\\n")
+            .replace('\t', "\\t")
+            .replace('"', "\\\"")
+    )
+}
+
+fn split_top_level_commas(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut bracket_depth = 0usize;
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            current.push(ch);
+            escaped = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            current.push(ch);
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            current.push(ch);
+            continue;
+        }
+        if ch == '[' {
+            bracket_depth += 1;
+        } else if ch == ']' {
+            bracket_depth = bracket_depth.saturating_sub(1);
+        }
+        if ch == ',' && bracket_depth == 0 {
+            if !current.trim().is_empty() {
+                out.push(current.trim().to_string());
+            }
+            current.clear();
+            continue;
+        }
+        current.push(ch);
+    }
+    if !current.trim().is_empty() {
+        out.push(current.trim().to_string());
+    }
+    out
+}
+
+fn parse_inline_table_fields(value: &str) -> Vec<(String, String)> {
+    let trimmed = value
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .trim();
+    split_top_level_commas(trimmed)
+        .into_iter()
+        .filter_map(|part| {
+            let (key, value) = part.split_once('=')?;
+            Some((key.trim().to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+fn render_inline_table_fields(fields: &[(String, String)]) -> String {
+    let preferred = [
+        "color",
+        "model",
+        "tools",
+        "pane",
+        "mode",
+        "sandbox-mode",
+        "model-reasoning-effort",
+    ];
+    let mut ordered: Vec<(String, String)> = Vec::new();
+    for key in preferred {
+        if let Some((k, v)) = fields.iter().find(|(k, _)| k == key) {
+            ordered.push((k.clone(), v.clone()));
+        }
+    }
+    let mut rest: Vec<(String, String)> = fields
+        .iter()
+        .filter(|(k, _)| !preferred.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    rest.sort_by(|a, b| a.0.cmp(&b.0));
+    ordered.extend(rest);
+    format!(
+        "{{ {} }}",
+        ordered
+            .into_iter()
+            .map(|(key, value)| format!("{} = {}", key, value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn upsert_agent_frontmatter_field(
+    content: &str,
+    agent_name: &str,
+    field: &str,
+    value: &str,
+) -> String {
+    let field_value = toml_inline_string(value);
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result: Vec<String> = Vec::with_capacity(lines.len() + 4);
+    let mut i = 0;
+    let mut found_section = false;
+    let mut inserted_or_updated = false;
+    let key_prefix = format!("{} =", agent_name);
+    let key_prefix_tight = format!("{}=", agent_name);
+
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim();
+        result.push(line.to_string());
+
+        if trimmed == "[agent-frontmatter]" {
+            found_section = true;
+            i += 1;
+            while i < lines.len() {
+                let next = lines[i];
+                let next_trimmed = next.trim();
+                if next_trimmed.starts_with('[') && !next_trimmed.starts_with("# [") {
+                    break;
+                }
+                if next_trimmed.starts_with(&key_prefix)
+                    || next_trimmed.starts_with(&key_prefix_tight)
+                {
+                    let existing_value = next.split_once('=').map(|(_, v)| v).unwrap_or("{}");
+                    let mut fields = parse_inline_table_fields(existing_value);
+                    if let Some((_, existing)) = fields.iter_mut().find(|(k, _)| k == field) {
+                        *existing = field_value.clone();
+                    } else {
+                        fields.push((field.to_string(), field_value.clone()));
+                    }
+                    result.push(format!(
+                        "{} = {}",
+                        agent_name,
+                        render_inline_table_fields(&fields)
+                    ));
+                    inserted_or_updated = true;
+                    i += 1;
+                    continue;
+                }
+                result.push(next.to_string());
+                i += 1;
+            }
+            if !inserted_or_updated {
+                result.push(format!(
+                    "{} = {{ {} = {} }}",
+                    agent_name, field, field_value
+                ));
+                inserted_or_updated = true;
+            }
+            continue;
+        }
+        i += 1;
+    }
+
+    if !found_section {
+        result.push(String::new());
+        result.push("[agent-frontmatter]".to_string());
+        result.push(format!(
+            "{} = {{ {} = {} }}",
+            agent_name, field, field_value
+        ));
+    }
+
+    let mut out = result.join("\n");
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
     }
     out
 }
@@ -413,6 +647,7 @@ pub fn merge_upstream_agent_skills(project_root: &Path, updates: &HashMap<String
         out = replace_toml_array_value(&out, "[agent-skills]", agent, &new_value);
     }
 
+    out = ensure_value_section_entry_spacing(&out);
     if out != content {
         let _ = std::fs::write(&path, out);
     }
@@ -451,6 +686,7 @@ pub fn merge_upstream_agent_skills_optional(
         out = replace_toml_array_value(&out, "[agent-skills-optional]", agent, &v);
     }
 
+    out = ensure_value_section_entry_spacing(&out);
     if out != content {
         let _ = std::fs::write(&path, out);
     }
@@ -560,7 +796,11 @@ pub fn write_agent_skills(project_root: &Path, agent_skill_map: &HashMap<String,
     }
 
     // Insert the new entries into the [agent-skills] section
-    let out = insert_entries_into_section(&existing, "[agent-skills]", &new_entries);
+    let out = ensure_value_section_entry_spacing(&insert_entries_into_section(
+        &existing,
+        "[agent-skills]",
+        &new_entries,
+    ));
     if out != existing {
         let _ = std::fs::write(&path, out);
     }
@@ -576,12 +816,7 @@ pub fn write_agent_colors(project_root: &Path, agent_color_map: &HashMap<String,
     let parsed = ProjectConfig::load(project_root);
 
     let mut content = existing.clone();
-    if !content.contains("[agent-frontmatter]") {
-        content.push_str("\n\n# ── Agent Frontmatter ────────────────────────────────\n");
-        content.push_str("# Optional generated-frontmatter overrides.\n");
-        content.push_str("#\n");
-        content.push_str("[agent-frontmatter]\n");
-    }
+    content = ensure_agent_frontmatter_scaffold(&content);
 
     let mut agents: Vec<&String> = agent_color_map.keys().collect();
     agents.sort();
@@ -608,13 +843,16 @@ pub fn write_agent_colors(project_root: &Path, agent_color_map: &HashMap<String,
     }
 
     if new_entries.is_empty() {
+        content = dedupe_agent_frontmatter_sections(&content);
         if content != existing {
             let _ = std::fs::write(&path, content);
         }
         return;
     }
 
-    let out = insert_entries_into_section(&content, "[agent-frontmatter]", &new_entries);
+    let out = ensure_value_section_entry_spacing(&dedupe_agent_frontmatter_sections(
+        &insert_entries_into_section(&content, "[agent-frontmatter]", &new_entries),
+    ));
     if out != existing {
         let _ = std::fs::write(&path, out);
     }
@@ -672,7 +910,11 @@ pub fn write_agent_skills_optional(
         return;
     }
 
-    let out = insert_entries_into_section(&content, "[agent-skills-optional]", &new_entries);
+    let out = ensure_value_section_entry_spacing(&insert_entries_into_section(
+        &content,
+        "[agent-skills-optional]",
+        &new_entries,
+    ));
     if out != existing {
         let _ = std::fs::write(&path, out);
     }
@@ -689,10 +931,635 @@ pub fn ensure_project_config(project_root: &Path, agents: &[String], skills: &[S
 
     if path.exists() {
         migrate_section_names(&path);
+        repair_project_config_structure(&path);
         update_project_config(&path, agents, skills);
     } else {
         create_project_config(&path, agents, skills);
     }
+}
+
+fn project_config_header() -> String {
+    let mut out = String::new();
+    out.push_str("# ─────────────────────────────────────────────────────\n");
+    out.push_str("# vstack.toml — project-level agent customization\n");
+    out.push_str("#\n");
+    out.push_str("# Customize agent behavior for this project. These\n");
+    out.push_str("# settings are merged into generated agent files on\n");
+    out.push_str("# every install and refresh.\n");
+    out.push_str("#\n");
+    out.push_str("# Skills live in [agent-skills]. Generated frontmatter\n");
+    out.push_str("# overrides like model, tools, color, and pane live in\n");
+    out.push_str("# [agent-frontmatter] or [agent-frontmatter.pi].\n");
+    out.push_str("#\n");
+    out.push_str("# After editing, run:  vstack refresh\n");
+    out.push_str("# ─────────────────────────────────────────────────────\n");
+    out
+}
+
+fn repair_project_config_structure(path: &Path) {
+    let Ok(existing) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let mut out = existing.clone();
+    out = normalize_attached_section_headers(&out);
+    out = repair_instruction_multiline_values(&out);
+    out = ensure_value_section_entry_spacing(&out);
+    out = migrate_agent_colors_to_frontmatter(&out);
+    out = dedupe_agent_frontmatter_sections(&out);
+    out = sync_project_config_header(&out);
+    out = ensure_launch_instructions_heading(&out);
+    out = ensure_agent_frontmatter_scaffold(&out);
+    if out != existing {
+        let _ = std::fs::write(path, out);
+    }
+}
+
+fn sync_project_config_header(content: &str) -> String {
+    let header = project_config_header();
+    let marker_start = content
+        .find("# ── Launch Instructions")
+        .or_else(|| content.find("# ── Execute on Launch"))
+        .or_else(|| section_start(content, "[agent-launch-instructions]"));
+    let Some(marker_start) = marker_start else {
+        return content.to_string();
+    };
+    if !content.trim_start().starts_with("# ─") {
+        return content.to_string();
+    }
+    format!("{}\n\n\n{}", header.trim_end(), &content[marker_start..])
+}
+
+fn launch_instructions_heading() -> String {
+    let mut out = String::new();
+    out.push_str("# ── Launch Instructions ───────────────────────────────\n");
+    out.push_str("# Adds a \"## Launch Instructions\" section near the top\n");
+    out.push_str("# of each agent file. Use this for startup tasks, required\n");
+    out.push_str("# reading, or project-specific operating notes.\n");
+    out.push_str("# Examples:\n");
+    out.push_str("# rust = \"Read docs/architecture.md before coding.\"\n");
+    out.push_str("# iced = \"\"\"\n");
+    out.push_str("# Read docs/ui.md.\n");
+    out.push_str("# Update docs when UI architecture changes.\n");
+    out.push_str("# \"\"\"\n");
+    out.push_str("#\n");
+    out
+}
+
+fn ensure_launch_instructions_heading(content: &str) -> String {
+    let Some(section_at) = section_start(content, "[agent-launch-instructions]") else {
+        return content.to_string();
+    };
+    let prefix = &content[..section_at];
+    let heading_at = prefix
+        .rfind("# ── Launch Instructions")
+        .or_else(|| prefix.rfind("# ── Execute on Launch"));
+    let mut out = String::new();
+    if let Some(heading_at) = heading_at {
+        out.push_str(content[..heading_at].trim_end());
+    } else {
+        out.push_str(content[..section_at].trim_end());
+    }
+    out.push_str("\n\n\n");
+    out.push_str(&launch_instructions_heading());
+    out.push_str(content[section_at..].trim_start_matches('\n'));
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn normalize_attached_section_headers(content: &str) -> String {
+    const HEADERS: &[&str] = &[
+        "[agent-launch-instructions]",
+        "[agent-additional-instructions]",
+        "[skill-instructions]",
+        "[agent-skills]",
+        "[agent-frontmatter]",
+        "[agent-frontmatter.pi]",
+        "[agent-skills-optional]",
+        "[agent-colors]",
+        "[[custom-hooks]]",
+    ];
+
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let mut pending = line.to_string();
+        loop {
+            let found = HEADERS
+                .iter()
+                .filter_map(|header| pending.find(header).map(|idx| (idx, *header)))
+                .filter(|(idx, _)| *idx > 0)
+                .min_by_key(|(idx, _)| *idx);
+            let Some((idx, header)) = found else {
+                out.push(pending);
+                break;
+            };
+            let prefix = pending[..idx].trim_end().to_string();
+            // Leave pure commented placeholder examples like `# [agent-frontmatter.pi]` alone.
+            if prefix.trim() == "#" {
+                out.push(pending);
+                break;
+            }
+            if !prefix.is_empty() {
+                out.push(prefix);
+            }
+            out.push(header.to_string());
+            pending = pending[idx + header.len()..].trim_start().to_string();
+            if pending.is_empty() {
+                break;
+            }
+        }
+    }
+    let mut rendered = out.join("\n");
+    if content.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered
+}
+
+fn repair_instruction_multiline_values(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out = Vec::with_capacity(lines.len());
+    let mut active_section = "";
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed.starts_with('[') && !trimmed.starts_with("# [") {
+            active_section = trimmed;
+            out.push(lines[i].to_string());
+            i += 1;
+            continue;
+        }
+
+        let is_instruction_section = active_section == "[agent-launch-instructions]"
+            || active_section == "[agent-additional-instructions]";
+        if is_instruction_section {
+            if let Some((key, raw_value)) = trimmed.split_once('=') {
+                let value = raw_value.trim();
+                if starts_toml_multiline_value(trimmed) {
+                    let mut block_lines = vec![lines[i].to_string()];
+                    i += 1;
+                    while i < lines.len() {
+                        block_lines.push(lines[i].to_string());
+                        let just_pushed = lines[i].trim();
+                        i += 1;
+                        if closes_toml_multiline_value(just_pushed) {
+                            break;
+                        }
+                    }
+                    let block = block_lines.join("\n");
+                    let value = block.split_once('=').map(|(_, v)| v.trim()).unwrap_or("");
+                    let mini = format!("value = {}", value);
+                    if let Ok(parsed) = toml::from_str::<toml::Value>(&mini) {
+                        if let Some(text) = parsed.get("value").and_then(|value| value.as_str()) {
+                            out.push(format!(
+                                "{} = {}",
+                                key.trim(),
+                                format_toml_string_value(text)
+                            ));
+                        } else {
+                            out.extend(block_lines);
+                        }
+                    } else {
+                        out.extend(block_lines);
+                    }
+                    i = skip_orphan_duplicate_multiline_body(&lines, i);
+                    continue;
+                }
+                if value.starts_with('"') && value.ends_with('"') && value.contains("\\n") {
+                    let mini = format!("value = {}", value);
+                    if let Ok(parsed) = toml::from_str::<toml::Value>(&mini) {
+                        if let Some(text) = parsed.get("value").and_then(|value| value.as_str()) {
+                            out.push(format!(
+                                "{} = {}",
+                                key.trim(),
+                                format_toml_string_value(text)
+                            ));
+                            i += 1;
+                            i = skip_orphan_duplicate_multiline_body(&lines, i);
+                            continue;
+                        }
+                    }
+                }
+                out.push(lines[i].to_string());
+                i += 1;
+                i = skip_orphan_duplicate_multiline_body(&lines, i);
+                continue;
+            }
+        }
+
+        out.push(lines[i].to_string());
+        i += 1;
+    }
+    let mut rendered = out.join("\n");
+    if content.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered
+}
+
+fn ensure_value_section_entry_spacing(content: &str) -> String {
+    const SPACED_SECTIONS: &[&str] = &[
+        "[agent-launch-instructions]",
+        "[agent-additional-instructions]",
+        "[skill-instructions]",
+        "[agent-skills]",
+        "[agent-skills-optional]",
+        "[agent-frontmatter]",
+        "[agent-frontmatter.pi]",
+    ];
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out = Vec::with_capacity(lines.len());
+    let mut active_section = "";
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed.starts_with('[') && !trimmed.starts_with("# [") {
+            active_section = trimmed;
+            out.push(lines[i].to_string());
+            i += 1;
+            continue;
+        }
+
+        if SPACED_SECTIONS.contains(&active_section) && looks_like_toml_key_line(trimmed) {
+            out.push(lines[i].to_string());
+            let multiline = starts_toml_multiline_value(trimmed);
+            let array = starts_multiline_array_value(trimmed);
+            i += 1;
+            if multiline {
+                while i < lines.len() {
+                    out.push(lines[i].to_string());
+                    let just_pushed = lines[i].trim();
+                    i += 1;
+                    if closes_toml_multiline_value(just_pushed) {
+                        break;
+                    }
+                }
+            } else if array {
+                while i < lines.len() {
+                    out.push(lines[i].to_string());
+                    let just_pushed = lines[i].trim();
+                    i += 1;
+                    if closes_multiline_array_value(just_pushed) {
+                        break;
+                    }
+                }
+            }
+            if i < lines.len() && looks_like_toml_key_line(lines[i].trim()) {
+                out.push(String::new());
+            }
+            continue;
+        }
+
+        out.push(lines[i].to_string());
+        i += 1;
+    }
+
+    let mut rendered = out.join("\n");
+    if content.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered
+}
+
+fn starts_multiline_array_value(trimmed_line: &str) -> bool {
+    let Some((_, value)) = trimmed_line.split_once('=') else {
+        return false;
+    };
+    let value = value.trim_start();
+    value.starts_with('[') && !value.contains(']')
+}
+
+fn closes_multiline_array_value(trimmed_line: &str) -> bool {
+    trimmed_line.ends_with(']')
+}
+
+fn dedupe_agent_frontmatter_sections(content: &str) -> String {
+    let mut out = Vec::new();
+    let mut active_section = "";
+    let mut seen_keys: HashSet<String> = HashSet::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && !trimmed.starts_with("# [") {
+            active_section = trimmed;
+            seen_keys.clear();
+            out.push(line.to_string());
+            continue;
+        }
+
+        if (active_section == "[agent-frontmatter]" || active_section == "[agent-frontmatter.pi]")
+            && looks_like_toml_key_line(trimmed)
+        {
+            if let Some((key, _)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                if !seen_keys.insert(key) {
+                    continue;
+                }
+            }
+        }
+
+        out.push(line.to_string());
+    }
+
+    let mut rendered = out.join("\n");
+    if content.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered
+}
+
+fn skip_orphan_duplicate_multiline_body(lines: &[&str], i: usize) -> usize {
+    if i >= lines.len() || lines[i].trim().is_empty() || lines[i].trim().starts_with('[') {
+        return i;
+    }
+
+    let mut j = i;
+    while j < lines.len() {
+        let trimmed = lines[j].trim();
+        if j > i && trimmed.starts_with('[') && !trimmed.starts_with("# [") {
+            return i;
+        }
+        if j > i && looks_like_toml_key_line(trimmed) {
+            return i;
+        }
+        if closes_toml_multiline_value(trimmed) {
+            return j + 1;
+        }
+        j += 1;
+    }
+    i
+}
+
+fn looks_like_toml_key_line(trimmed: &str) -> bool {
+    let Some((key, _)) = trimmed.split_once('=') else {
+        return false;
+    };
+    let key = key.trim();
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '"')
+}
+
+fn migrate_agent_colors_to_frontmatter(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out = Vec::with_capacity(lines.len());
+    let mut colors: Vec<(String, String)> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed == "[agent-colors]" {
+            i += 1;
+            while i < lines.len() {
+                let next = lines[i].trim();
+                if next.starts_with('[') && !next.starts_with("# [") {
+                    break;
+                }
+                if let Some((name, raw_value)) = next.split_once('=') {
+                    let value = raw_value.trim().trim_matches('"').trim().to_string();
+                    if !name.trim().is_empty() && !value.is_empty() {
+                        colors.push((name.trim().to_string(), value));
+                    }
+                }
+                i += 1;
+            }
+            continue;
+        }
+        out.push(lines[i].to_string());
+        i += 1;
+    }
+
+    let mut rendered = out.join("\n");
+    if content.ends_with('\n') && !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+
+    for (agent, color) in colors {
+        if !agent_frontmatter_has_field(&rendered, &agent, "color") {
+            rendered = upsert_agent_frontmatter_field(&rendered, &agent, "color", &color);
+        }
+    }
+    rendered
+}
+
+fn agent_frontmatter_has_field(content: &str, agent: &str, field: &str) -> bool {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut in_section = false;
+    let key_prefix = format!("{} =", agent);
+    let key_prefix_tight = format!("{}=", agent);
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && !trimmed.starts_with("# [") {
+            in_section = trimmed == "[agent-frontmatter]";
+            continue;
+        }
+        if in_section
+            && (trimmed.starts_with(&key_prefix) || trimmed.starts_with(&key_prefix_tight))
+        {
+            let existing_value = trimmed.split_once('=').map(|(_, v)| v).unwrap_or("{}");
+            return parse_inline_table_fields(existing_value)
+                .iter()
+                .any(|(key, value)| key == field && !value.trim_matches('"').trim().is_empty());
+        }
+    }
+    false
+}
+
+fn agent_frontmatter_scaffold() -> String {
+    let mut out = String::new();
+    out.push_str(&agent_frontmatter_heading());
+    out.push_str("[agent-frontmatter]\n\n");
+    out.push_str(&agent_frontmatter_pi_heading());
+    out.push_str("[agent-frontmatter.pi]\n");
+    out
+}
+
+fn agent_frontmatter_heading() -> String {
+    let mut out = String::new();
+    out.push_str("# ── Agent Frontmatter ────────────────────────────────\n");
+    out.push_str("# Optional generated-frontmatter overrides. Top-level entries\n");
+    out.push_str("# apply to every harness; harness-specific tables win. Prefer\n");
+    out.push_str("# harness-specific model values when model id formats differ.\n");
+    out.push_str("# Supported fields: color, model, tools, pane, mode,\n");
+    out.push_str("# sandbox-mode, model-reasoning-effort. Unknown fields ignored.\n");
+    out.push_str("# Examples:\n");
+    out.push_str("# rust = { color = \"green\" }\n");
+    out.push_str("# planner = { model = \"openai/gpt-5.5\", color = \"blue\" }\n");
+    out.push_str(
+        "# reviewer-perf = { tools = [\"read\", \"grep\", \"find\", \"ls\", \"bash\"] }\n",
+    );
+    out.push_str("#\n");
+    out
+}
+
+fn ensure_agent_frontmatter_heading(content: &str) -> String {
+    let Some(insert_at) = section_start(content, "[agent-frontmatter]") else {
+        return content.to_string();
+    };
+    if content.contains("# ── Agent Frontmatter") {
+        return content.to_string();
+    }
+    let mut out = String::new();
+    out.push_str(content[..insert_at].trim_end());
+    out.push_str("\n\n");
+    out.push_str(&agent_frontmatter_heading());
+    out.push_str(content[insert_at..].trim_start_matches('\n'));
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn sync_agent_frontmatter_heading(content: &str) -> String {
+    let Some(section_at) = section_start(content, "[agent-frontmatter]") else {
+        return content.to_string();
+    };
+    let Some(heading_at) = content[..section_at].rfind("# ── Agent Frontmatter") else {
+        return content.to_string();
+    };
+    let mut out = String::new();
+    out.push_str(content[..heading_at].trim_end());
+    out.push_str("\n\n");
+    out.push_str(&agent_frontmatter_heading());
+    out.push_str(content[section_at..].trim_start_matches('\n'));
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn agent_frontmatter_pi_heading() -> String {
+    let mut out = String::new();
+    out.push_str("# Pi-specific model/tool/color overrides. This is where the\n");
+    out.push_str("# Pi /agents popup writes model, tools, and color changes for\n");
+    out.push_str("# vstack-managed project agents.\n");
+    out.push_str("# Examples:\n");
+    out.push_str("# rust = { color = \"orange\" }\n");
+    out.push_str("# planner = { model = \"openai/gpt-5.5:high\", tools = [\"read\", \"grep\", \"find\", \"ls\", \"bash\", \"edit\", \"write\", \"web_search\", \"web_research\"] }\n");
+    out
+}
+
+fn ensure_agent_frontmatter_pi_heading(content: &str) -> String {
+    let Some(insert_at) = section_start(content, "[agent-frontmatter.pi]") else {
+        return content.to_string();
+    };
+    if content.contains("# Pi-specific model/tool/color overrides") {
+        return content.to_string();
+    }
+    let mut out = String::new();
+    out.push_str(content[..insert_at].trim_end());
+    out.push_str("\n\n");
+    out.push_str(&agent_frontmatter_pi_heading());
+    out.push_str(content[insert_at..].trim_start_matches('\n'));
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn sync_agent_frontmatter_pi_heading(content: &str) -> String {
+    let Some(section_at) = section_start(content, "[agent-frontmatter.pi]") else {
+        return content.to_string();
+    };
+    let Some(heading_at) = content[..section_at].rfind("# Pi-specific model/tool/color overrides")
+    else {
+        return content.to_string();
+    };
+    let mut out = String::new();
+    out.push_str(content[..heading_at].trim_end());
+    out.push_str("\n\n");
+    out.push_str(&agent_frontmatter_pi_heading());
+    out.push_str(content[section_at..].trim_start_matches('\n'));
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn section_start(content: &str, section_header: &str) -> Option<usize> {
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && !trimmed.starts_with("# [") && trimmed == section_header {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
+}
+
+fn section_end(content: &str, section_header: &str) -> Option<usize> {
+    let mut offset = 0usize;
+    let mut in_section = false;
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && !trimmed.starts_with("# [") {
+            if in_section {
+                return Some(offset);
+            }
+            in_section = trimmed == section_header;
+        }
+        offset += line.len();
+    }
+    if in_section {
+        Some(content.len())
+    } else {
+        None
+    }
+}
+
+fn ensure_agent_frontmatter_scaffold(content: &str) -> String {
+    let normalized = ensure_agent_frontmatter_heading(content);
+    let normalized = sync_agent_frontmatter_heading(&normalized);
+    let normalized = ensure_agent_frontmatter_pi_heading(&normalized);
+    let normalized = sync_agent_frontmatter_pi_heading(&normalized);
+    let content = normalized.as_str();
+    let has_base = section_start(content, "[agent-frontmatter]").is_some();
+    let has_pi = section_start(content, "[agent-frontmatter.pi]").is_some();
+    if has_base && has_pi {
+        return content.to_string();
+    }
+    if has_base && !has_pi {
+        let insert_at = section_end(content, "[agent-frontmatter]").unwrap_or(content.len());
+        let pi_block = format!(
+            "\n{}[agent-frontmatter.pi]\n",
+            agent_frontmatter_pi_heading()
+        );
+        let mut out = String::new();
+        out.push_str(content[..insert_at].trim_end());
+        out.push_str("\n");
+        out.push_str(&pi_block);
+        out.push_str(content[insert_at..].trim_start_matches('\n'));
+        if content.ends_with('\n') && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        return out;
+    }
+
+    let block = if !has_base && has_pi {
+        let mut block = agent_frontmatter_heading();
+        block.push_str("[agent-frontmatter]\n\n");
+        block
+    } else {
+        agent_frontmatter_scaffold()
+    };
+    let insert_at = content
+        .find("\n[agent-frontmatter.pi]")
+        .or_else(|| content.find("\n# ── Optional Skills"))
+        .or_else(|| content.find("\n# ── Custom Hooks"))
+        .unwrap_or(content.len());
+    let mut out = String::new();
+    out.push_str(content[..insert_at].trim_end());
+    out.push_str("\n");
+    out.push_str(&block);
+    out.push_str("\n");
+    out.push_str(content[insert_at..].trim_start_matches('\n'));
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 /// Migrate old TOML section names to new ones (one-time, idempotent).
@@ -721,29 +1588,11 @@ fn migrate_section_names(path: &Path) {
 fn create_project_config(path: &Path, agents: &[String], skills: &[String]) {
     let mut out = String::new();
 
-    out.push_str("# ─────────────────────────────────────────────────────\n");
-    out.push_str("# vstack.toml — project-level agent customization\n");
-    out.push_str("#\n");
-    out.push_str("# Customize agent behavior for this project. These\n");
-    out.push_str("# settings are merged into generated agent files on\n");
-    out.push_str("# every install and refresh.\n");
-    out.push_str("#\n");
-    out.push_str("# After editing, run:  vstack refresh\n");
-    out.push_str("# ─────────────────────────────────────────────────────\n");
-    out.push('\n');
+    out.push_str(&project_config_header());
+    out.push_str("\n\n\n");
 
     // ── agent-launch-instructions ──
-    out.push_str("\n# ── Launch Instructions ───────────────────────────────\n");
-    out.push_str("# Adds a \"## Launch Instructions\" section near the top\n");
-    out.push_str("# of each agent file. Defines what the agent should\n");
-    out.push_str("# do when it is first invoked in your project.\n");
-    out.push_str("#\n");
-    out.push_str("# For multi-line values, use triple quotes:\n");
-    out.push_str("#   agent = \"\"\"\n");
-    out.push_str("#   First line.\n");
-    out.push_str("#   Second line.\n");
-    out.push_str("#   \"\"\"\n");
-    out.push_str("#\n");
+    out.push_str(&launch_instructions_heading());
     out.push_str("[agent-launch-instructions]\n\n");
     for (i, name) in agents.iter().enumerate() {
         out.push_str(&format!("{} = \"\"\n", name));
@@ -796,20 +1645,8 @@ fn create_project_config(path: &Path, agents: &[String], skills: &[String]) {
     // Actual skill lists are written by write_agent_skills() after
     // the mapping is computed, so we just emit the section header here.
 
-    // ── agent-frontmatter ──
-    out.push_str("\n\n# ── Agent Frontmatter ────────────────────────────────\n");
-    out.push_str("# Optional generated-frontmatter overrides. Top-level entries\n");
-    out.push_str("# apply to every harness; harness-specific tables win. Prefer\n");
-    out.push_str("# harness-specific model values when model id formats differ.\n");
-    out.push_str("# Supported fields: color, model, tools, pane, mode,\n");
-    out.push_str("# sandbox-mode, model-reasoning-effort. Unknown fields ignored.\n");
-    out.push_str("# Example:\n");
-    out.push_str("# researcher = { color = \"purple\" }\n");
-    out.push_str("# [agent-frontmatter.pi]\n");
-    out.push_str("# researcher = { model = \"openai/gpt-5.5:xhigh\", tools = [\"read\", \"grep\", \"find\", \"ls\", \"bash\", \"edit\", \"write\", \"web_research\"] }\n");
-    out.push_str("#\n");
-    out.push_str("[agent-frontmatter]\n");
-    // Color entries are still also supported from legacy [agent-colors].
+    out.push_str("\n");
+    out.push_str(&agent_frontmatter_scaffold());
 
     // ── agent-skills-optional ──
     out.push_str("\n\n# ── Optional Skills ──────────────────────────────────\n");
@@ -872,6 +1709,9 @@ fn update_project_config(path: &Path, agents: &[String], skills: &[String]) {
     for (section, keys) in all_new_keys {
         out = insert_keys_into_section(&out, section, &keys);
     }
+
+    out = ensure_value_section_entry_spacing(&out);
+    out = ensure_agent_frontmatter_scaffold(&out);
 
     append_skills_reference(&mut out, skills);
     // Only write if content actually changed to avoid bumping mtime,
@@ -979,7 +1819,7 @@ fn insert_entries_into_section(content: &str, section_header: &str, entries: &st
         result.push(lines[i].to_string());
 
         if trimmed == section_header {
-            // Scan forward past existing keys/values (including multi-line arrays)
+            // Scan to the end of this logical section, preserving spaced entries.
             i += 1;
             while i < lines.len() {
                 let next = lines[i].trim();
@@ -990,14 +1830,13 @@ fn insert_entries_into_section(content: &str, section_header: &str, entries: &st
                 if next.starts_with("# ──") {
                     break;
                 }
-                // Stop at blank line that isn't inside a multi-line array
-                if next.is_empty() {
-                    break;
-                }
                 result.push(lines[i].to_string());
                 i += 1;
             }
             // Insert new entries here, right after existing keys
+            if result.last().map_or(false, |line| !line.trim().is_empty()) {
+                result.push(String::new());
+            }
             for line in entries.lines() {
                 result.push(line.to_string());
             }
@@ -1292,6 +2131,51 @@ rust = "Always use thiserror for errors."
     }
 
     #[test]
+    fn repair_project_config_moves_legacy_colors_and_adds_frontmatter_scaffold() {
+        let dir =
+            std::env::temp_dir().join(format!("vstack_test_repair_colors_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vstack.toml");
+        std::fs::write(
+            &path,
+            "# ─────────────────────────────────────────────────────\n# old header\n# ─────────────────────────────────────────────────────\n\n# ── Execute on Launch ─────────────────────────────────\n[agent-launch-instructions]\nrust = \"first line\\nsecond line\"\nfirst line\nsecond line\n\"\"\"\n\n[agent-additional-instructions]\niced = \"\"\"\nalpha\nbeta\n\"\"\"\n\n# ── Custom Hooks ─────────────────────────────────────\n# agents = \"all\"[agent-colors]\nrust = \"orange\"[agent-colors]\niced = \"cyan\"\n\n[agent-frontmatter]\nrust = { color = \"orange\" }\nrust = { color = \"orange\" }\n",
+        )
+        .unwrap();
+
+        ensure_project_config(&dir, &["rust".into(), "iced".into()], &[]);
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(!updated.contains("[agent-colors]"));
+        assert!(updated.contains("[agent-frontmatter]"));
+        assert!(updated.contains("[agent-frontmatter.pi]"));
+        assert!(updated.contains("rust = { color = \"orange\" }"));
+        assert!(updated.contains("iced = { color = \"cyan\" }"));
+        assert_eq!(
+            updated.matches("\nrust = { color = \"orange\" }").count(),
+            1
+        );
+        assert!(updated.contains("rust = \"\"\"\nfirst line\nsecond line\"\"\""));
+        assert_eq!(updated.matches("first line").count(), 1);
+        assert!(updated.contains("iced = \"\"\"\nalpha\nbeta\"\"\""));
+        assert!(!updated.contains("beta\n\"\"\""));
+        assert!(updated.contains("Agent Frontmatter"));
+        assert!(updated.contains("Pi-specific model/tool/color overrides"));
+        assert!(updated.contains("# planner = { model = \"openai/gpt-5.5\", color = \"blue\" }"));
+        assert!(updated.contains(
+            "# reviewer-perf = { tools = [\"read\", \"grep\", \"find\", \"ls\", \"bash\"] }"
+        ));
+        assert!(updated.contains("# rust = { color = \"orange\" }"));
+        assert!(updated.contains("Generated frontmatter"));
+        assert!(
+            updated.find("Agent Frontmatter").unwrap()
+                < updated.find("\n[agent-frontmatter]\n").unwrap()
+        );
+        toml::from_str::<toml::Value>(&updated).expect("repaired TOML parses");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn update_project_config_no_change_when_all_present() {
         let dir =
             std::env::temp_dir().join(format!("vstack_test_no_change_{}", std::process::id()));
@@ -1390,11 +2274,26 @@ generalist = \"\"\n";
             .expect("missing rust value");
         assert_eq!(value, multiline);
 
-        // No literal newlines inside the value's line in the source
+        // Rendered in user-friendly triple-quoted form, not a single-line blob
+        // with escaped `\n` sequences.
         assert!(
-            out.contains(r#"rust = "first line\nsecond line\nthird line""#),
-            "expected escaped \\n sequence, got: {out}"
+            out.contains("rust = \"\"\"\nfirst line\nsecond line\nthird line\"\"\""),
+            "expected triple-quoted multiline value, got: {out}"
         );
+    }
+
+    #[test]
+    fn upsert_agent_value_replaces_existing_multiline_block() {
+        let toml = "[agent-additional-instructions]\nrust = \"\"\"\nold line\nold second\"\"\"\niced = \"\"\n";
+        let out = upsert_agent_value_in_section(
+            toml,
+            "[agent-additional-instructions]",
+            "rust",
+            "new line\nnew second",
+        );
+        assert!(out.contains("rust = \"\"\"\nnew line\nnew second\"\"\""));
+        assert!(!out.contains("old line"));
+        toml::from_str::<toml::Value>(&out).expect("valid TOML after multiline replacement");
     }
 
     #[test]

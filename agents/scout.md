@@ -1,6 +1,6 @@
 ---
 name: scout
-description: Fast read-only reconnaissance agent for exploring codebases, finding files by pattern, searching keywords, answering architecture questions, and returning compressed cited context. Specify thoroughness: quick, medium, or very thorough.
+description: "Fast read-only reconnaissance agent for exploring codebases, finding files by pattern, searching keywords, answering architecture questions, and returning compressed cited context. Specify thoroughness: quick, medium, or very thorough."
 model: haiku
 role: reviewer
 color: cyan

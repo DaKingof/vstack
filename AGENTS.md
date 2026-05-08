@@ -141,22 +141,24 @@ rust = ["rust-arch", "rust-cargo"]
 [agent-skills-optional]
 rust = [{ skill = "rust-async", when = "Async, tokio, channels" }]
 
+# Launch instructions added near the top of generated agent files.
+[agent-launch-instructions]
+rust = "Read docs/architecture.md before coding."
+
+# Project guidance appended to generated agent files.
+[agent-additional-instructions]
+rust = "Always run clippy before committing."
+
 # Generated-frontmatter overrides. Top-level entries apply to every harness.
 [agent-frontmatter]
 rust = { color = "green" }
+planner = { model = "openai/gpt-5.5", color = "blue" }
+reviewer-perf = { tools = ["read", "grep", "find", "ls", "bash"] }
 
 # Harness-specific generated-frontmatter overrides win over top-level entries.
 # Use exact model/tool ids for the target harness.
 [agent-frontmatter.pi]
 researcher = { model = "openai/gpt-5.5:xhigh", tools = ["read", "grep", "find", "ls", "bash", "edit", "write", "web_research"] }
-
-# What the agent should do when first invoked.
-[agent-launch-instructions]
-rust = "Pick up the highest-priority backend issue."
-
-# Project guidance appended to the agent file.
-[agent-additional-instructions]
-rust = "Always run clippy before committing."
 
 # Project instructions prepended to a skill's SKILL.md.
 [skill-instructions]

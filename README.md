@@ -63,13 +63,27 @@ Claude Code · Cursor · OpenCode · Codex · Pi
 [agent-skills]
 rust = ["rust-arch", "rust-cargo", "github", "worktree"]
 
-# Extra instructions appended to an agent.
+# Specialist skills loaded on demand.
+[agent-skills-optional]
+rust = [{ skill = "rust-async", when = "Async, tokio, channels" }]
+
+# Instructions near the top of the generated agent file.
+[agent-launch-instructions]
+rust = "Read docs/architecture.md before coding."
+
+# Extra instructions appended to the generated agent file.
 [agent-additional-instructions]
 rust = "Always run clippy before committing."
 
-# Generated-frontmatter overrides.
+# Project instructions prepended to a skill's SKILL.md.
+[skill-instructions]
+trading-design = "Dark theme, green/red accents."
+
+# Generated-frontmatter overrides. Top-level entries apply to every harness.
 [agent-frontmatter]
 rust = { color = "green" }
+planner = { model = "openai/gpt-5.5", color = "blue" }
+reviewer-perf = { tools = ["read", "grep", "find", "ls", "bash"] }
 
 # Harness-specific frontmatter values win over top-level values.
 [agent-frontmatter.pi]
@@ -78,7 +92,7 @@ researcher = { color = "purple", model = "openai/gpt-5.5:xhigh", tools = ["read"
 
 For Pi agents installed through vstack, model/tool/color edits belong in `[agent-frontmatter.pi]`, not in `.pi/agents/<name>.md`; generated agent files are overwritten by `vstack refresh`. The Pi `/agents` popup writes model/tools/color changes to this table for vstack-managed project agents.
 
-Custom safety hooks (`[[custom-hooks]]`) and per-skill instructions (`[skill-instructions]`) follow the same pattern. Direct edits to generated agent or skill files are also picked up automatically where possible, but `vstack.toml` is the stable home for generated frontmatter overrides.
+Custom safety hooks (`[[custom-hooks]]`) follow the same pattern. Direct edits to generated agent or skill files are also picked up automatically where possible, but `vstack.toml` is the stable home for generated frontmatter overrides and reusable project guidance.
 
 ## Supported Tools
 

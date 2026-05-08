@@ -79,7 +79,7 @@ You have domain context the orchestrator lacks. You decide how research applies.
 
 3. **Update architecture docs** if research changes documented patterns.
 
-4. **Update `vstack.toml`** if research reveals project-specific context that should persist (under `[agent-launch-instructions]` for execute-on-launch directives, `[agent-additional-instructions]` for persistent agent rules, or `[skill-instructions]` for skill-level context).
+4. **Update `vstack.toml`** if research reveals project-specific context that should persist (under `[agent-launch-instructions]` for launch/startup instructions, `[agent-additional-instructions]` for persistent agent rules, or `[skill-instructions]` for skill-level context).
 
 ### 2.3 Evaluate Feasibility
 
@@ -251,7 +251,7 @@ Use visual QA skills as necessary to validate that UI changes render correctly. 
 **Action**: Update the relevant documentation. Three options depending on what you learned:
 
 - **Architecture docs** → Update if patterns, APIs, or documented behavior changed.
-- **Project config** → Add to `./vstack.toml` (`[skill-instructions]` for skill-level context, `[agent-additional-instructions]` for persistent agent rules, `[agent-launch-instructions]` for execute-on-launch directives). Run `vstack refresh` to apply.
+- **Project config** → Add to `./vstack.toml` (`[skill-instructions]` for skill-level context, `[agent-additional-instructions]` for persistent agent rules, `[agent-launch-instructions]` for launch/startup instructions). Run `vstack refresh` to apply.
 
 Criteria: Would this save 5+ minutes in a future session? If yes, update. One surgical addition per lesson. No verbose examples.
 

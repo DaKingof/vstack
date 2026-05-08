@@ -281,7 +281,7 @@ For each blocked issue:
 **Implement changes** from agent reports:
 - Update architecture docs as described
 - Add DXXX references to affected files
-- If agents reported reusable rules or project-specific insights, add to `./vstack.toml` (`[skill-instructions]` for skill-level context, `[agent-additional-instructions]` for persistent agent rules, `[agent-launch-instructions]` for execute-on-launch directives)
+- If agents reported reusable rules or project-specific insights, add to `./vstack.toml` (`[skill-instructions]` for skill-level context, `[agent-additional-instructions]` for persistent agent rules, `[agent-launch-instructions]` for launch/startup instructions)
 - Run `vstack refresh` to apply config
 - For Pervasive: combine updates from all domain agents
 
