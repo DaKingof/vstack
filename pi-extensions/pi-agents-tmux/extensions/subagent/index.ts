@@ -2214,6 +2214,7 @@ interface SingleResult {
 	queuedTaskFile?: string;
 	queuedOutboxFile?: string;
 	paneSessionMode?: "live" | "resumed" | "new";
+	duplicateQueued?: boolean;
 	transcriptPath?: string;
 	stopReason?: string;
 	errorMessage?: string;
@@ -4172,6 +4173,11 @@ interface QueuedPaneTask {
 	outboxFile: string;
 	taskFile: string;
 	sessionMode: "live" | "resumed" | "new";
+	duplicate?: boolean;
+}
+
+function normalizedTaskForDedup(task: string): string {
+	return task.replace(/\s+/g, " ").trim();
 }
 
 async function queuePersistentPaneTask(
@@ -4189,6 +4195,19 @@ async function queuePersistentPaneTask(
 	const effectiveCwd = cwd ?? defaultCwd;
 	const existingRegistry = await readPaneRegistry(runtimeRoot);
 	const existing = existingRegistry[agent.name];
+	const activeDuplicate = Object.values(await readTaskRegistry(runtimeRoot))
+		.filter((record) => record.agent === agent.name && (record.status === "queued" || record.status === "running"))
+		.find((record) => normalizedTaskForDedup(record.task) === normalizedTaskForDedup(task));
+	if (activeDuplicate && existing && (await paneExists(existing.paneId))) {
+		return {
+			pane: existing,
+			taskId: activeDuplicate.taskId,
+			outboxFile: activeDuplicate.outboxFile ?? completionPath(runtimeRoot, agent.name, activeDuplicate.taskId),
+			taskFile: activeDuplicate.inboxFile ?? activeDuplicate.processingFile ?? taskMarkdownPath(runtimeRoot, "inbox", agent.name, activeDuplicate.taskId),
+			sessionMode: "live",
+			duplicate: true,
+		};
+	}
 	const hadLivePane = Boolean(existing && (await paneExists(existing.paneId)));
 	const hadSavedSession = hasSavedPaneSession(runtimeRoot, agent.name);
 	const pane = await ensurePersistentPane(runtimeRoot, parentSessionId, effectiveCwd, agent, parentModel, parentThinkingLevel, activeTools);
@@ -4362,7 +4381,7 @@ async function runPersistentPaneAgent(
 
 	const queued = await queuePersistentPaneTask(runtimeRoot, parentSessionId, defaultCwd, agent, task, cwd, parentModel, parentThinkingLevel, pi, pi.getActiveTools());
 	const sessionText = queued.sessionMode === "live" ? "reused live pane" : queued.sessionMode === "resumed" ? "resumed saved pane session" : "started new pane session";
-	const text = `Queued task for ${agent.name} (${sessionText}).`;
+	const text = queued.duplicate ? `Duplicate task for ${agent.name} already queued; reused existing task ${queued.taskId}.` : `Queued task for ${agent.name} (${sessionText}).`;
 	return {
 		agent: agent.name,
 		agentSource: agent.source,
@@ -4377,6 +4396,7 @@ async function runPersistentPaneAgent(
 		queuedTaskFile: queued.taskFile,
 		queuedOutboxFile: queued.outboxFile,
 		paneSessionMode: queued.sessionMode,
+		duplicateQueued: queued.duplicate,
 		transcriptPath: queued.pane.sessionFile,
 		step,
 	};
@@ -6748,7 +6768,7 @@ export default function (pi: ExtensionAPI) {
 					const header = queuedPaneLine(r, dashboard);
 					const task = r.task.replace(/\s+/g, " ").trim() || "queued task";
 					const firstPrefix = subagentBranch(theme, "└", cwd);
-					const nextPrefix = subagentBranch(theme, "│", cwd);
+					const nextPrefix = " ".repeat(Math.max(0, visibleWidth(firstPrefix)));
 					const textWidth = Math.max(20, width - Math.max(visibleWidth(firstPrefix), visibleWidth(nextPrefix)));
 					const wrapped = wrapTextWithAnsi(task, textWidth);
 					const shown = wrapped.slice(0, 2);
@@ -6807,6 +6827,7 @@ export default function (pi: ExtensionAPI) {
 
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
+				if (r.duplicateQueued) return new Container();
 				const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
 				const isQueued = !isError && Boolean(r.taskId && r.paneId);
 				const displayItems = getDisplayItems(r.messages);
