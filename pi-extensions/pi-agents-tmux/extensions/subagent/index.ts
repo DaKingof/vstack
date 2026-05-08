@@ -859,7 +859,7 @@ function agentBrowserLayout(terminalRows: number): AgentBrowserLayout {
 	// the right detail pane can show more transcript without forcing the
 	// user to scroll.
 	const innerRows = Math.max(1, Math.floor(Math.max(1, terminalRows) * AGENTS_BROWSER_HEIGHT_RATIO) - AGENTS_POPUP_FRAME_ROWS);
-	const bodyRows = Math.max(0, innerRows - 8);
+	const bodyRows = Math.max(0, innerRows - 9);
 	return {
 		bodyRows,
 		innerRows,
@@ -1601,6 +1601,7 @@ function renderAgentsBody(
 	for (let i = 0; i < rows; i += 1) {
 		lines.push(`${agentPad(left[i] ?? "", leftWidth)} ${theme.fg("dim", "│")} ${truncateToWidth(right[i] ?? "", rightWidth, "")}`);
 	}
+	lines.push("");
 	lines.push(...wrapTextWithAnsi(agentLegend(theme), width));
 	return lines;
 }
@@ -1909,7 +1910,7 @@ function createAgentsBrowserComponent(
 			return agentFrame(lines, safeWidth, theme, layout.innerRows, "Agents");
 		}
 		clamp();
-		const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane · ")}${ansiYellow("alt+m")} ${theme.fg("dim", "model/tools/color · ")}${ansiYellow("alt+p/o/x")} ${theme.fg("dim", "pane ops")}`;
+		const footer = `${ansiYellow("tab")} ${theme.fg("dim", "view · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "pane · ")}${ansiYellow("alt+m")} ${theme.fg("dim", "edit frontmatter · ")}${ansiYellow("alt+p/o/x")} ${theme.fg("dim", "pane ops")}`;
 		const lines = [
 			tabLine,
 			"",
