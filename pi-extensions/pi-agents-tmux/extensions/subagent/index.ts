@@ -576,7 +576,7 @@ export default function (pi: ExtensionAPI) {
 			const agent = details?.agent ?? childAgentName ?? "agent";
 			const statusWord = details?.status === "failed" ? "failed" : details?.status === "blocked" ? "blocked" : "completed";
 			const tone = details?.status === "failed" || details?.status === "blocked" ? "error" : "success";
-			return framedMessage(agentStatusLine(theme, agent, statusWord, tone, theme.fg("muted", " · reported")), theme);
+			return wrappedText(agentStatusLine(theme, agent, statusWord, tone, theme.fg("muted", " · reported")));
 		},
 	});
 
