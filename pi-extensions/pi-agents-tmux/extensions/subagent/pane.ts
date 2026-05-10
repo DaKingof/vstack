@@ -22,6 +22,7 @@ import {
 	piUserDir,
 	projectSettingsPath,
 	selectedModelForAgent,
+	selectedThinkingLevelForAgent,
 	selectedToolsForAgent,
 	settingBoolean,
 } from "./settings.js";
@@ -418,7 +419,8 @@ export async function ensurePersistentPane(
 		}
 
 		const selectedModel = selectedModelForAgent(agent, parentModel, cwd);
-		const paths = await writeLauncher(runtimeRoot, parentSessionId, cwd, agent, selectedModel, parentThinkingLevel, activeTools);
+		const selectedThinking = selectedThinkingLevelForAgent(parentThinkingLevel, cwd);
+		const paths = await writeLauncher(runtimeRoot, parentSessionId, cwd, agent, selectedModel, selectedThinking, activeTools);
 		const windowName = `agent:${agent.name}`;
 		primaryPaneId = await getPrimaryPaneId();
 		layoutGroup = nextLayoutGroup(registry);
@@ -463,7 +465,7 @@ export async function ensurePersistentPane(
 			promptFile: paths.promptFile,
 			launcherFile: paths.launcherFile,
 			model: selectedModel,
-			thinkingLevel: parentThinkingLevel,
+			thinkingLevel: selectedThinking,
 			startedAt: new Date().toISOString(),
 			launcherVersion: PANE_LAUNCHER_VERSION,
 			layoutGroup,

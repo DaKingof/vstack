@@ -224,6 +224,20 @@
           "category": "Execution",
           "apply": "reload",
           "requiresReload": true
+        },
+        {
+          "key": "subagentThinkingSource",
+          "label": "Subagent thinking source",
+          "description": "Choose whether child agents use the thinking level encoded in the agent model (model :effort suffix) or inherit the parent session thinking level.",
+          "type": "enum",
+          "enumValues": [
+            "frontmatter",
+            "parent"
+          ],
+          "default": "frontmatter",
+          "category": "Execution",
+          "apply": "reload",
+          "requiresReload": true
         }
       ],
       "resources": [

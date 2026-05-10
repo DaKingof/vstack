@@ -200,3 +200,4 @@ A future backend could use Pi SDK `createAgentSession()` for non-pane one-shot a
 - `completionPollMs` and `childInboxPollMs` for persistent pane polling intervals.
 - `forceSessionBridgeForPanes` (default `true`) explicitly loads `pi-session-bridge` in new pane launchers so steering continues to work if settings drift.
 - `subagentModelSource` (default `frontmatter`) controls whether child Pi sessions use the agent `model:` value or inherit the parent session model.
+- `subagentThinkingSource` (default `frontmatter`) controls whether child Pi sessions use the thinking level encoded in the agent model (the `:effort` suffix on `model:`) or inherit the parent session thinking level. With `frontmatter`, `--thinking` is omitted from the child invocation so the model suffix governs; with `parent`, the parent's current level is passed through.

@@ -24,6 +24,7 @@ import {
 import {
 	resultLimits,
 	selectedModelForAgent,
+	selectedThinkingLevelForAgent,
 	selectedToolsForAgent,
 	settingBoolean,
 } from "./settings.js";
@@ -251,7 +252,8 @@ export async function runSingleAgent(
 	args.push("--session", resumedSessionPath);
 	const selectedModel = selectedModelForAgent(agent, parentModel, defaultCwd);
 	if (selectedModel) args.push("--model", selectedModel);
-	if (parentThinkingLevel && parentThinkingLevel !== "off") args.push("--thinking", parentThinkingLevel);
+	const selectedThinking = selectedThinkingLevelForAgent(parentThinkingLevel, defaultCwd);
+	if (selectedThinking && selectedThinking !== "off") args.push("--thinking", selectedThinking);
 	const selectedTools = selectedToolsForAgent(agent, defaultCwd, [], pi.getActiveTools());
 	if (selectedTools && selectedTools.length > 0) args.push("--tools", selectedTools.join(","));
 
