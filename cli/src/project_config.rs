@@ -1521,8 +1521,7 @@ pub fn write_agent_skills_optional(
 ///
 /// - If the file doesn't exist, generates a full template with commented placeholders.
 /// - If the file exists, appends commented placeholders for any new agents/skills
-///   not already mentioned, and updates the installed-skills reference block.
-///   Never modifies existing user content.
+///   not already mentioned. Never modifies existing user content.
 pub fn ensure_project_config(project_root: &Path, agents: &[String], skills: &[String]) {
     let path = project_root.join("vstack.toml");
 
@@ -2307,7 +2306,6 @@ fn create_project_config(path: &Path, agents: &[String], skills: &[String]) {
     out.push_str("# description = \"What this hook does\"     # inlined as instructions in non-Claude-Code harnesses\n");
     out.push_str("# agents = \"all\"             # \"all\", a role (\"engineer\"), or a list [\"rust\", \"iced\"]\n");
 
-    append_skills_reference(&mut out, skills);
     let _ = std::fs::write(path, out);
 }
 
@@ -2328,7 +2326,8 @@ fn update_project_config(path: &Path, agents: &[String], skills: &[String]) {
         .filter(|name| is_new_key(&existing, name))
         .collect();
 
-    // Strip old skills reference block and re-append with current list
+    // Strip any legacy installed-skills reference block left by older vstack
+    // versions so existing project configs lose the bloat on next write.
     let content = strip_skills_reference(&existing);
     let mut out = content.trim_end().to_string();
     out.push('\n');
@@ -2349,12 +2348,12 @@ fn update_project_config(path: &Path, agents: &[String], skills: &[String]) {
     out = ensure_value_section_entry_spacing(&out);
     out = ensure_agent_frontmatter_scaffold(&out);
 
-    append_skills_reference(&mut out, skills);
     // Only write if content actually changed to avoid bumping mtime,
     // which would make staleness checks flag everything as outdated.
     if out != existing {
         let _ = std::fs::write(path, out);
     }
+    let _ = skills;
 }
 
 /// Returns true if a name does NOT appear as a TOML key in the file.
@@ -2366,15 +2365,6 @@ fn is_new_key(content: &str, name: &str) -> bool {
         format!("# {}=", name),
     ];
     !patterns.iter().any(|p| content.contains(p))
-}
-
-fn append_skills_reference(out: &mut String, skills: &[String]) {
-    if !skills.is_empty() {
-        out.push_str("\n\n# ── Installed skills (reference) ─────────────────────\n");
-        for name in skills {
-            out.push_str(&format!("#   {}\n", name));
-        }
-    }
 }
 
 /// Insert new keys into a specific TOML section, preserving all other content.
@@ -2872,7 +2862,8 @@ rust = "Use for Rust work."
         create_project_config(&path, &["rust".into()], &["rust-arch".into()]);
         let initial = std::fs::read_to_string(&path).unwrap();
         assert!(initial.contains("rust = \"\""));
-        assert!(initial.contains("#   rust-arch"));
+        // Legacy installed-skills reference block no longer emitted
+        assert!(!initial.contains("Installed skills (reference)"));
 
         // Update with "rust" + new "iced" agent and new skill
         update_project_config(
@@ -2886,10 +2877,7 @@ rust = "Use for Rust work."
         assert!(updated.contains("rust = \"\""));
         // New iced agent added (uncommented, empty value)
         assert!(updated.contains("iced = \"\""));
-        // Skills reference updated
-        assert!(updated.contains("#   trading-design"));
-        // Old skills still listed
-        assert!(updated.contains("#   rust-arch"));
+        assert!(!updated.contains("Installed skills (reference)"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3177,89 +3165,38 @@ command = \"./scripts/x.sh\"\n";
             after_first, after_n,
             "file should be byte-stable across repeated refreshes"
         );
-        // Reference block appears exactly once
-        assert_eq!(
-            after_n.matches("# ── Installed skills (reference)").count(),
-            1,
-            "expected single reference block, got\n{after_n}"
-        );
+        // Legacy installed-skills reference block must not reappear
+        assert!(!after_n.contains("Installed skills (reference)"));
         // Custom hooks block preserved
         assert!(
             after_n.contains("[[custom-hooks]]"),
             "custom-hooks block lost: {after_n}"
-        );
-        // Skill listed in reference exactly once
-        assert_eq!(
-            after_n.matches("#   rust-arch").count(),
-            1,
-            "rust-arch should appear in reference exactly once: {after_n}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn update_project_config_preserves_full_skills_reference() {
-        let dir =
-            std::env::temp_dir().join(format!("vstack_test_skills_ref_{}", std::process::id()));
+    fn update_project_config_drops_legacy_skills_reference_block() {
+        let dir = std::env::temp_dir().join(format!(
+            "vstack_test_skills_ref_drop_{}",
+            std::process::id()
+        ));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("vstack.toml");
 
-        // Initial install with multiple skills
-        create_project_config(
-            &path,
-            &["rust".into()],
-            &["rust-arch".into(), "rust-ffi".into(), "worktree".into()],
-        );
-        let initial = std::fs::read_to_string(&path).unwrap();
-        assert!(initial.contains("#   rust-arch"));
-        assert!(initial.contains("#   rust-ffi"));
-        assert!(initial.contains("#   worktree"));
+        let legacy = "[agent-launch-instructions]\nrust = \"\"\n\n# ── Installed skills (reference) ─────────────────────\n#   rust-arch\n#   rust-ffi\n";
+        std::fs::write(&path, legacy).unwrap();
 
-        // Incremental install adds one new skill but passes ALL installed skills
-        // (simulating the fixed behavior in add.rs)
         update_project_config(
             &path,
             &["rust".into()],
-            &[
-                "rust-arch".into(),
-                "rust-ffi".into(),
-                "second-opinion".into(),
-                "worktree".into(),
-            ],
+            &["rust-arch".into(), "rust-ffi".into()],
         );
         let updated = std::fs::read_to_string(&path).unwrap();
-
-        // ALL skills present in reference — not just the new one
-        assert!(
-            updated.contains("#   rust-arch"),
-            "rust-arch missing from reference"
-        );
-        assert!(
-            updated.contains("#   rust-ffi"),
-            "rust-ffi missing from reference"
-        );
-        assert!(
-            updated.contains("#   worktree"),
-            "worktree missing from reference"
-        );
-        assert!(
-            updated.contains("#   second-opinion"),
-            "second-opinion missing from reference"
-        );
-
-        // New skill got a [skill-instructions] placeholder
-        assert!(
-            updated.contains("second-opinion = \"\""),
-            "second-opinion placeholder missing"
-        );
-        // Existing skills NOT re-added as placeholders
-        let rust_ffi_count = updated.matches("rust-ffi = \"\"").count();
-        assert_eq!(
-            rust_ffi_count, 1,
-            "rust-ffi placeholder duplicated (count={})",
-            rust_ffi_count
-        );
+        assert!(!updated.contains("Installed skills (reference)"));
+        assert!(!updated.contains("#   rust-arch"));
+        assert!(updated.contains("rust = \"\""));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
