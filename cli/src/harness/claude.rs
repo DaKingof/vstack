@@ -109,16 +109,8 @@ fn claude_effort_for(
     frontmatter
         .effort
         .clone()
-        .or_else(|| agent::effort_for_model(&agent.model).map(String::from))
+        .or_else(|| agent.effort.clone())
         .filter(|effort| !is_none_value(effort))
-        .map(|effort| claude_effort_name(&effort))
-}
-
-fn claude_effort_name(effort: &str) -> String {
-    match effort.trim().to_ascii_lowercase().as_str() {
-        "xhigh" => "max".into(),
-        other => other.into(),
-    }
 }
 
 fn claude_background_for(
@@ -276,6 +268,7 @@ mod tests {
             model: "sonnet".into(),
             role,
             color: Some("green".into()),
+            effort: None,
             body: format!("# {name}\n\nIntro.\n"),
             source_path: Default::default(),
         }
@@ -288,7 +281,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let agent = agent_fixture("reviewer-arch", AgentRole::Reviewer);
+        let mut agent = agent_fixture("reviewer-arch", AgentRole::Reviewer);
+        agent.effort = Some("high".into());
         let path = generate_agent(&agent, &dir, &[], &[], &[], &AgentExtras::default())
             .expect("generate ok");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -375,6 +369,7 @@ mod tests {
 
         let mut agent = agent_fixture("planner", AgentRole::Analyst);
         agent.model = "opus".into();
+        agent.effort = Some("max".into());
         let extras = AgentExtras {
             frontmatter: AgentFrontmatterOverrides {
                 memory: Some("project".into()),

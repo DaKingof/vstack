@@ -3,6 +3,7 @@ name: reviewer-structure
 description: Code structure and modularity reviewer. Detects oversized files, god objects, module boundary violations, and untracked TODOs.
 model: opus
 role: reviewer
+effort: xhigh
 color: cyan
 ---
 

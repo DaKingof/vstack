@@ -3,6 +3,7 @@ name: reviewer-test
 description: Test coverage and quality reviewer. Verifies adequate test coverage, detects missing edge cases, and audits test quality.
 model: opus
 role: reviewer
+effort: xhigh
 color: blue
 ---
 

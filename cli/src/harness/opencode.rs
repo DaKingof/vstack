@@ -93,9 +93,8 @@ fn opencode_reasoning_effort_for(
         .model_reasoning_effort
         .clone()
         .or_else(|| frontmatter.effort.clone())
-        .or_else(|| agent::effort_for_model(&agent.model).map(String::from))
+        .or_else(|| agent.effort.clone())
         .filter(|effort| !is_none_value(effort))
-        .map(|effort| agent::openai_effort_name(&effort))
 }
 
 fn opencode_mode_for(frontmatter: &agent::AgentFrontmatterOverrides) -> &str {
@@ -218,6 +217,7 @@ mod tests {
             model: model.into(),
             role,
             color: Some("green".into()),
+            effort: None,
             body: format!("# {name}\n\nIntro.\n"),
             source_path: PathBuf::new(),
         }
@@ -230,7 +230,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let agent = agent_fixture("reviewer", AgentRole::Reviewer, "sonnet");
+        let mut agent = agent_fixture("reviewer", AgentRole::Reviewer, "sonnet");
+        agent.effort = Some("high".into());
         let path = generate_agent(&agent, &dir, &[], &[], &[], &AgentExtras::default()).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("mode: subagent\n"));
@@ -343,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_agent_maps_max_effort_to_openai_xhigh() {
+    fn generate_agent_writes_effort_override_verbatim() {
         let dir = std::env::temp_dir().join(format!(
             "vstack_opencode_agent_effort_{}",
             std::process::id()
@@ -354,7 +355,7 @@ mod tests {
         let agent = agent_fixture("scout", AgentRole::Analyst, "haiku");
         let extras = AgentExtras {
             frontmatter: agent::AgentFrontmatterOverrides {
-                effort: Some("max".into()),
+                effort: Some("xhigh".into()),
                 ..Default::default()
             },
             ..AgentExtras::default()
@@ -362,6 +363,24 @@ mod tests {
         let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("  reasoningEffort: xhigh\n"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generate_agent_omits_options_when_no_effort_configured() {
+        let dir = std::env::temp_dir().join(format!(
+            "vstack_opencode_agent_no_effort_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let agent = agent_fixture("scout", AgentRole::Analyst, "haiku");
+        let path = generate_agent(&agent, &dir, &[], &[], &[], &AgentExtras::default()).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("  reasoningEffort:"));
+        assert!(!content.contains("options:\n"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

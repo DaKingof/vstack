@@ -900,7 +900,7 @@ fn base_frontmatter_defaults(agent: &crate::agent::Agent) -> Vec<(String, String
         fields.push(("color".into(), toml_inline_string(color)));
     }
     fields.push(("model".into(), toml_inline_string(&agent.model)));
-    if let Some(effort) = crate::agent::effort_for_model(&agent.model) {
+    if let Some(effort) = agent.effort.as_deref() {
         fields.push(("effort".into(), toml_inline_string(effort)));
     }
     fields.push((
@@ -1036,8 +1036,7 @@ fn claude_frontmatter_defaults(
     let effort = frontmatter
         .effort
         .clone()
-        .or_else(|| crate::agent::effort_for_model(&agent.model).map(String::from))
-        .map(|effort| claude_effort_name(&effort));
+        .or_else(|| agent.effort.clone());
     if let Some(effort) = effort.filter(|effort| !is_none_value(effort)) {
         fields.push(("effort".into(), toml_inline_string(&effort)));
     }
@@ -1150,13 +1149,6 @@ fn push_color_field(
     fields.push(("color".into(), toml_inline_string(&color)));
 }
 
-fn claude_effort_name(effort: &str) -> String {
-    match effort.trim().to_ascii_lowercase().as_str() {
-        "xhigh" => "max".into(),
-        other => other.into(),
-    }
-}
-
 fn openai_reasoning_effort(
     agent: &crate::agent::Agent,
     frontmatter: &crate::agent::AgentFrontmatterOverrides,
@@ -1165,9 +1157,8 @@ fn openai_reasoning_effort(
         .model_reasoning_effort
         .clone()
         .or_else(|| frontmatter.effort.clone())
-        .or_else(|| crate::agent::effort_for_model(&agent.model).map(String::from))
+        .or_else(|| agent.effort.clone())
         .filter(|effort| !is_none_value(effort))
-        .map(|effort| crate::agent::openai_effort_name(&effort))
 }
 
 fn is_none_value(value: &str) -> bool {
@@ -2641,6 +2632,7 @@ planner = { background = true }
             model: "haiku".into(),
             role: crate::agent::AgentRole::Analyst,
             color: None,
+            effort: Some("medium".into()),
             body: String::new(),
             source_path: std::path::PathBuf::new(),
         };
@@ -2650,6 +2642,7 @@ planner = { background = true }
             model: "opus".into(),
             role: crate::agent::AgentRole::Analyst,
             color: None,
+            effort: Some("max".into()),
             body: String::new(),
             source_path: std::path::PathBuf::new(),
         };
@@ -2699,6 +2692,7 @@ planner = { background = true }
             model: "opus".into(),
             role: crate::agent::AgentRole::Engineer,
             color: None,
+            effort: Some("xhigh".into()),
             body: String::new(),
             source_path: std::path::PathBuf::new(),
         };
@@ -2721,6 +2715,7 @@ planner = { background = true }
             model: "opus".into(),
             role: crate::agent::AgentRole::Engineer,
             color: None,
+            effort: Some("xhigh".into()),
             body: String::new(),
             source_path: std::path::PathBuf::new(),
         };
@@ -2748,6 +2743,7 @@ planner = { background = true }
             model: "opus".into(),
             role: crate::agent::AgentRole::Engineer,
             color: Some("orange".into()),
+            effort: None,
             body: String::new(),
             source_path: std::path::PathBuf::new(),
         };

@@ -3,6 +3,7 @@ name: reviewer-perf
 description: Performance validation specialist. Use for latency validation, benchmark execution, percentile analysis (P50/P95/P99/P99.9), or regression detection. Does NOT write code.
 model: opus
 role: reviewer
+effort: xhigh
 color: red
 ---
 

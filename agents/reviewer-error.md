@@ -3,6 +3,7 @@ name: reviewer-error
 description: Silent failure and error handling reviewer. Detects swallowed errors, missing logging, inadequate error propagation, and audits catch blocks.
 model: opus
 role: reviewer
+effort: xhigh
 color: orange
 ---
 

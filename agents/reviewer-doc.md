@@ -3,6 +3,7 @@ name: reviewer-doc
 description: Documentation accuracy reviewer. Verifies docs match implementation, detects stale API docs, and audits architecture documentation drift.
 model: opus
 role: reviewer
+effort: medium
 color: yellow
 ---
 

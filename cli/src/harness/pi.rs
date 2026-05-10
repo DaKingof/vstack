@@ -94,15 +94,8 @@ pub fn generate_agent(
 ///
 /// Pi defaults to OpenAI models for vstack-managed agents. Pi accepts
 /// `provider/model` and an optional `:thinking` shorthand (per the Pi
-/// `--model` flag), so we encode the canonical effort level alongside
-/// the model id. Users can still override per-agent in source frontmatter.
-pub fn pi_model_for(model: &str) -> String {
-    pi_model_for_with_effort(
-        model,
-        agent::effort_for_model(model).map(agent::openai_effort_name),
-    )
-}
-
+/// `--model` flag), so when an effort is configured we encode it alongside
+/// the model id.
 fn pi_model_for_with_effort(model: &str, effort: Option<String>) -> String {
     let effort_suffix = effort
         .filter(|effort| !is_none_value(effort))
@@ -119,8 +112,7 @@ fn pi_effort_for(agent: &Agent, frontmatter: &agent::AgentFrontmatterOverrides) 
         .model_reasoning_effort
         .clone()
         .or_else(|| frontmatter.effort.clone())
-        .or_else(|| agent::effort_for_model(&agent.model).map(String::from))
-        .map(|effort| agent::openai_effort_name(&effort))
+        .or_else(|| agent.effort.clone())
 }
 
 fn is_none_value(value: &str) -> bool {
@@ -176,6 +168,7 @@ mod tests {
             model: model.into(),
             role,
             color: Some("green".into()),
+            effort: None,
             body: format!("# {name}\n\nIntro.\n\n## Capabilities\n\nDoes work.\n"),
             source_path: PathBuf::new(),
         }
@@ -183,10 +176,20 @@ mod tests {
 
     #[test]
     fn pi_model_mapping() {
-        assert_eq!(pi_model_for("opus"), "openai-codex/gpt-5.5:xhigh");
-        assert_eq!(pi_model_for("sonnet"), "openai-codex/gpt-5.5:high");
-        assert_eq!(pi_model_for("haiku"), "openai-codex/gpt-5.5:medium");
-        assert_eq!(pi_model_for("custom-id"), "custom-id");
+        assert_eq!(
+            pi_model_for_with_effort("opus", Some("xhigh".into())),
+            "openai-codex/gpt-5.5:xhigh"
+        );
+        assert_eq!(
+            pi_model_for_with_effort("sonnet", Some("high".into())),
+            "openai-codex/gpt-5.5:high"
+        );
+        assert_eq!(
+            pi_model_for_with_effort("haiku", Some("medium".into())),
+            "openai-codex/gpt-5.5:medium"
+        );
+        assert_eq!(pi_model_for_with_effort("opus", None), "openai-codex/gpt-5.5");
+        assert_eq!(pi_model_for_with_effort("custom-id", None), "custom-id");
     }
 
     #[test]
@@ -195,7 +198,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let agent = agent_fixture("rust", AgentRole::Engineer, "opus");
+        let mut agent = agent_fixture("rust", AgentRole::Engineer, "opus");
+        agent.effort = Some("xhigh".into());
         let extras = AgentExtras {
             color: Some("magenta".into()),
             guidance: Some("Read open issues and start.".into()),
@@ -254,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_agent_applies_openai_effort_override_to_pi_model_suffix() {
+    fn generate_agent_applies_effort_override_to_pi_model_suffix() {
         let dir =
             std::env::temp_dir().join(format!("vstack_pi_agent_effort_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -263,7 +267,7 @@ mod tests {
         let agent = agent_fixture("scout", AgentRole::Analyst, "haiku");
         let extras = AgentExtras {
             frontmatter: agent::AgentFrontmatterOverrides {
-                effort: Some("max".into()),
+                effort: Some("xhigh".into()),
                 ..Default::default()
             },
             ..AgentExtras::default()
@@ -272,6 +276,24 @@ mod tests {
 
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("model: openai-codex/gpt-5.5:xhigh"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generate_agent_omits_suffix_when_no_effort() {
+        let dir = std::env::temp_dir()
+            .join(format!("vstack_pi_agent_no_effort_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let agent = agent_fixture("scout", AgentRole::Analyst, "opus");
+        let path = generate_agent(&agent, &dir, &[], &[], &[], &AgentExtras::default())
+            .expect("generate ok");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("model: openai-codex/gpt-5.5\n"));
+        assert!(!content.contains("model: openai-codex/gpt-5.5:"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -314,7 +336,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let agent = agent_fixture("reviewer-arch", AgentRole::Reviewer, "sonnet");
+        let mut agent = agent_fixture("reviewer-arch", AgentRole::Reviewer, "sonnet");
+        agent.effort = Some("high".into());
         let extras = AgentExtras::default();
         let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
 

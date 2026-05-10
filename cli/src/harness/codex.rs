@@ -31,23 +31,19 @@ pub fn generate_agent(
             AgentRole::Engineer => "danger-full-access",
         });
 
-    // Map model to reasoning effort
     let lower = agent.model.to_lowercase();
-    let (model, default_reasoning_effort) = match lower.as_str() {
-        "opus" => ("gpt-5.5", "xhigh"),
-        "sonnet" => ("gpt-5.5", "high"),
-        "haiku" => ("gpt-5.5", "medium"),
-        other => (other, "high"),
+    let model = match lower.as_str() {
+        "opus" | "sonnet" | "haiku" => "gpt-5.5",
+        other => other,
     };
     let model_override = frontmatter.model.as_deref().map(codex_model_for_override);
     let model = model_override.as_deref().unwrap_or(model);
-    let reasoning_effort = agent::openai_effort_name(
-        frontmatter
-            .model_reasoning_effort
-            .as_deref()
-            .or(frontmatter.effort.as_deref())
-            .unwrap_or(default_reasoning_effort),
-    );
+    let reasoning_effort = frontmatter
+        .model_reasoning_effort
+        .clone()
+        .or_else(|| frontmatter.effort.clone())
+        .or_else(|| agent.effort.clone())
+        .filter(|effort| !is_none_effort(effort));
 
     // Build TOML manually to control format (triple-quoted developer_instructions)
     let mut output = String::new();
@@ -58,9 +54,9 @@ pub fn generate_agent(
         escape_toml(&agent.description)
     ));
     output.push_str(&format!("model = \"{model}\"\n"));
-    output.push_str(&format!(
-        "model_reasoning_effort = \"{reasoning_effort}\"\n"
-    ));
+    if let Some(effort) = &reasoning_effort {
+        output.push_str(&format!("model_reasoning_effort = \"{effort}\"\n"));
+    }
     output.push_str(&format!("sandbox_mode = \"{sandbox_mode}\"\n"));
 
     // Developer instructions as multiline TOML string
@@ -96,6 +92,13 @@ fn codex_model_for_override(model: &str) -> String {
     }
 }
 
+fn is_none_effort(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "none" | "false" | "off" | "no"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,6 +111,7 @@ mod tests {
             model: "sonnet".into(),
             role,
             color: None,
+            effort: None,
             body: format!("# {name}\n\nIntro.\n"),
             source_path: PathBuf::new(),
         }
@@ -129,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_effort_override_maps_max_to_xhigh() {
+    fn shared_effort_override_is_written_verbatim() {
         let dir = std::env::temp_dir().join(format!("vstack_codex_effort_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -137,7 +141,7 @@ mod tests {
         let agent = agent_fixture("scout", AgentRole::Analyst);
         let extras = AgentExtras {
             frontmatter: agent::AgentFrontmatterOverrides {
-                effort: Some("max".into()),
+                effort: Some("xhigh".into()),
                 ..Default::default()
             },
             ..AgentExtras::default()
@@ -145,6 +149,21 @@ mod tests {
         let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("model_reasoning_effort = \"xhigh\""));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn omits_effort_when_unset() {
+        let dir = std::env::temp_dir().join(format!("vstack_codex_no_effort_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let agent = agent_fixture("scout", AgentRole::Analyst);
+        let path = generate_agent(&agent, &dir, &[], &[], &[], &AgentExtras::default())
+            .expect("generate ok");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("model_reasoning_effort"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

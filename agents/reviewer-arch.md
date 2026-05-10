@@ -3,6 +3,7 @@ name: reviewer-arch
 description: Architecture reviewer for design reviews, module boundary validation, abstraction evaluation, and technical debt assessment. Does NOT write code.
 model: opus
 role: reviewer
+effort: xhigh
 color: yellow
 ---
 

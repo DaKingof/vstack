@@ -135,7 +135,7 @@ rust = "Always run clippy before committing."
 # Generated frontmatter. vstack populates active defaults; edit and refresh.
 # Harness-specific values only affect that harness.
 [agent-frontmatter.claude]
-rust = { color = "orange", model = "opus[1m]", effort = "max", deny-tools = ["Agent", "AskUserQuestion"], background = false }
+rust = { color = "orange", model = "opus[1m]", effort = "xhigh", deny-tools = ["Agent", "AskUserQuestion"], background = false }
 
 [agent-frontmatter.opencode]
 rust = { color = "#f97316", model = "openai/gpt-5.5", model-reasoning-effort = "xhigh", deny-tools = ["task", "question"], mode = "subagent" }
@@ -151,17 +151,19 @@ rust = { color = "orange", model = "openai-codex/gpt-5.5:xhigh", deny-tools = ["
 trading-design = "Dark theme, green/red accents."
 ```
 
-## Per-Harness Model/Effort Mapping
+## Per-Harness Model Mapping
 
-| Canonical | Claude Code | Claude effort | OpenCode | Codex | Pi |
-|-----------|-------------|---------------|----------|-------|-----|
-| `opus` | `opus[1m]` | `max` | `openai/gpt-5.5` | `gpt-5.5` (xhigh) | `openai-codex/gpt-5.5:xhigh` |
-| `sonnet` | `sonnet` | `high` | `openai/gpt-5.5` | `gpt-5.5` (high) | `openai-codex/gpt-5.5:high` |
-| `haiku` | `haiku` | `medium` | `openai/gpt-5.5` | `gpt-5.5` (medium) | `openai-codex/gpt-5.5:medium` |
+| Canonical | Claude Code | OpenCode | Codex | Pi |
+|-----------|-------------|----------|-------|-----|
+| `opus` | `opus[1m]` | `openai/gpt-5.5` | `gpt-5.5` | `openai-codex/gpt-5.5` |
+| `sonnet` | `sonnet` | `openai/gpt-5.5` | `gpt-5.5` | `openai-codex/gpt-5.5` |
+| `haiku` | `haiku` | `openai/gpt-5.5` | `gpt-5.5` | `openai-codex/gpt-5.5` |
+
+Each canonical agent declares its own `effort:` in frontmatter. Harnesses write it verbatim — no cross-harness translation, no derivation from `model`. Valid values: `low`, `medium`, `high`, `xhigh` (and Claude additionally accepts `max`). Pi appends the effort to its model id as `:<effort>` when set.
 
 ## Per-Harness Tool Overrides
 
-- Prefer `deny-tools`. Claude Code writes it as native `disallowedTools`, derives `background` from Pi `pane` (`pane = true` → `background = false`, `pane = false` → `background = true`), omits `isolation`/`memory` unless configured, and maps `xhigh` effort to Claude `max`. OpenAI-style harnesses (OpenCode, Codex, Pi) map `max` effort back to `xhigh`. Pi emits `deny-tools` for `pi-agents-tmux` (default = active parent tools minus denials). OpenCode defaults generated agents to `mode: subagent`, still exposes `mode` for rare primary-agent overrides, emits `permission: <tool>: deny` entries from the same deny list, maps `color` to hex values, and writes reasoning under `options.reasoningEffort` with summary/verbosity defaults.
+- Prefer `deny-tools`. Claude Code writes it as native `disallowedTools`, derives `background` from Pi `pane` (`pane = true` → `background = false`, `pane = false` → `background = true`), and omits `isolation`/`memory` unless configured. Pi emits `deny-tools` for `pi-agents-tmux` (default = active parent tools minus denials). OpenCode defaults generated agents to `mode: subagent`, still exposes `mode` for rare primary-agent overrides, emits `permission: <tool>: deny` entries from the same deny list, maps `color` to hex values, and writes reasoning under `options.reasoningEffort` with summary/verbosity defaults.
 - Cursor and Codex don't use the same per-agent tool-deny frontmatter; Codex subagents use sandbox/approval configuration instead.
 
 ## Rules

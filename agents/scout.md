@@ -3,6 +3,7 @@ name: scout
 description: "Fast reconnaissance agent for exploring codebases, finding files by pattern, searching keywords, answering architecture questions, and returning compressed cited context or report artifacts. Specify thoroughness: quick, medium, or very thorough."
 model: haiku
 role: analyst
+effort: medium
 color: cyan
 ---
 

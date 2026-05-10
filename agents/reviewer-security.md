@@ -3,6 +3,7 @@ name: reviewer-security
 description: OWASP vulnerability reviewer. Use for auth logic, user input handling, API endpoint security review.
 model: opus
 role: reviewer
+effort: xhigh
 color: red
 ---
 

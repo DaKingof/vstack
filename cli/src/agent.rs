@@ -16,6 +16,11 @@ pub struct Agent {
     pub role: AgentRole,
     #[serde(default)]
     pub color: Option<String>,
+    /// Reasoning effort. Written verbatim by each harness; no cross-harness
+    /// translation. Valid values depend on the target harness — Claude accepts
+    /// `low|medium|high|xhigh|max`; OpenAI-style harnesses cap at `xhigh`.
+    #[serde(default)]
+    pub effort: Option<String>,
     /// Body markdown (everything after frontmatter)
     #[serde(skip)]
     pub body: String,
@@ -113,26 +118,6 @@ pub fn model_id_for(provider: &str, model: &str) -> String {
             other => other.into(),
         },
         _ => base,
-    }
-}
-
-/// Canonical reasoning effort associated with vstack's model tiers.
-/// Harnesses may map this to their own field/syntax.
-pub fn effort_for_model(model: &str) -> Option<&'static str> {
-    match model.to_lowercase().as_str() {
-        "opus" => Some("xhigh"),
-        "sonnet" => Some("high"),
-        "haiku" => Some("medium"),
-        _ => None,
-    }
-}
-
-/// Normalize effort values for OpenAI-compatible providers.
-/// Claude Code supports `max`; OpenAI/Pi/Codex/OpenCode cap at `xhigh`.
-pub fn openai_effort_name(effort: &str) -> String {
-    match effort.trim().to_ascii_lowercase().as_str() {
-        "max" => "xhigh".into(),
-        other => other.into(),
     }
 }
 

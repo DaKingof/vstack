@@ -3,6 +3,7 @@ name: reviewer-safety
 description: Memory and thread safety auditor. Use for unsafe code audits, data race detection, or lock-free correctness verification. Does NOT write code.
 model: opus
 role: reviewer
+effort: xhigh
 color: red
 ---
 
