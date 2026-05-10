@@ -1376,16 +1376,6 @@ fn upsert_missing_inline_table_fields(
             let existing_keys: HashSet<String> =
                 fields.iter().map(|(key, _)| key.clone()).collect();
             for (key, value) in defaults {
-                if section == "[agent-frontmatter.claude]" && key == "background" {
-                    if let Some((_, existing_value)) =
-                        fields.iter_mut().find(|(field, _)| field == key)
-                    {
-                        *existing_value = value.clone();
-                    } else {
-                        fields.push((key.clone(), value.clone()));
-                    }
-                    continue;
-                }
                 if section == "[agent-frontmatter.opencode]" && key == "mode" {
                     if let Some((_, existing_value)) =
                         fields.iter_mut().find(|(field, _)| field == key)
@@ -2005,11 +1995,8 @@ fn agent_frontmatter_heading() -> String {
     out.push_str("# Harness-specific entries apply only to that harness.\n");
     out.push_str("# Fields: color, model, effort, deny-tools, pane, background,\n");
     out.push_str("# isolation, memory, mode, sandbox-mode, model-reasoning-effort.\n");
-    out.push_str("# Claude background mirrors Pi pane: pane=true -> false, pane=false -> true.\n");
-    out.push_str("# Claude maps effort = \"xhigh\" to effort = \"max\".\n");
-    out.push_str(
-        "# OpenCode maps colors to hex. OpenAI/Pi/Codex map effort = \"max\" to \"xhigh\".\n",
-    );
+    out.push_str("# Claude background is seeded from Pi pane on first install (pane=true -> false, pane=false -> true), then preserved on refresh.\n");
+    out.push_str("# OpenCode maps colors to hex. Effort values are written verbatim per harness.\n");
     out.push_str("#\n");
     out
 }
@@ -2639,7 +2626,7 @@ researcher = { model = "opus[1m]", effort = "xhigh", background = true, isolatio
     }
 
     #[test]
-    fn write_agent_frontmatter_defaults_syncs_claude_background_from_pi_pane() {
+    fn write_agent_frontmatter_defaults_preserves_existing_claude_background() {
         let dir = std::env::temp_dir().join(format!(
             "vstack_test_agent_frontmatter_pane_background_{}",
             std::process::id()
@@ -2647,6 +2634,10 @@ researcher = { model = "opus[1m]", effort = "xhigh", background = true, isolatio
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("vstack.toml");
+        // Scout: Pi pane=false would derive background=true, but user set
+        // background=false explicitly. Planner: pane=true would derive
+        // background=false, but user set background=true explicitly. Both
+        // user edits must survive refresh.
         std::fs::write(
             &path,
             r#"
@@ -2697,11 +2688,84 @@ planner = { background = true }
             ],
         );
 
-        write_agent_frontmatter_defaults(&dir, &[scout, planner], &harnesses, &crate::mapping::MappingConfig::default());
+        write_agent_frontmatter_defaults(
+            &dir,
+            &[scout, planner],
+            &harnesses,
+            &crate::mapping::MappingConfig::default(),
+        );
 
         let updated = std::fs::read_to_string(&path).unwrap();
-        assert!(updated.contains("scout = { model = \"haiku\", effort = \"medium\", deny-tools = [\"Agent\", \"AskUserQuestion\"], background = true"));
-        assert!(updated.contains("planner = { model = \"opus[1m]\", effort = \"max\", deny-tools = [\"Agent\"], background = false"));
+        let scout_line = updated
+            .lines()
+            .find(|line| line.starts_with("scout =") && line.contains("background"))
+            .expect("scout claude line");
+        assert!(
+            scout_line.contains("background = false"),
+            "scout background should stay false: {scout_line}"
+        );
+        let planner_line = updated
+            .lines()
+            .find(|line| line.starts_with("planner =") && line.contains("background"))
+            .expect("planner claude line");
+        assert!(
+            planner_line.contains("background = true"),
+            "planner background should stay true: {planner_line}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_agent_frontmatter_defaults_seeds_claude_background_from_pi_pane_on_first_install() {
+        let dir = std::env::temp_dir().join(format!(
+            "vstack_test_agent_frontmatter_pane_seed_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vstack.toml");
+        // No prior [agent-frontmatter.claude] entries — the section is empty,
+        // so background is seeded from Pi pane (scout pane=false → bg=true).
+        std::fs::write(
+            &path,
+            r#"
+[agent-frontmatter.pi]
+scout = { pane = false }
+
+[agent-frontmatter.claude]
+"#,
+        )
+        .unwrap();
+
+        let scout = crate::agent::Agent {
+            name: "scout".into(),
+            description: "Scout agent".into(),
+            model: "haiku".into(),
+            role: crate::agent::AgentRole::Analyst,
+            color: None,
+            effort: Some("medium".into()),
+            body: String::new(),
+            source_path: std::path::PathBuf::new(),
+        };
+        let mut harnesses = HashMap::new();
+        harnesses.insert(
+            "scout".into(),
+            vec![
+                crate::harness::Harness::ClaudeCode,
+                crate::harness::Harness::Pi,
+            ],
+        );
+
+        write_agent_frontmatter_defaults(
+            &dir,
+            &[scout],
+            &harnesses,
+            &crate::mapping::MappingConfig::default(),
+        );
+
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(updated.contains("background = true"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
