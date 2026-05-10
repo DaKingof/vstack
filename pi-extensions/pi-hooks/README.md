@@ -1,6 +1,6 @@
 # @vanillagreen/pi-hooks
 
-![pi-hooks settings panel](assets/hooks-settings.png)
+![pi-hooks settings panel](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-hooks/assets/hooks-settings.png)
 
 First-class Pi port of the vstack safety hooks. Same behaviors as the shell scripts in `vstack/hooks/`, implemented natively against Pi's `tool_call` / `tool_result` / `turn_end` event API so they participate in Pi's tool lifecycle without spawning a shell.
 
