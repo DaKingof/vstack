@@ -34,3 +34,7 @@ Read architecture/guidance docs relevant to your role: coverage targets (per-pat
 
 - Coverage gaps, missing scenarios → `blockers[]`
 - Quality improvements, nice-to-have tests → `suggestions[]`
+
+## Reporting
+
+- **Failures must be reported**: If there is a logic error, script failure, or provenly incorrect guidance, the error must absolutely be reported to the orchestrating agent and user upon your return.

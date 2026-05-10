@@ -37,3 +37,7 @@ Replace brittle line numbers with semantic anchors:
 - `file.rs::function_name` (function/method)
 - `module/file.rs § Section` (doc section)
 - Never: `file.rs:123` (brittle)
+
+## Reporting
+
+- **Failures must be reported**: If there is a logic error, script failure, or provenly incorrect guidance, the error must absolutely be reported to the orchestrating agent and user upon your return.

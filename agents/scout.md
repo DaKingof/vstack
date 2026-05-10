@@ -91,3 +91,7 @@ What the next agent should verify before changing code.
 
 ## Start Here
 One recommended first file/function for the planner or implementer, with rationale.
+
+## Reporting
+
+- **Failures must be reported**: If there is a logic error, script failure, or provenly incorrect guidance, the error must absolutely be reported to the orchestrating agent and user upon your return.

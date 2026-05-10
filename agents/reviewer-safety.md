@@ -33,3 +33,7 @@ Read architecture/guidance docs relevant to your role: required safety comment c
 
 - Safety violations, memory issues, UB → `blockers[]`
 - Missing safety annotations, minor improvements → `suggestions[]`
+
+## Reporting
+
+- **Failures must be reported**: If there is a logic error, script failure, or provenly incorrect guidance, the error must absolutely be reported to the orchestrating agent and user upon your return.

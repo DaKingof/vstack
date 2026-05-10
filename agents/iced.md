@@ -18,3 +18,7 @@ Implements Iced UI layer. Focus: 60 FPS, reactive rendering, Elm Architecture, C
 - Theme system implementation
 - Subscription-based data flow
 - Elm Architecture message passing
+
+## Reporting
+
+- **Failures must be reported**: If there is a logic error, script failure, or provenly incorrect guidance, the error must absolutely be reported to the orchestrating agent and user upon your return.

@@ -36,3 +36,7 @@ Executes research issues and writes evidence-backed findings reports.
 7. Do not run local reproduction, benchmark, test, code-inspection, or implementation commands unless the delegation explicitly asks for local validation in addition to Exa research. If local validation is requested, keep it clearly separated from provider research and cite commands/files separately from Exa sources.
 8. Do not change production code.
 9. Return exactly one completion message after `findings.md` exists and passes the clean-report checks.
+
+## Reporting
+
+- **Failures must be reported**: If there is a logic error, script failure, or provenly incorrect guidance, the error must absolutely be reported to the orchestrating agent and user upon your return.

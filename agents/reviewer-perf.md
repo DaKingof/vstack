@@ -33,3 +33,7 @@ Read architecture/guidance docs relevant to your role: regression thresholds (pe
 
 - Budget exceedances → `blockers[]`
 - Minor performance observations → `suggestions[]`
+
+## Reporting
+
+- **Failures must be reported**: If there is a logic error, script failure, or provenly incorrect guidance, the error must absolutely be reported to the orchestrating agent and user upon your return.
