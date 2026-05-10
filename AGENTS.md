@@ -7,41 +7,23 @@ Cross-harness distribution system for AI coding skills, agents, hooks, and Pi ex
 ```
 cli/src/
 ├── main.rs              CLI entry; routes to commands/
-├── commands/
-│   ├── add.rs           Install wizard (TUI or --yes), reconciliation
-│   ├── remove.rs        Uninstall skills/agents, cleanup
-│   ├── list.rs          Show installed skills and agents
-│   ├── check.rs         Validate installation status
-│   ├── update.rs        Self-update to latest release
-│   ├── update_pi.rs     Update Pi packages by version (npm or vstack repos), grouped by (scope, sourceRepo)
-│   ├── verify.rs        Lock-vs-source hash check + byte-level Pi-package source-vs-install drift detection
-│   ├── refresh.rs       Reinstall locked items from source; re-applies vstack.toml
-│   └── init.rs          Scaffold new skill/agent template
-├── agent.rs             Agent parsing, skill/hook matching heuristics
-├── skill.rs             Skill parsing, frontmatter dependency resolution
-├── hook.rs              Hook parsing (YAML-in-comments frontmatter from .sh)
+├── commands/            add, remove, list, check, update, update_pi, verify, refresh, init
 ├── pi_extension.rs      Pi extension discovery, install/remove, settings.json merge
-├── frontmatter.rs       YAML frontmatter splitting/parsing
 ├── config.rs            Lock file (JSON), project root detection, staleness/mtime helpers
-├── scope.rs             Scope enum (project | global | all) and uniform `--scope`/`-g` parsing
+├── scope.rs             Scope enum (project | global | all); uniform `--scope`/`-g` parsing
 ├── mapping.rs           Source vstack.toml — MappingConfig (agent-skills, role-skills, hook-events)
 ├── project_config.rs    Project vstack.toml — ProjectConfig, ensure/write/update
 ├── resolve.rs           Shared helpers — skill-pair resolution, read_existing_extras, is_vstack_source
 ├── installer.rs         Symlink/copy logic, per-harness hook installation, removal
-├── harness/
-│   ├── mod.rs           Harness enum, detection, routing
+├── harness/             (canonical → per-harness translation)
 │   ├── claude.rs        → .claude/agents/*.md (tools/disallowedTools, effort/background/isolation/memory, skills, hooks frontmatter)
 │   ├── cursor.rs        → .cursor/rules/*.mdc (description + alwaysApply + skills)
 │   ├── opencode.rs      → .opencode/agents/*.md (YAML frontmatter + skills)
 │   ├── codex.rs         → .codex/agents/*.toml (developer_instructions + skills)
 │   └── pi.rs            → .pi/agents/*.md (name, description, deny-tools, optional tools, model, pane)
-└── tui/
-    ├── mod.rs           Re-exports and shared types
-    ├── install_flow.rs  Install wizard, event loop, inline update
-    ├── state.rs         Installed state, staleness detection, tab building
-    ├── summary.rs       Post-install summary
-    ├── multiselect.rs   Selection state, scroll, toggle, confirm dialog
-    └── render.rs        Ratatui rendering
+└── tui/                 Install wizard: install_flow, state, summary, multiselect, render
+
+(agent.rs, skill.rs, hook.rs, frontmatter.rs are simple parsers — names match their job.)
 
 vstack.toml              Skill/hook-to-agent mapping (read at install)
 agents/                  Canonical agents — `role` field drives per-harness access control
