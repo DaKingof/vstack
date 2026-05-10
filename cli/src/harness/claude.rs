@@ -1,4 +1,4 @@
-use crate::agent::{self, Agent, AgentRole};
+use crate::agent::{self, Agent};
 use crate::hook::Hook;
 use anyhow::Result;
 use std::collections::BTreeMap;
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 /// Generate a Claude Code agent file (.claude/agents/<name>.md)
 ///
-/// Format: YAML frontmatter with name, description, model, tools/disallowedTools,
+/// Format: YAML frontmatter with name, description, model, disallowedTools,
 /// color, skills, hooks followed by markdown body.
 pub fn generate_agent(
     agent: &Agent,
@@ -38,9 +38,10 @@ pub fn generate_agent(
     if let Some(effort) = claude_effort_for(agent, &frontmatter) {
         output.push_str(&format!("effort: {}\n", effort));
     }
-    if let Some(background) = claude_background_for(agent, &frontmatter) {
-        output.push_str(&format!("background: {}\n", background));
-    }
+    output.push_str(&format!(
+        "background: {}\n",
+        claude_background_for(&frontmatter)
+    ));
     if let Some(isolation) = claude_isolation_for(&frontmatter) {
         output.push_str(&format!("isolation: {}\n", isolation));
     }
@@ -48,11 +49,6 @@ pub fn generate_agent(
         output.push_str(&format!("memory: {}\n", memory));
     }
 
-    if let Some(tools) = claude_tools_override(frontmatter.tools.as_deref()) {
-        if !tools.is_empty() {
-            output.push_str(&format!("tools: {}\n", tools.join(", ")));
-        }
-    }
     let disallowed_tools = claude_disallowed_tools_for(agent, frontmatter.deny_tools.as_deref());
     if !disallowed_tools.is_empty() {
         output.push_str(&format!(
@@ -114,26 +110,25 @@ fn claude_effort_for(
         .clone()
         .or_else(|| agent::effort_for_model(&agent.model).map(String::from))
         .filter(|effort| !is_none_value(effort))
+        .map(|effort| claude_effort_name(&effort))
 }
 
-fn claude_background_for(
-    agent: &Agent,
-    frontmatter: &agent::AgentFrontmatterOverrides,
-) -> Option<bool> {
-    frontmatter.background.or_else(|| {
-        let pane = frontmatter.pane.unwrap_or_else(|| {
-            matches!(agent.role, AgentRole::Engineer) || agent.name.eq_ignore_ascii_case("planner")
-        });
-        pane.then_some(true)
-    })
+fn claude_effort_name(effort: &str) -> String {
+    match effort.trim().to_ascii_lowercase().as_str() {
+        "xhigh" => "max".into(),
+        other => other.into(),
+    }
+}
+
+fn claude_background_for(frontmatter: &agent::AgentFrontmatterOverrides) -> bool {
+    frontmatter.background.unwrap_or(false)
 }
 
 fn claude_isolation_for(frontmatter: &agent::AgentFrontmatterOverrides) -> Option<String> {
-    let isolation = frontmatter
+    frontmatter
         .isolation
         .clone()
-        .unwrap_or_else(|| "worktree".into());
-    (!is_none_value(&isolation)).then_some(isolation)
+        .filter(|isolation| !is_none_value(isolation))
 }
 
 fn claude_memory_for(frontmatter: &agent::AgentFrontmatterOverrides) -> Option<String> {
@@ -150,28 +145,22 @@ fn is_none_value(value: &str) -> bool {
     )
 }
 
-fn claude_tools_override(override_tools: Option<&[String]>) -> Option<Vec<String>> {
-    override_tools
-        .map(|tools| dedupe_tools(tools.iter().map(|tool| claude_tool_name(tool)).collect()))
+fn claude_disallowed_tools_for(agent: &Agent, deny_tools: Option<&[String]>) -> Vec<String> {
+    let mut tools = claude_default_deny_tools_for(agent);
+    if let Some(deny_tools) = deny_tools {
+        tools.extend(deny_tools.iter().map(|tool| claude_tool_name(tool)));
+    }
+    dedupe_tools(tools)
 }
 
-fn claude_disallowed_tools_for(agent: &Agent, deny_tools: Option<&[String]>) -> Vec<String> {
-    if let Some(deny_tools) = deny_tools {
-        return dedupe_tools(
-            deny_tools
-                .iter()
-                .map(|tool| claude_tool_name(tool))
-                .collect(),
-        );
+fn claude_default_deny_tools_for(agent: &Agent) -> Vec<String> {
+    // Claude Code agents should not recursively spawn other agents by default.
+    // Keep planner able to ask the user; all other vstack agents should return to parent instead.
+    let mut tools = vec!["Agent".into()];
+    if !agent.name.eq_ignore_ascii_case("planner") {
+        tools.push("Question".into());
     }
-    let tools: Vec<String> = match agent.role {
-        // Claude Code subagents should not recursively spawn other subagents.
-        // Write-capable tools stay available so any agent can produce report artifacts.
-        AgentRole::Engineer | AgentRole::Analyst | AgentRole::Reviewer | AgentRole::Manager => {
-            vec!["Task".into()]
-        }
-    };
-    dedupe_tools(tools)
+    tools
 }
 
 fn claude_tool_name(tool: &str) -> String {
@@ -193,7 +182,8 @@ fn claude_tool_name(tool: &str) -> String {
         "websearch" => "WebSearch".into(),
         "todowrite" => "TodoWrite".into(),
         "todoread" => "TodoRead".into(),
-        "task" | "agent" => "Task".into(),
+        "task" | "agent" | "subagent" | "spawnagent" | "spawnagentsoncsv" => "Agent".into(),
+        "question" => "Question".into(),
         "notebookread" => "NotebookRead".into(),
         "notebookedit" => "NotebookEdit".into(),
         _ => tool.trim().to_string(),
@@ -259,7 +249,7 @@ fn format_hooks_yaml_with_custom(hooks: &[Hook], custom: &[agent::CustomHookEntr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{AgentExtras, AgentFrontmatterOverrides};
+    use crate::agent::{AgentExtras, AgentFrontmatterOverrides, AgentRole};
 
     fn agent_fixture(name: &str, role: AgentRole) -> Agent {
         Agent {
@@ -286,15 +276,16 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.contains("\ntools:"));
         assert!(content.contains("effort: high"));
-        assert!(content.contains("isolation: worktree"));
+        assert!(content.contains("background: false"));
+        assert!(!content.contains("isolation:"));
         assert!(!content.contains("memory:"));
-        assert!(content.contains("disallowedTools: Task"));
+        assert!(content.contains("disallowedTools: Agent, Question"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn generate_agent_honors_tools_override_and_normalizes_common_names() {
+    fn generate_agent_ignores_tools_override_and_keeps_deny_only_defaults() {
         let dir = std::env::temp_dir().join(format!(
             "vstack_claude_agent_tools_override_{}",
             std::process::id()
@@ -319,8 +310,8 @@ mod tests {
         };
         let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("tools: Read, Grep, Glob, Bash, WebSearch, mcp__custom"));
-        assert!(content.contains("disallowedTools: Task"));
+        assert!(!content.contains("\ntools:"));
+        assert!(content.contains("disallowedTools: Agent, Question"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -337,7 +328,12 @@ mod tests {
         let agent = agent_fixture("rust", AgentRole::Engineer);
         let extras = AgentExtras {
             frontmatter: AgentFrontmatterOverrides {
-                deny_tools: Some(vec!["bash".into(), "task".into(), "write".into()]),
+                deny_tools: Some(vec![
+                    "bash".into(),
+                    "task".into(),
+                    "write".into(),
+                    "question".into(),
+                ]),
                 ..Default::default()
             },
             ..Default::default()
@@ -345,7 +341,7 @@ mod tests {
         let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.contains("\ntools:"));
-        assert!(content.contains("disallowedTools: Bash, Task, Write"));
+        assert!(content.contains("disallowedTools: Agent, Question, Bash, Write"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -371,9 +367,9 @@ mod tests {
         let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("model: opus[1m]"));
-        assert!(content.contains("effort: xhigh"));
-        assert!(content.contains("background: true"));
-        assert!(content.contains("isolation: worktree"));
+        assert!(content.contains("effort: max"));
+        assert!(content.contains("background: false"));
+        assert!(!content.contains("isolation:"));
         assert!(content.contains("memory: project"));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -405,6 +401,36 @@ mod tests {
         assert!(content.contains("background: false"));
         assert!(!content.contains("isolation:"));
         assert!(!content.contains("memory:"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generate_agent_honors_explicit_claude_runtime_overrides() {
+        let dir = std::env::temp_dir().join(format!(
+            "vstack_claude_agent_runtime_override_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let agent = agent_fixture("planner", AgentRole::Analyst);
+        let extras = AgentExtras {
+            frontmatter: AgentFrontmatterOverrides {
+                background: Some(true),
+                isolation: Some("worktree".into()),
+                memory: Some("local".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("background: true"));
+        assert!(content.contains("isolation: worktree"));
+        assert!(content.contains("memory: local"));
+        assert!(content.contains("disallowedTools: Agent"));
+        assert!(!content.contains("Question"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

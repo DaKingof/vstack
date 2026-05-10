@@ -27,24 +27,26 @@ pub fn generate_agent(
         .as_deref()
         .unwrap_or(match agent.role {
             // Analysts/reviewers still need to write report artifacts; prompts constrain them to report-only work.
-            AgentRole::Analyst | AgentRole::Reviewer => "workspace-write",
+            AgentRole::Analyst | AgentRole::Reviewer | AgentRole::Manager => "workspace-write",
             AgentRole::Engineer => "danger-full-access",
-            AgentRole::Manager => "danger-full-access",
         });
 
     // Map model to reasoning effort
     let lower = agent.model.to_lowercase();
-    let (model, reasoning_effort) = match lower.as_str() {
+    let (model, default_reasoning_effort) = match lower.as_str() {
         "opus" => ("gpt-5.5", "xhigh"),
         "sonnet" => ("gpt-5.5", "high"),
         "haiku" => ("gpt-5.5", "medium"),
         other => (other, "high"),
     };
     let model = frontmatter.model.as_deref().unwrap_or(model);
-    let reasoning_effort = frontmatter
-        .model_reasoning_effort
-        .as_deref()
-        .unwrap_or(reasoning_effort);
+    let reasoning_effort = agent::openai_effort_name(
+        frontmatter
+            .model_reasoning_effort
+            .as_deref()
+            .or(frontmatter.effort.as_deref())
+            .unwrap_or(default_reasoning_effort),
+    );
 
     // Build TOML manually to control format (triple-quoted developer_instructions)
     let mut output = String::new();
@@ -84,4 +86,58 @@ pub fn generate_agent(
 
 fn escape_toml(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::{AgentExtras, AgentRole};
+
+    fn agent_fixture(name: &str, role: AgentRole) -> Agent {
+        Agent {
+            name: name.into(),
+            description: "Codex test agent".into(),
+            model: "sonnet".into(),
+            role,
+            color: None,
+            body: format!("# {name}\n\nIntro.\n"),
+            source_path: PathBuf::new(),
+        }
+    }
+
+    #[test]
+    fn manager_defaults_to_workspace_write() {
+        let dir = std::env::temp_dir().join(format!("vstack_codex_manager_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let agent = agent_fixture("tpm", AgentRole::Manager);
+        let path = generate_agent(&agent, &dir, &[], &[], &[], &AgentExtras::default())
+            .expect("generate ok");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("sandbox_mode = \"workspace-write\""));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shared_effort_override_maps_max_to_xhigh() {
+        let dir = std::env::temp_dir().join(format!("vstack_codex_effort_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let agent = agent_fixture("scout", AgentRole::Analyst);
+        let extras = AgentExtras {
+            frontmatter: agent::AgentFrontmatterOverrides {
+                effort: Some("max".into()),
+                ..Default::default()
+            },
+            ..AgentExtras::default()
+        };
+        let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("model_reasoning_effort = \"xhigh\""));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

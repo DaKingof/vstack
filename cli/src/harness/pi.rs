@@ -35,10 +35,9 @@ pub fn generate_agent(
     let path = dir.join(format!("{}.md", agent.name));
 
     let frontmatter = extras.frontmatter_for("pi");
-    let model = frontmatter
-        .model
-        .clone()
-        .unwrap_or_else(|| pi_model_for(&agent.model));
+    let model = frontmatter.model.clone().unwrap_or_else(|| {
+        pi_model_for_with_effort(&agent.model, pi_effort_for(agent, &frontmatter))
+    });
     let deny_tools = pi_deny_tools_for(agent, &frontmatter);
 
     let mut output = String::new();
@@ -94,19 +93,44 @@ pub fn generate_agent(
 /// `--model` flag), so we encode the canonical effort level alongside
 /// the model id. Users can still override per-agent in source frontmatter.
 pub fn pi_model_for(model: &str) -> String {
+    pi_model_for_with_effort(
+        model,
+        agent::effort_for_model(model).map(agent::openai_effort_name),
+    )
+}
+
+fn pi_model_for_with_effort(model: &str, effort: Option<String>) -> String {
+    let effort_suffix = effort
+        .filter(|effort| !is_none_value(effort))
+        .map(|effort| format!(":{effort}"))
+        .unwrap_or_default();
     match model.to_lowercase().as_str() {
-        "opus" => "openai-codex/gpt-5.5:xhigh".into(),
-        "sonnet" => "openai-codex/gpt-5.5:high".into(),
-        "haiku" => "openai-codex/gpt-5.5:medium".into(),
+        "opus" | "sonnet" | "haiku" => format!("openai-codex/gpt-5.5{effort_suffix}"),
         other => other.into(),
     }
 }
 
-fn pi_deny_tools_for(agent: &Agent, frontmatter: &agent::AgentFrontmatterOverrides) -> Vec<String> {
-    let tools = frontmatter
-        .deny_tools
+fn pi_effort_for(agent: &Agent, frontmatter: &agent::AgentFrontmatterOverrides) -> Option<String> {
+    frontmatter
+        .model_reasoning_effort
         .clone()
-        .unwrap_or_else(|| pi_default_deny_tools_for(agent));
+        .or_else(|| frontmatter.effort.clone())
+        .or_else(|| agent::effort_for_model(&agent.model).map(String::from))
+        .map(|effort| agent::openai_effort_name(&effort))
+}
+
+fn is_none_value(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "none" | "false" | "off" | "no"
+    )
+}
+
+fn pi_deny_tools_for(agent: &Agent, frontmatter: &agent::AgentFrontmatterOverrides) -> Vec<String> {
+    let mut tools = pi_default_deny_tools_for(agent);
+    if let Some(deny_tools) = &frontmatter.deny_tools {
+        tools.extend(deny_tools.clone());
+    }
     dedupe_pi_tool_names(tools)
 }
 
@@ -226,6 +250,29 @@ mod tests {
     }
 
     #[test]
+    fn generate_agent_applies_openai_effort_override_to_pi_model_suffix() {
+        let dir =
+            std::env::temp_dir().join(format!("vstack_pi_agent_effort_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let agent = agent_fixture("scout", AgentRole::Analyst, "haiku");
+        let extras = AgentExtras {
+            frontmatter: agent::AgentFrontmatterOverrides {
+                effort: Some("max".into()),
+                ..Default::default()
+            },
+            ..AgentExtras::default()
+        };
+        let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("model: openai-codex/gpt-5.5:xhigh"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn generate_agent_ignores_explicit_tools_override_and_applies_deny_tools() {
         let dir =
             std::env::temp_dir().join(format!("vstack_pi_agent_deny_tools_{}", std::process::id()));
@@ -249,7 +296,9 @@ mod tests {
         let path = generate_agent(&agent, &dir, &[], &[], &[], &extras).expect("generate ok");
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.lines().any(|line| line.starts_with("tools:")));
-        assert!(content.contains("deny-tools: bash, apply-patch"));
+        assert!(content.contains(
+            "deny-tools: subagent, get_subagent_result, steer_subagent, stop_subagent, question, bash, apply-patch"
+        ));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

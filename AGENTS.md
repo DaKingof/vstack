@@ -16,7 +16,7 @@ cli/src/
 ├── resolve.rs           Shared helpers — skill-pair resolution, read_existing_extras, is_vstack_source
 ├── installer.rs         Symlink/copy logic, per-harness hook installation, removal
 ├── harness/             (canonical → per-harness translation)
-│   ├── claude.rs        → .claude/agents/*.md (tools/disallowedTools, effort/background/isolation/memory, skills, hooks frontmatter)
+│   ├── claude.rs        → .claude/agents/*.md (disallowedTools, effort/background/isolation/memory, skills, hooks frontmatter)
 │   ├── cursor.rs        → .cursor/rules/*.mdc (description + alwaysApply + skills)
 │   ├── opencode.rs      → .opencode/agents/*.md (YAML frontmatter + skills)
 │   ├── codex.rs         → .codex/agents/*.toml (developer_instructions + skills)
@@ -140,7 +140,7 @@ reviewer-perf = { deny-tools = ["bash", "edit"] }
 
 # Harness-specific overrides win over top-level entries.
 [agent-frontmatter.claude]
-planner = { background = true, isolation = "worktree", memory = "none" }
+planner = { background = true, isolation = "worktree", memory = "local" }
 
 [agent-frontmatter.pi]
 researcher = { model = "openai-codex/gpt-5.5:xhigh", deny-tools = ["bash"] }
@@ -154,13 +154,13 @@ trading-design = "Dark theme, green/red accents."
 
 | Canonical | Claude Code | Claude effort | OpenCode | Codex | Pi |
 |-----------|-------------|---------------|----------|-------|-----|
-| `opus` | `opus[1m]` | `xhigh` | `openai/gpt-5.5` | `gpt-5.5` (xhigh) | `openai-codex/gpt-5.5:xhigh` |
+| `opus` | `opus[1m]` | `max` | `openai/gpt-5.5` | `gpt-5.5` (xhigh) | `openai-codex/gpt-5.5:xhigh` |
 | `sonnet` | `sonnet` | `high` | `openai/gpt-5.5` | `gpt-5.5` (high) | `openai-codex/gpt-5.5:high` |
 | `haiku` | `haiku` | `medium` | `openai/gpt-5.5` | `gpt-5.5` (medium) | `openai-codex/gpt-5.5:medium` |
 
 ## Per-Harness Tool Overrides
 
-- Prefer `deny-tools`. Claude Code writes it as native `disallowedTools` and supports `effort`, `background`, `isolation`, `memory`. Pi emits `deny-tools` for `pi-agents-tmux` (default = active parent tools minus denials). OpenCode emits `permission: <tool>: deny` entries from the same deny list, maps `color` to theme/hex values, and writes reasoning under `options.reasoningEffort` with summary/verbosity defaults.
+- Prefer `deny-tools`. Claude Code writes it as native `disallowedTools`, emits `background: false` by default, omits `isolation`/`memory` unless configured, and maps `xhigh` effort to Claude `max`. OpenAI-style harnesses (OpenCode, Codex, Pi) map `max` effort back to `xhigh`. Pi emits `deny-tools` for `pi-agents-tmux` (default = active parent tools minus denials). OpenCode emits `permission: <tool>: deny` entries from the same deny list, maps `color` to hex values, and writes reasoning under `options.reasoningEffort` with summary/verbosity defaults.
 - Cursor and Codex don't use the same per-agent tool-deny frontmatter; Codex subagents use sandbox/approval configuration instead.
 
 ## Rules

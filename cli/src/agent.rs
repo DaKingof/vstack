@@ -117,6 +117,15 @@ pub fn effort_for_model(model: &str) -> Option<&'static str> {
     }
 }
 
+/// Normalize effort values for OpenAI-compatible providers.
+/// Claude Code supports `max`; OpenAI/Pi/Codex/OpenCode cap at `xhigh`.
+pub fn openai_effort_name(effort: &str) -> String {
+    match effort.trim().to_ascii_lowercase().as_str() {
+        "max" => "xhigh".into(),
+        other => other.into(),
+    }
+}
+
 /// Discover all agent files in a directory
 pub fn discover_agents(dir: &Path) -> Result<Vec<Agent>> {
     let mut agents = Vec::new();
@@ -233,8 +242,8 @@ pub struct AgentFrontmatterOverrides {
     /// Exact harness model id to write. Prefer harness-specific overrides when
     /// providers use different model id formats.
     pub model: Option<String>,
-    /// Legacy tool allowlist override. Prefer `deny-tools`; deny-only mappings are
-    /// portable across Claude Code, OpenCode, and Pi.
+    /// Legacy tool allowlist override parsed for old project configs. Current
+    /// harness generators ignore it; use `deny-tools` for portable restrictions.
     #[serde(default, deserialize_with = "deserialize_optional_tools")]
     pub tools: Option<Vec<String>>,
     /// Tool denylist applied after harness defaults.

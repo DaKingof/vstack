@@ -87,13 +87,13 @@ reviewer-perf = { deny-tools = ["bash", "edit"] }
 
 # Harness-specific frontmatter values win over top-level values.
 [agent-frontmatter.claude]
-planner = { background = true, isolation = "worktree", memory = "none" }
+planner = { background = true, isolation = "worktree", memory = "local" }
 
 [agent-frontmatter.pi]
 researcher = { color = "purple", model = "openai-codex/gpt-5.5:xhigh", deny-tools = ["bash"] }
 ```
 
-Prefer `deny-tools` for maintenance: Claude Code writes it as native `disallowedTools`, OpenCode writes it as `permission: <tool>: deny`, and Pi agents use it through the `pi-agents-tmux` extension while inheriting active tools by default. Claude Code also supports `effort`, `background`, `isolation`, and `memory` in generated subagent frontmatter; vstack defaults Claude `isolation` to `worktree`, defaults `memory` off, and maps Pi-style `pane` defaults to Claude `background: true`. OpenCode writes `color` as a theme color/hex and maps reasoning effort to `options.reasoningEffort` plus `reasoningSummary: auto` and `textVerbosity: medium`. Cursor/Codex do not have the same per-agent tool-deny frontmatter. For Pi agents installed through vstack, frontmatter edits belong in `[agent-frontmatter]` or a harness-specific table in `vstack.toml`, not in `.pi/agents/<name>.md`; generated agent files are overwritten by `vstack refresh`. The Pi `/agents` popup writes model/deny-tools/color changes to shared `[agent-frontmatter]` so all generated harness files update where those fields apply.
+Prefer `deny-tools` for maintenance: Claude Code writes it as native `disallowedTools`, OpenCode writes it as `permission: <tool>: deny`, and Pi agents use it through the `pi-agents-tmux` extension while inheriting active tools by default. Claude Code also supports `effort`, `background`, `isolation`, and `memory` in generated subagent frontmatter; vstack emits `background: false` by default, omits `isolation` and `memory` unless configured, and maps Claude `effort = "xhigh"` to `effort: max`. OpenAI-style harnesses map `effort = "max"` back to `xhigh`. OpenCode writes `color` as hex and maps reasoning effort to `options.reasoningEffort` plus `reasoningSummary: auto` and `textVerbosity: medium`. Cursor/Codex do not have the same per-agent tool-deny frontmatter. For Pi agents installed through vstack, frontmatter edits belong in `[agent-frontmatter]` or a harness-specific table in `vstack.toml`, not in `.pi/agents/<name>.md`; generated agent files are overwritten by `vstack refresh`. The Pi `/agents` popup writes model/deny-tools/color changes to shared `[agent-frontmatter]` so all generated harness files update where those fields apply.
 
 Custom safety hooks (`[[custom-hooks]]`) follow the same pattern. Direct edits to generated agent or skill files are also picked up automatically where possible, but `vstack.toml` is the stable home for generated frontmatter overrides and reusable project guidance.
 

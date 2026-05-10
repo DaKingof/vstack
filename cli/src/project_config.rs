@@ -1397,10 +1397,14 @@ fn agent_frontmatter_heading() -> String {
     out.push_str("# Supported fields: color, model, effort, deny-tools, pane,\n");
     out.push_str("# background, isolation, memory, mode, sandbox-mode, model-reasoning-effort.\n");
     out.push_str("# Unknown fields ignored. Claude: effort/background/isolation/memory.\n");
+    out.push_str("# Claude maps effort = \"xhigh\" to effort = \"max\".\n");
+    out.push_str(
+        "# OpenCode maps colors to hex. OpenAI/Pi/Codex map effort = \"max\" to \"xhigh\".\n",
+    );
     out.push_str("# Pi: pane/model suffix. Codex: model-reasoning-effort.\n");
     out.push_str("# Examples:\n");
     out.push_str("# rust = { color = \"green\" }\n");
-    out.push_str("# planner = { model = \"opus\", effort = \"xhigh\", background = true, isolation = \"worktree\", memory = \"none\", color = \"blue\" }\n");
+    out.push_str("# planner = { model = \"opus\", effort = \"xhigh\", background = true, isolation = \"worktree\", memory = \"local\", color = \"blue\" }\n");
     out.push_str("# reviewer-perf = { deny-tools = [\"bash\", \"edit\"] }\n");
     out.push_str("# scout = { deny-tools = [\"bash\"], isolation = \"none\" }\n");
     out.push_str("#\n");
@@ -2180,7 +2184,7 @@ rust = "Always use thiserror for errors."
         assert!(!updated.contains("beta\n\"\"\""));
         assert!(updated.contains("Agent Frontmatter"));
         assert!(updated.contains("Pi-specific frontmatter overrides"));
-        assert!(updated.contains("# planner = { model = \"opus\", effort = \"xhigh\", background = true, isolation = \"worktree\", memory = \"none\", color = \"blue\" }"));
+        assert!(updated.contains("# planner = { model = \"opus\", effort = \"xhigh\", background = true, isolation = \"worktree\", memory = \"local\", color = \"blue\" }"));
         assert!(updated.contains("# reviewer-perf = { deny-tools = [\"bash\", \"edit\"] }"));
         assert!(updated.contains("# rust = { color = \"orange\" }"));
         assert!(updated.contains("Generated frontmatter"));
