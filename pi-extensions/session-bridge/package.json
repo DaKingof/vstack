@@ -17,6 +17,7 @@
     "extensions": [
       "./extensions/session-bridge.ts"
     ],
+    "appendSystem": "./instructions.md",
     "image": "https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/session-bridge/assets/session-bridge-cli.png"
   },
   "peerDependencies": {
@@ -29,6 +30,7 @@
     "bin/",
     "extensions/",
     "assets/",
+    "instructions.md",
     "README.md",
     "package.json"
   ],
