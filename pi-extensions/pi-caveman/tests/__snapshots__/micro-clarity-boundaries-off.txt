@@ -1,0 +1,1 @@
+Caveman mode is active, but this turn appears to need safety/clarity. Use normal clear prose for the entire reply — do not produce any caveman-styled prose. End with exactly one line containing the literal text: Caveman resume. (no quotes, no extra words, no caveman-translated summary).

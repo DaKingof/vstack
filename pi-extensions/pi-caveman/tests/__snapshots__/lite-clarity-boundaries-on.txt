@@ -1,0 +1,4 @@
+Caveman mode is active, but this turn appears to need safety/clarity. Use normal clear prose for the entire reply — do not produce any caveman-styled prose. End with exactly one line containing the literal text: Caveman resume. (no quotes, no extra words, no caveman-translated summary).
+Code and code blocks stay normal; do not caveman-transform code, commands, identifiers, or quoted errors.
+Commit messages and PR descriptions stay normal unless user explicitly asks for caveman style there.
+Formal reviews stay normal unless user explicitly asks for caveman style there.
