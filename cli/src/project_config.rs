@@ -2258,7 +2258,7 @@ fn create_project_config(path: &Path, agents: &[String], skills: &[String]) {
     out.push_str("#\n");
     out.push_str("# [[custom-hooks]]\n");
     out.push_str(
-        "# event = \"PreToolUse\"      # PreToolUse | PostToolUse | PostCompact | TaskCompleted\n",
+        "# event = \"PreToolUse\"      # PreToolUse | PostToolUse | PostCompact | TaskCompleted | Stop | SessionStart | UserPromptSubmit | PermissionRequest\n",
     );
     out.push_str("# matcher = \"Bash\"           # optional: Bash | Edit|Write | (omit for all)\n");
     out.push_str("# command = \"./scripts/my-hook.sh\"\n");

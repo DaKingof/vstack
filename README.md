@@ -194,7 +194,19 @@ Windows: CLI runs natively; symlink mode falls back to copy.
 | `block-bare-cd` | `PreToolUse` | Blocks unsafe bare `cd` usage and nudges toward subshell-safe patterns. |
 | `pre-commit-check` | `PreToolUse` | Validates formatting and lint before commits. |
 | `post-edit-lint` | `PostToolUse` | Runs lint checks after source edits. |
-| `task-completed-check` | `TaskCompleted` | Runs final lint checks before marking work complete. |
+| `task-completed-check` | `TaskCompleted` | Runs final lint checks before marking work complete. Claude-Code-only — codex has no clean equivalent event. |
+
+Hook installation per harness:
+
+- **Claude Code** — script copied under `<scope>/.claude/hooks/`, registered in `settings.json` plus the owning agent's frontmatter.
+- **Codex** — native install when codex supports the event (`PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `PermissionRequest`, `SessionStart`, `UserPromptSubmit`, `Stop`): script copied to `<scope>/.codex/hooks/`, entry merged into `<scope>/.codex/hooks.json`, and `[features] codex_hooks = true` ensured in `config.toml`. Events without a codex equivalent fall back to a safety advisory appended to each agent's `developer_instructions`.
+- **Cursor** — safety advisory `.mdc` written under `<scope>/.cursor/rules/`.
+- **OpenCode** — permission rule + instruction file referenced from `opencode.json`.
+- **Pi** — same hook behaviors ship as a first-class Pi extension, `@vanillagreen/pi-hooks`. It listens on Pi's `tool_call`/`tool_result`/`turn_end` events and uses `{block: true, reason}` to short-circuit unsafe tool calls. Each hook is independently toggleable from the pi-extension-manager settings panel.
+
+Use `harnesses:` in a hook's frontmatter to scope it explicitly (e.g. `harnesses: [claude-code]`).
+
+**Parity:** changes to a hook script must land in the same commit as the matching change in `pi-extensions/pi-hooks/extensions/hooks.ts` — see [AGENTS.md](AGENTS.md) for the rule.
 
 ### Pi Extensions
 
@@ -211,6 +223,7 @@ Extensions can ship an `instructions.md` (declared via `pi.appendSystem` in `pac
 | [`pi-codex-minimal-tools`](pi-extensions/pi-codex-minimal-tools/README.md) | Codex-style image, patch, and image-generation tools alongside Pi natives. |
 | [`pi-extension-manager`](pi-extensions/pi-extension-manager/README.md) | Pi-styled package manager and inline settings editor. |
 | [`pi-flightdeck`](pi-extensions/pi-flightdeck/README.md) | ⚠️ **WIP — not production ready.** Mission-control dashboard for the `flightdeck` skill. |
+| [`pi-hooks`](pi-extensions/pi-hooks/README.md) | First-class Pi port of the vstack safety hooks: bare-cd blocking, pre-commit fmt+clippy, post-edit clippy, end-of-turn lint. |
 | [`pi-output-policy`](pi-extensions/pi-output-policy/README.md) | Large-output policy with truncation and spill-file preservation. |
 | [`pi-prompt-stash`](pi-extensions/pi-prompt-stash/README.md) | Per-session prompt stash history with stash/pop editor. |
 | [`pi-qol`](pi-extensions/pi-qol/README.md) | Compact statusline, multiline input, image chips, session naming and search. |

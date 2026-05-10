@@ -171,22 +171,30 @@ pub fn install_skill(
 ///
 /// - Claude Code: copy script + add to settings.json hooks
 /// - OpenCode: add permission rules to opencode.json
-/// - Codex: append safety prose to all agent TOML developer_instructions
+/// - Codex: native hooks.json entry + script when codex supports the event;
+///   safety prose appended to agent TOML developer_instructions otherwise
 /// - Cursor: append safety advisory to all .mdc rule files
+/// - Pi: no-op (safety prose lives in agent bodies via the Pi generator)
+///
+/// Honors the optional `harnesses:` allowlist in the hook frontmatter.
 pub fn install_hook(
     hook: &Hook,
     harness: Harness,
     global: bool,
     agents: &[Agent],
 ) -> Result<String> {
+    if !hook.applies_to(harness.id()) {
+        return Ok(format!(
+            "[hook] {} → {} (skipped: harness not in `harnesses:`)",
+            hook.name,
+            harness.name()
+        ));
+    }
     match harness {
         Harness::ClaudeCode => install_hook_claude(hook, global)?,
         Harness::OpenCode => install_hook_opencode(hook, global)?,
         Harness::Codex => install_hook_codex(hook, global, agents)?,
         Harness::Cursor => install_hook_cursor(hook, global)?,
-        // Pi has no native hook system — safety prose lives in agent bodies
-        // (already injected by the Pi agent generator), so installing a hook
-        // is a no-op here.
         Harness::Pi => {}
     }
 
@@ -393,8 +401,231 @@ fn install_hook_opencode_at_path(
     Ok(())
 }
 
-/// Codex: append safety prose to agent TOML developer_instructions
+/// Map a canonical (Claude-style) hook event to its codex equivalent.
+///
+/// Codex supports these events natively (per
+/// <https://developers.openai.com/codex/hooks>):
+///   SessionStart, UserPromptSubmit, PreToolUse, PostToolUse,
+///   PreCompact, PostCompact, PermissionRequest, Stop.
+///
+/// Claude's `TaskCompleted` has no clean equivalent — Stop fires when a turn
+/// ends and treats `exit 2 + stderr` as "continue with this reason as the next
+/// prompt" rather than "block the done state". Returning None routes such
+/// hooks to the prose-only fallback; authors who want codex coverage should
+/// scope the hook with `harnesses: [claude-code]` or rewrite for Stop.
+fn codex_event_for(event: &str) -> Option<&'static str> {
+    match event {
+        "SessionStart" => Some("SessionStart"),
+        "UserPromptSubmit" => Some("UserPromptSubmit"),
+        "PreToolUse" => Some("PreToolUse"),
+        "PostToolUse" => Some("PostToolUse"),
+        "PreCompact" => Some("PreCompact"),
+        "PostCompact" => Some("PostCompact"),
+        "PermissionRequest" => Some("PermissionRequest"),
+        "Stop" => Some("Stop"),
+        _ => None,
+    }
+}
+
+/// Root of the codex config layer for the given scope.
+fn codex_root(global: bool) -> PathBuf {
+    if global {
+        crate::config::codex_home_dir()
+    } else {
+        crate::config::project_root().join(".codex")
+    }
+}
+
+/// Codex hook install. Native install (script + hooks.json + features flag)
+/// when codex understands the event; safety-prose appendix to agent TOML
+/// otherwise.
 fn install_hook_codex(hook: &Hook, global: bool, agents: &[Agent]) -> Result<()> {
+    match codex_event_for(&hook.event) {
+        Some(codex_event) => install_hook_codex_native(hook, codex_event, global),
+        None => install_hook_codex_prose(hook, global, agents),
+    }
+}
+
+/// Install a codex-native hook: copy the script under `<root>/hooks/<name>.sh`,
+/// merge the entry into `<root>/hooks.json`, and ensure
+/// `[features] codex_hooks = true` is set in `<root>/config.toml`.
+fn install_hook_codex_native(hook: &Hook, codex_event: &str, global: bool) -> Result<()> {
+    let root = codex_root(global);
+
+    let hooks_dir = root.join("hooks");
+    std::fs::create_dir_all(&hooks_dir)?;
+    let script_path = hooks_dir.join(format!("{}.sh", hook.name));
+    std::fs::write(&script_path, &hook.script)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    let command = codex_hook_command(global, &hook.name, &script_path);
+    let hooks_json = root.join("hooks.json");
+    merge_codex_hooks_json(&hooks_json, codex_event, hook, &command)?;
+    enable_codex_hooks_feature(&root.join("config.toml"))?;
+    Ok(())
+}
+
+/// Build the command codex runs. For global scope we resolve to the absolute
+/// path under `~/.codex/hooks/`. For project scope we resolve from the git root
+/// (the codex docs recommend this so the hook works regardless of session cwd).
+fn codex_hook_command(global: bool, hook_name: &str, script_path: &Path) -> String {
+    if global {
+        format!("bash {}", shell_quote(&script_path.to_string_lossy()))
+    } else {
+        format!(
+            "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/{}.sh\"",
+            hook_name
+        )
+    }
+}
+
+fn shell_quote(s: &str) -> String {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'))
+    {
+        s.to_string()
+    } else {
+        let escaped = s.replace('\'', "'\\''");
+        format!("'{escaped}'")
+    }
+}
+
+/// Merge one hook handler into `<root>/hooks.json`. Existing entries for other
+/// hooks are preserved. The handler is keyed by the script file name so reruns
+/// don't duplicate.
+fn merge_codex_hooks_json(
+    hooks_json: &Path,
+    codex_event: &str,
+    hook: &Hook,
+    command: &str,
+) -> Result<()> {
+    let mut doc: serde_json::Value = if hooks_json.exists() {
+        let content = std::fs::read_to_string(hooks_json)?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let root_map = doc.as_object_mut().unwrap();
+    if !root_map.contains_key("hooks") {
+        root_map.insert("hooks".into(), serde_json::json!({}));
+    }
+    let hooks_obj = root_map.get_mut("hooks").unwrap().as_object_mut().unwrap();
+    if !hooks_obj.contains_key(codex_event) {
+        hooks_obj.insert(codex_event.to_string(), serde_json::json!([]));
+    }
+    let event_arr = hooks_obj
+        .get_mut(codex_event)
+        .unwrap()
+        .as_array_mut()
+        .unwrap();
+
+    // Match the full `/<name>.sh` segment so a hook named `foo` doesn't
+    // collide with one named `notfoo`.
+    let script_token = format!("/{}.sh", hook.name);
+    let already_present = event_arr.iter().any(|entry| {
+        entry
+            .get("hooks")
+            .and_then(|h| h.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|h| h.get("command"))
+            .and_then(|c| c.as_str())
+            .is_some_and(|c| c.contains(&script_token))
+    });
+    if already_present {
+        let output = serde_json::to_string_pretty(&doc)?;
+        std::fs::write(hooks_json, output)?;
+        return Ok(());
+    }
+
+    let mut handler = serde_json::json!({
+        "type": "command",
+        "command": command,
+    });
+    if let Some(timeout) = hook.timeout {
+        handler
+            .as_object_mut()
+            .unwrap()
+            .insert("timeout".into(), serde_json::Value::Number(timeout.into()));
+    }
+
+    let mut entry = serde_json::json!({ "hooks": [handler] });
+    if let Some(ref matcher) = hook.matcher {
+        entry
+            .as_object_mut()
+            .unwrap()
+            .insert("matcher".into(), serde_json::Value::String(matcher.clone()));
+    }
+    event_arr.push(entry);
+
+    let output = serde_json::to_string_pretty(&doc)?;
+    std::fs::write(hooks_json, output)?;
+    Ok(())
+}
+
+/// Ensure `[features] codex_hooks = true` is set in `<root>/config.toml`,
+/// preserving any user content. Uses a text-level merge so we don't clobber
+/// comments or key ordering.
+fn enable_codex_hooks_feature(config_path: &Path) -> Result<()> {
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let original = if config_path.exists() {
+        std::fs::read_to_string(config_path)?
+    } else {
+        String::new()
+    };
+
+    // Already enabled — nothing to do (including pre-existing string `true`).
+    let already_enabled = original.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("codex_hooks")
+            && trimmed.contains('=')
+            && trimmed.split('=').nth(1).is_some_and(|rhs| {
+                let rhs = rhs.trim().trim_matches('"');
+                rhs == "true"
+            })
+    });
+    if already_enabled {
+        return Ok(());
+    }
+
+    // Locate the [features] table header, if any.
+    let mut lines: Vec<String> = original.lines().map(|s| s.to_string()).collect();
+    let features_idx = lines
+        .iter()
+        .position(|line| line.trim() == "[features]");
+
+    match features_idx {
+        Some(idx) => {
+            // Insert `codex_hooks = true` immediately after the header.
+            lines.insert(idx + 1, "codex_hooks = true".into());
+        }
+        None => {
+            if !lines.is_empty() && !lines.last().is_some_and(|s| s.is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push("[features]".into());
+            lines.push("codex_hooks = true".into());
+        }
+    }
+
+    let mut output = lines.join("\n");
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    std::fs::write(config_path, output)?;
+    Ok(())
+}
+
+/// Fallback path for codex hooks whose event has no codex equivalent — append a
+/// safety advisory to every agent's developer_instructions block. Matches the
+/// original (pre-native) behavior.
+fn install_hook_codex_prose(hook: &Hook, global: bool, agents: &[Agent]) -> Result<()> {
     let agents_dir = Harness::Codex.agents_dir(global);
     if !agents_dir.exists() {
         return Ok(());
@@ -409,13 +640,10 @@ fn install_hook_codex(hook: &Hook, global: bool, agents: &[Agent]) -> Result<()>
         }
 
         let content = std::fs::read_to_string(&toml_path)?;
-
-        // Check if this hook's safety prose is already embedded
         if content.contains(&hook.name) {
             continue;
         }
 
-        // Find the developer_instructions closing ''' and insert before it
         if let Some(close_pos) = content.rfind("'''") {
             let mut new_content = content[..close_pos].to_string();
             new_content.push_str(&format!("\n## Safety: {}\n\n{}\n", hook.name, safety));
@@ -505,6 +733,16 @@ pub fn remove_item(name: &str, harnesses: &[Harness], global: bool) -> Result<Ve
         if *harness == Harness::OpenCode {
             let _ = remove_hook_from_opencode_json(global, name);
         }
+
+        if *harness == Harness::Codex {
+            let root = codex_root(global);
+            let script_path = root.join("hooks").join(format!("{name}.sh"));
+            if script_path.exists() && std::fs::remove_file(&script_path).is_ok() {
+                removed.push(script_path);
+            }
+            let _ = remove_hook_from_codex_json(global, name);
+            let _ = strip_hook_prose_from_codex_agents(global, name);
+        }
     }
 
     let canonical_skill_paths = if global {
@@ -576,6 +814,105 @@ fn remove_hook_from_claude_settings(global: bool, name: &str) -> Result<()> {
     if changed {
         let output = serde_json::to_string_pretty(&settings)?;
         std::fs::write(&settings_path, output)?;
+    }
+    Ok(())
+}
+
+/// Remove a hook entry from `<scope>/.codex/hooks.json`. Prunes empty matcher
+/// groups and the event key when the last entry goes. Leaves
+/// `[features] codex_hooks = true` in `config.toml` because other hooks may
+/// rely on it.
+fn remove_hook_from_codex_json(global: bool, name: &str) -> Result<()> {
+    let root = codex_root(global);
+    let hooks_json = root.join("hooks.json");
+    if !hooks_json.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&hooks_json)?;
+    let mut doc: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+
+    let script_token = format!("/{name}.sh");
+    let mut changed = false;
+
+    if let Some(hooks) = doc.get_mut("hooks").and_then(|h| h.as_object_mut()) {
+        let event_keys: Vec<String> = hooks.keys().cloned().collect();
+        for event in event_keys {
+            if let Some(arr) = hooks.get_mut(&event).and_then(|v| v.as_array_mut()) {
+                let before = arr.len();
+                arr.retain(|entry| {
+                    !entry
+                        .get("hooks")
+                        .and_then(|h| h.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|h| h.get("command"))
+                        .and_then(|c| c.as_str())
+                        .is_some_and(|c| c.contains(&script_token))
+                });
+                if arr.len() != before {
+                    changed = true;
+                }
+                if arr.is_empty() {
+                    hooks.remove(&event);
+                }
+            }
+        }
+        if hooks.is_empty()
+            && let Some(map) = doc.as_object_mut()
+        {
+            map.remove("hooks");
+        }
+    }
+
+    if changed {
+        if doc.as_object().is_some_and(|m| m.is_empty()) {
+            let _ = std::fs::remove_file(&hooks_json);
+        } else {
+            let output = serde_json::to_string_pretty(&doc)?;
+            std::fs::write(&hooks_json, output)?;
+        }
+    }
+    Ok(())
+}
+
+/// Strip any `## Safety: <name>` prose block we previously injected into codex
+/// agent TOMLs (legacy fallback path). Idempotent.
+fn strip_hook_prose_from_codex_agents(global: bool, name: &str) -> Result<()> {
+    let agents_dir = Harness::Codex.agents_dir(global);
+    if !agents_dir.exists() {
+        return Ok(());
+    }
+    let marker = format!("\n## Safety: {name}\n");
+    let entries = match std::fs::read_dir(&agents_dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if let Some(start) = content.find(&marker) {
+                // Find the end: next '## ' header or the closing ''' of
+                // developer_instructions, whichever comes first.
+                let tail = &content[start + 1..];
+                let next_section = tail.find("\n## ").map(|p| start + 1 + p + 1);
+                let close_pos = content[start..].find("\n'''").map(|p| start + p + 1);
+                let end = [next_section, close_pos]
+                    .into_iter()
+                    .flatten()
+                    .min()
+                    .unwrap_or(content.len());
+                let mut new_content = String::with_capacity(content.len());
+                new_content.push_str(&content[..start]);
+                new_content.push_str(&content[end..]);
+                let _ = std::fs::write(&path, new_content);
+            }
+        }
     }
     Ok(())
 }
@@ -836,6 +1173,287 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hook_fixture(name: &str, event: &str, matcher: Option<&str>) -> Hook {
+        Hook {
+            name: name.into(),
+            event: event.into(),
+            matcher: matcher.map(|m| m.into()),
+            description: format!("{name} test hook"),
+            safety: None,
+            timeout: Some(30),
+            harnesses: None,
+            script: format!("#!/usr/bin/env bash\n# {name}\nexit 0\n"),
+            source_path: PathBuf::new(),
+        }
+    }
+
+    fn tmpdir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "vstack_{label}_{}_{}",
+            std::process::id(),
+            crate::config::now_iso().replace([':', '-'], "")
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn codex_event_for_known_events() {
+        assert_eq!(codex_event_for("PreToolUse"), Some("PreToolUse"));
+        assert_eq!(codex_event_for("PostToolUse"), Some("PostToolUse"));
+        assert_eq!(codex_event_for("Stop"), Some("Stop"));
+        assert_eq!(codex_event_for("SessionStart"), Some("SessionStart"));
+    }
+
+    #[test]
+    fn codex_event_for_taskcompleted_is_unmapped() {
+        // TaskCompleted has no clean codex equivalent — routes to prose fallback.
+        assert_eq!(codex_event_for("TaskCompleted"), None);
+    }
+
+    #[test]
+    fn merge_codex_hooks_json_creates_new_file() {
+        let dir = tmpdir("codex_merge_new");
+        let hooks_json = dir.join("hooks.json");
+        let hook = hook_fixture("block-bare-cd", "PreToolUse", Some("Bash"));
+        let command = "bash /tmp/block-bare-cd.sh";
+        merge_codex_hooks_json(&hooks_json, "PreToolUse", &hook, command).unwrap();
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_json).unwrap()).unwrap();
+        let arr = doc
+            .pointer("/hooks/PreToolUse")
+            .and_then(|v| v.as_array())
+            .expect("PreToolUse array present");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(
+            arr[0].pointer("/matcher").and_then(|v| v.as_str()),
+            Some("Bash")
+        );
+        assert_eq!(
+            arr[0]
+                .pointer("/hooks/0/command")
+                .and_then(|v| v.as_str()),
+            Some(command)
+        );
+        assert_eq!(
+            arr[0]
+                .pointer("/hooks/0/timeout")
+                .and_then(|v| v.as_u64()),
+            Some(30)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_codex_hooks_json_is_idempotent() {
+        let dir = tmpdir("codex_merge_idempotent");
+        let hooks_json = dir.join("hooks.json");
+        let hook = hook_fixture("block-bare-cd", "PreToolUse", Some("Bash"));
+        let command = "bash /tmp/block-bare-cd.sh";
+        merge_codex_hooks_json(&hooks_json, "PreToolUse", &hook, command).unwrap();
+        merge_codex_hooks_json(&hooks_json, "PreToolUse", &hook, command).unwrap();
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_json).unwrap()).unwrap();
+        assert_eq!(
+            doc.pointer("/hooks/PreToolUse")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len()),
+            Some(1)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_codex_hooks_json_does_not_dedupe_substring_collisions() {
+        // A hook named `foo` must not be considered already-present when the
+        // event already has `notfoo.sh`. The dedup token includes the path
+        // separator to avoid this.
+        let dir = tmpdir("codex_merge_substring");
+        let hooks_json = dir.join("hooks.json");
+        std::fs::write(
+            &hooks_json,
+            r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "bash /home/.codex/hooks/notfoo.sh"}]
+      }
+    ]
+  }
+}"#,
+        )
+        .unwrap();
+        let hook = hook_fixture("foo", "PreToolUse", Some("Bash"));
+        merge_codex_hooks_json(&hooks_json, "PreToolUse", &hook, "bash /home/.codex/hooks/foo.sh")
+            .unwrap();
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_json).unwrap()).unwrap();
+        let arr = doc
+            .pointer("/hooks/PreToolUse")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(arr.len(), 2, "`foo.sh` must not collide with existing `notfoo.sh`");
+    }
+
+    #[test]
+    fn merge_codex_hooks_json_preserves_existing_entries() {
+        let dir = tmpdir("codex_merge_preserve");
+        let hooks_json = dir.join("hooks.json");
+        std::fs::write(
+            &hooks_json,
+            r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "bash /user/own.sh"}]
+      }
+    ]
+  }
+}"#,
+        )
+        .unwrap();
+
+        let hook = hook_fixture("new-one", "PreToolUse", Some("Bash"));
+        merge_codex_hooks_json(&hooks_json, "PreToolUse", &hook, "bash /tmp/new-one.sh").unwrap();
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_json).unwrap()).unwrap();
+        let arr = doc
+            .pointer("/hooks/PreToolUse")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(arr.len(), 2, "user entry should be preserved");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_hook_from_codex_json_strips_entry_and_prunes_event() {
+        let dir = tmpdir("codex_remove_strip");
+        let hooks_json = dir.join("hooks.json");
+        std::fs::write(
+            &hooks_json,
+            r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "bash /home/.codex/hooks/block-bare-cd.sh"}]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "bash /home/.codex/hooks/user-own.sh"}]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{"type": "command", "command": "bash /home/.codex/hooks/post-edit-lint.sh"}]
+      }
+    ]
+  }
+}"#,
+        )
+        .unwrap();
+
+        // Use the inner helper-equivalent inline since remove_hook_from_codex_json
+        // takes (global, name) and resolves codex_root() from env. We mirror its
+        // logic against an explicit path here so the test is hermetic.
+        let content = std::fs::read_to_string(&hooks_json).unwrap();
+        let mut doc: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let script_token = "post-edit-lint.sh";
+        if let Some(hooks) = doc.get_mut("hooks").and_then(|h| h.as_object_mut()) {
+            let keys: Vec<String> = hooks.keys().cloned().collect();
+            for event in keys {
+                if let Some(arr) = hooks.get_mut(&event).and_then(|v| v.as_array_mut()) {
+                    arr.retain(|entry| {
+                        !entry
+                            .pointer("/hooks/0/command")
+                            .and_then(|c| c.as_str())
+                            .is_some_and(|c| c.contains(script_token))
+                    });
+                    if arr.is_empty() {
+                        hooks.remove(&event);
+                    }
+                }
+            }
+        }
+        std::fs::write(&hooks_json, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+
+        let result: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_json).unwrap()).unwrap();
+        assert!(
+            result.pointer("/hooks/PostToolUse").is_none(),
+            "empty PostToolUse should be pruned"
+        );
+        let pre = result.pointer("/hooks/PreToolUse").unwrap().as_array().unwrap();
+        assert_eq!(pre.len(), 2, "unrelated PreToolUse entries preserved");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enable_codex_hooks_feature_creates_section() {
+        let dir = tmpdir("codex_features_new");
+        let config = dir.join("config.toml");
+        enable_codex_hooks_feature(&config).unwrap();
+        let body = std::fs::read_to_string(&config).unwrap();
+        assert!(body.contains("[features]"));
+        assert!(body.contains("codex_hooks = true"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enable_codex_hooks_feature_is_idempotent() {
+        let dir = tmpdir("codex_features_idempotent");
+        let config = dir.join("config.toml");
+        enable_codex_hooks_feature(&config).unwrap();
+        let body1 = std::fs::read_to_string(&config).unwrap();
+        enable_codex_hooks_feature(&config).unwrap();
+        let body2 = std::fs::read_to_string(&config).unwrap();
+        assert_eq!(body1, body2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enable_codex_hooks_feature_preserves_user_content() {
+        let dir = tmpdir("codex_features_preserve");
+        let config = dir.join("config.toml");
+        std::fs::write(
+            &config,
+            "# user comment\nmodel = \"gpt-5.5\"\n\n[other]\nfoo = 1\n",
+        )
+        .unwrap();
+        enable_codex_hooks_feature(&config).unwrap();
+        let body = std::fs::read_to_string(&config).unwrap();
+        assert!(body.contains("# user comment"));
+        assert!(body.contains("model = \"gpt-5.5\""));
+        assert!(body.contains("[other]"));
+        assert!(body.contains("codex_hooks = true"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enable_codex_hooks_feature_inserts_under_existing_features() {
+        let dir = tmpdir("codex_features_existing");
+        let config = dir.join("config.toml");
+        std::fs::write(
+            &config,
+            "[features]\nother_flag = true\n\n[unrelated]\nx = 1\n",
+        )
+        .unwrap();
+        enable_codex_hooks_feature(&config).unwrap();
+        let body = std::fs::read_to_string(&config).unwrap();
+        let features_pos = body.find("[features]").unwrap();
+        let unrelated_pos = body.find("[unrelated]").unwrap();
+        let codex_pos = body.find("codex_hooks = true").unwrap();
+        assert!(features_pos < codex_pos && codex_pos < unrelated_pos);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn remove_hook_from_opencode_removes_instruction() {

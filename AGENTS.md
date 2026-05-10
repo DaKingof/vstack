@@ -39,7 +39,7 @@ skill-templates/         Templates for new skills
 - **Canonical source is harness-agnostic.** Translation happens in `cli/src/harness/`.
 - **Agent `role` drives access control.** `analyst` → planning/research/recon artifacts. `reviewer` → report-only/subagent (may write reports, not product code). `engineer` → full access/primary. `manager` → analysis/report artifacts.
 - **Skill dependencies use frontmatter.** `dependencies: { required: [...], optional: [...] }` in SKILL.md.
-- **Hooks diverge by harness.** Claude Code: native shell hooks + settings.json + agent frontmatter. Cursor: safety `.mdc` rules. OpenCode: `.opencode/agents/*.md` + instructions. Codex: inline prose in `developer_instructions`. Pi has no native hook runtime — safety prose appended to agent body.
+- **Hooks diverge by harness.** Claude Code: native shell hooks + settings.json + agent frontmatter. Cursor: safety `.mdc` rules. OpenCode: `.opencode/agents/*.md` + instructions. Codex: native shell hooks under `<scope>/.codex/hooks/` registered in `<scope>/.codex/hooks.json` with `[features] codex_hooks = true` in `config.toml` — events without a codex equivalent (e.g. Claude's `TaskCompleted`) fall back to inline prose in `developer_instructions`. Pi: native TS implementations in the `@vanillagreen/pi-hooks` extension, listening on `tool_call`/`tool_result`/`turn_end`; each hook independently toggleable in pi-extension-manager.
 - **Pi extensions are npm-shaped.** vstack copies them to `<scope>/packages/<name>` and registers the path in Pi's `settings.json` `packages` array.
 - **Skill/hook attribution is config-driven.** Source `vstack.toml` `[agent-skills]` is authoritative — explicit entries skip prefix matching. `[role-skills]` adds skills to all agents of a role. Project `vstack.toml` also has `[agent-skills]` populated at install; users add/remove and refresh. Agents get `skills:` frontmatter and a "Required Skills" body section.
 - **Reconciliation is automatic.** After every `vstack add`, all installed agents are regenerated with the current full set of installed skills and hooks.
@@ -70,13 +70,16 @@ dependencies:
 ```bash
 # ---
 # name: block-bare-cd
-# event: PreToolUse       # PreToolUse | PostToolUse | PostCompact | TaskCompleted
+# event: PreToolUse       # PreToolUse | PostToolUse | PostCompact | TaskCompleted | Stop | SessionStart | UserPromptSubmit | PermissionRequest
 # matcher: Bash           # Bash | Edit|Write | (empty for all)
 # description: ...
 # safety: ...
 # timeout: 30             # optional, seconds
+# harnesses: [claude-code, codex]   # optional allowlist; default = all
 # ---
 ```
+
+`harnesses:` accepts a YAML list or comma-separated string. Use it for hooks whose wire format or event has no parallel in another harness (e.g. `TaskCompleted` is Claude-Code-only; codex's nearest equivalent is `Stop` with different blocking semantics).
 
 ### Pi extension package (`pi-extensions/<name>/package.json`)
 Npm-shaped manifest. vstack discovers any subdir containing `package.json`. Packages publish under `@vanillagreen/`; unscoped names work as `--pi-extension <name>` filters via the rename table.
@@ -180,6 +183,7 @@ Each canonical agent declares its own `effort:` in frontmatter. Harnesses write 
 - **Verify after refresh.** `vstack refresh -v` prints per-item `old→new` hash. `vstack verify [-g] [name…]` confirms source matches lock and byte-matches install dir for Pi packages. Use both before claiming a change is live.
 - **Docs and instruction payloads ship with the code change.** Any change to a hook, skill, agent, or Pi extension must update — in the same commit — affected READMEs, AGENTS.md, `vstack.toml`, `.env.local.example`, `package.json`, agent instruction payloads (`appendSystem` files / before_agent_start hook prose), and any cross-referencing docs. A behavior change without its docs/instructions update is incomplete.
 - **Edit skills directly.** Edit `skills/<name>/SKILL.md` in place. No separate `rules/` directories or per-skill `AGENTS.md` files.
+- **Pi hook parity.** Pi gets its hooks via the `pi-extensions/pi-hooks` extension (native TS port of `hooks/*.sh` against Pi's `tool_call`/`tool_result`/`turn_end` events). Any change to a hook script must land in the same commit as the matching change in `pi-extensions/pi-hooks/extensions/hooks.ts` so all five harnesses stay behaviorally aligned.
 
 ## Updating Pi Extensions
 

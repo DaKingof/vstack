@@ -10,9 +10,10 @@
 //! 2. **Install vs source bytes** (Pi packages only). Walks both the source
 //!    package dir and the installed package dir, hashing identical
 //!    relative-path/content pairs. A mismatch means refresh didn't fully
-//!    copy, or something modified the install. Skills/agents/hooks have
-//!    per-harness translation, so they aren't directly byte-comparable —
-//!    we just confirm the expected install path exists.
+//!    copy, or something modified the install. Skills, agents, and hooks
+//!    have per-harness translation, so they aren't directly byte-comparable
+//!    — we just confirm the expected install path exists for each harness
+//!    the lock claims it was installed into.
 //!
 //! This command is the answer to "did my last refresh actually take?" — a
 //! gap that previously required `md5sum` plumbing by hand.
@@ -211,13 +212,88 @@ fn verify_agent_install(
 }
 
 fn verify_hook_install(
-    _name: &str,
-    _harnesses: &[String],
-    _global: bool,
+    name: &str,
+    harnesses: &[String],
+    global: bool,
 ) -> (Option<bool>, Option<String>) {
-    // Hooks ride with their owning agents — no standalone install path to
-    // check. Source-hash check above is the meaningful signal.
-    (None, None)
+    let mut missing = Vec::new();
+    for h in harnesses {
+        let Some(harness) = crate::harness::Harness::from_id(h) else {
+            continue;
+        };
+        match harness {
+            crate::harness::Harness::ClaudeCode => {
+                let path = harness
+                    .hooks_dir(global)
+                    .map(|d| d.join(format!("{name}.sh")));
+                if path.is_none_or(|p| !p.exists()) {
+                    missing.push(format!("{h}: script missing"));
+                }
+            }
+            crate::harness::Harness::Cursor => {
+                let path = harness
+                    .agents_dir(global)
+                    .join(format!("safety-{name}.mdc"));
+                if !path.exists() {
+                    missing.push(format!("{h}: rule missing"));
+                }
+            }
+            crate::harness::Harness::OpenCode => {
+                let dir = if global {
+                    config::opencode_global_dir().join("instructions")
+                } else {
+                    config::project_root()
+                        .join(".opencode")
+                        .join("instructions")
+                };
+                let path = dir.join(format!("vstack-hook-{name}.md"));
+                if !path.exists() {
+                    missing.push(format!("{h}: instruction missing"));
+                }
+            }
+            crate::harness::Harness::Codex => {
+                // Native install: script under <root>/.codex/hooks/.
+                // Prose-fallback: `## Safety: <name>` block in some agent toml.
+                let root = if global {
+                    config::codex_home_dir()
+                } else {
+                    config::project_root().join(".codex")
+                };
+                let script = root.join("hooks").join(format!("{name}.sh"));
+                let has_script = script.exists();
+                let has_prose = !has_script && codex_agent_has_prose(&root, name);
+                if !has_script && !has_prose {
+                    missing.push(format!("{h}: no script and no prose"));
+                }
+            }
+            crate::harness::Harness::Pi => {
+                // Pi has no script-based per-hook install path — the safety
+                // hooks ship as the @vanillagreen/pi-hooks extension instead,
+                // which is verified separately as a Pi package. Nothing to
+                // check here.
+            }
+        }
+    }
+    if missing.is_empty() {
+        (Some(true), None)
+    } else {
+        (Some(false), Some(missing.join("; ")))
+    }
+}
+
+fn codex_agent_has_prose(codex_root: &Path, hook_name: &str) -> bool {
+    let agents_dir = codex_root.join("agents");
+    let Ok(entries) = std::fs::read_dir(&agents_dir) else {
+        return false;
+    };
+    let marker = format!("## Safety: {hook_name}");
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        path.extension().is_some_and(|ex| ex == "toml")
+            && std::fs::read_to_string(&path)
+                .map(|c| c.contains(&marker))
+                .unwrap_or(false)
+    })
 }
 
 /// Walk a directory and compute an order-stable hash of (relative path, content).

@@ -6,6 +6,7 @@
 # description: Run workspace lint checks before marking a task complete. Currently supports Rust (cargo clippy).
 # safety: Prevents marking tasks done when source files have lint violations.
 # timeout: 120
+# harnesses: [claude-code]
 # ---
 
 set -euo pipefail
@@ -25,7 +26,8 @@ fi
 # Check for Rust files
 if echo "$ALL_CHANGED" | grep -qE '\.rs$'; then
   OUTPUT=$(cargo clippy --workspace --all-targets -- -D warnings 2>&1 || true)
-  ISSUES=$(echo "$OUTPUT" | grep -E '^error' | head -15)
+  # grep no-match exits 1 — swallow under pipefail so an empty result is success.
+  ISSUES=$(echo "$OUTPUT" | grep -E '^error' | head -15 || true)
 
   if [ -n "$ISSUES" ]; then
     echo "Clippy errors found — fix before completing task:" >&2

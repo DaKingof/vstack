@@ -933,10 +933,16 @@ source (e.g. switching vstack repos, or starting clean), pass --clobber:
     }
     installer::record_install(&mut lock, &results, &resolved_source.source, method);
 
-    // Also record hooks in the lock file
+    // Also record hooks in the lock file. Only record harnesses that the
+    // hook actually applies to — a hook with `harnesses: [claude-code]` is
+    // a no-op for the other harnesses, so the lock must not claim it was
+    // installed there (otherwise verify will false-fail).
     let now = config::now_iso();
     for harness in &harnesses {
         for h in &selected_hooks {
+            if !h.applies_to(harness.id()) {
+                continue;
+            }
             let harness_id = harness.id().to_string();
             if let Some(existing) = lock.entries.get_mut(&h.name) {
                 if !existing.harnesses.contains(&harness_id) {

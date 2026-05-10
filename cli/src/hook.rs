@@ -10,6 +10,10 @@ pub struct Hook {
     pub description: String,
     pub safety: Option<String>,
     pub timeout: Option<u32>,
+    /// Harness ids this hook applies to (e.g. ["claude-code", "codex"]).
+    /// `None` = all harnesses. Use to scope a hook away from a harness whose
+    /// wire format or event semantics it doesn't support.
+    pub harnesses: Option<Vec<String>>,
     /// Full script content
     pub script: String,
     /// Source file path
@@ -33,9 +37,18 @@ impl Hook {
             description: meta.description,
             safety: meta.safety,
             timeout: meta.timeout,
+            harnesses: meta.harnesses,
             script: content.clone(),
             source_path: path.to_path_buf(),
         })
+    }
+
+    /// Return `true` when this hook should be installed for the given harness.
+    pub fn applies_to(&self, harness_id: &str) -> bool {
+        match &self.harnesses {
+            None => true,
+            Some(list) => list.iter().any(|h| h == harness_id),
+        }
     }
 
     /// Generate the safety advisory prose for harnesses without native hook support.
@@ -69,6 +82,7 @@ struct HookMeta {
     description: String,
     safety: Option<String>,
     timeout: Option<u32>,
+    harnesses: Option<Vec<String>>,
 }
 
 /// Parse YAML-in-comments frontmatter from a shell script.
@@ -153,6 +167,28 @@ fn parse_hook_frontmatter(content: &str) -> Result<HookMeta> {
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
 
+    let harnesses = match map.get("harnesses") {
+        None => None,
+        Some(v) => {
+            if let Some(s) = v.as_str() {
+                Some(
+                    s.split(',')
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty())
+                        .collect(),
+                )
+            } else if let Some(seq) = v.as_sequence() {
+                Some(
+                    seq.iter()
+                        .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                        .collect(),
+                )
+            } else {
+                anyhow::bail!("hook 'harnesses' must be a string or list of strings");
+            }
+        }
+    };
+
     Ok(HookMeta {
         name,
         event,
@@ -160,6 +196,7 @@ fn parse_hook_frontmatter(content: &str) -> Result<HookMeta> {
         description,
         safety,
         timeout,
+        harnesses,
     })
 }
 
@@ -209,6 +246,77 @@ echo "hello"
         assert_eq!(meta.description, "A test hook");
         assert_eq!(meta.safety.as_deref(), Some("Prevents bad things"));
         assert_eq!(meta.timeout, Some(30));
+    }
+
+    #[test]
+    fn parse_hook_with_harness_list() {
+        let content = r#"#!/usr/bin/env bash
+# ---
+# name: claude-only
+# event: TaskCompleted
+# matcher:
+# description: claude-only hook
+# harnesses: [claude-code]
+# ---
+
+echo ok
+"#;
+        let meta = parse_hook_frontmatter(content).unwrap();
+        assert_eq!(meta.harnesses.as_deref(), Some(&["claude-code".to_string()][..]));
+    }
+
+    #[test]
+    fn parse_hook_with_harness_csv_string() {
+        let content = r#"#!/usr/bin/env bash
+# ---
+# name: pair
+# event: PreToolUse
+# matcher: Bash
+# description: limited
+# harnesses: claude-code, codex
+# ---
+
+exit 0
+"#;
+        let meta = parse_hook_frontmatter(content).unwrap();
+        assert_eq!(
+            meta.harnesses.as_deref(),
+            Some(&["claude-code".to_string(), "codex".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn applies_to_defaults_to_all() {
+        let hook = Hook {
+            name: "h".into(),
+            event: "PreToolUse".into(),
+            matcher: None,
+            description: String::new(),
+            safety: None,
+            timeout: None,
+            harnesses: None,
+            script: String::new(),
+            source_path: PathBuf::new(),
+        };
+        assert!(hook.applies_to("codex"));
+        assert!(hook.applies_to("claude-code"));
+    }
+
+    #[test]
+    fn applies_to_respects_allowlist() {
+        let hook = Hook {
+            name: "h".into(),
+            event: "TaskCompleted".into(),
+            matcher: None,
+            description: String::new(),
+            safety: None,
+            timeout: None,
+            harnesses: Some(vec!["claude-code".into()]),
+            script: String::new(),
+            source_path: PathBuf::new(),
+        };
+        assert!(hook.applies_to("claude-code"));
+        assert!(!hook.applies_to("codex"));
     }
 
     #[test]

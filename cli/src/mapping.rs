@@ -257,6 +257,7 @@ mod tests {
             description: "".into(),
             safety: None,
             timeout: None,
+            harnesses: None,
             script: "".into(),
             source_path: std::path::PathBuf::new(),
         }];
@@ -287,6 +288,7 @@ mod tests {
             description: "".into(),
             safety: None,
             timeout: None,
+            harnesses: None,
             script: "".into(),
             source_path: std::path::PathBuf::new(),
         }];
@@ -312,6 +314,7 @@ mod tests {
                 description: "".into(),
                 safety: None,
                 timeout: None,
+                harnesses: None,
                 script: "".into(),
                 source_path: std::path::PathBuf::new(),
             },
@@ -322,6 +325,7 @@ mod tests {
                 description: "".into(),
                 safety: None,
                 timeout: None,
+                harnesses: None,
                 script: "".into(),
                 source_path: std::path::PathBuf::new(),
             },

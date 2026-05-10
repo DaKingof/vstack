@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 pub struct RefreshStats {
     pub agents_refreshed: usize,
     pub skills_refreshed: usize,
+    pub hooks_refreshed: usize,
     pub pi_refreshed: usize,
     /// Map of agent_name → (full merged required-skills list, newly added skill names).
     pub upstream_skill_updates: HashMap<String, (Vec<String>, Vec<String>)>,
@@ -235,8 +236,36 @@ pub fn refresh_items_in_scope(
     }
 
     // ── Hooks ─────────────────────────────────────────────
-    // Hooks are reattached on agent regen (above), so refresh doesn't need
-    // a separate pass — they ride along with their owning agents.
+    // Hooks must be re-installed per harness on refresh. Claude Code, OpenCode,
+    // and Codex each maintain hook state outside the agent files (Claude
+    // settings.json, OpenCode opencode.json, Codex hooks.json + config.toml).
+    // Regenerating agents alone doesn't refresh those.
+    let agent_entries: Vec<Agent> = lock
+        .entries
+        .iter()
+        .filter(|(_, e)| e.kind == ItemKind::Agent)
+        .filter_map(|(name, _)| agents.iter().find(|a| &a.name == name).cloned())
+        .collect();
+
+    for (name, entry) in lock
+        .entries
+        .iter()
+        .filter(|(_, e)| e.kind == ItemKind::Hook)
+        .filter(|(n, _)| pass(n))
+    {
+        let Some(hook) = hooks.iter().find(|h| &h.name == name) else {
+            continue;
+        };
+        for harness_id in &entry.harnesses {
+            if !hook.applies_to(harness_id) {
+                continue;
+            }
+            if let Some(harness) = Harness::from_id(harness_id) {
+                let _ = installer::install_hook(hook, harness, global, &agent_entries);
+            }
+        }
+        stats.hooks_refreshed += 1;
+    }
 
     // ── Pi packages ──────────────────────────────────────
     for (name, _) in lock
@@ -294,6 +323,36 @@ fn run_one(global: bool, verbose: bool) -> Result<()> {
         .unwrap_or_default();
     if config::reconcile_lock_with_disk(&mut lock, global, &source_hint) {
         lock.save(&lock_path)?;
+    }
+
+    // Self-heal hook lock entries: drop harness ids the hook no longer
+    // applies to (the `harnesses:` allowlist in source may have changed
+    // since install). Done up-front so all downstream passes see the
+    // pruned state.
+    {
+        let source_hooks_for_prune: Vec<crate::hook::Hook> = resolve_sources(&lock)
+            .iter()
+            .flat_map(|dir| crate::hook::discover_hooks(&dir.join("hooks")).unwrap_or_default())
+            .collect();
+        let mut pruned_any = false;
+        for entry in lock.entries.values_mut().filter(|e| e.kind == ItemKind::Hook) {
+            let Some(hook) = source_hooks_for_prune.iter().find(|h| h.name == entry.name) else {
+                continue;
+            };
+            let new_harnesses: Vec<String> = entry
+                .harnesses
+                .iter()
+                .filter(|h| hook.applies_to(h))
+                .cloned()
+                .collect();
+            if new_harnesses != entry.harnesses {
+                entry.harnesses = new_harnesses;
+                pruned_any = true;
+            }
+        }
+        if pruned_any {
+            lock.save(&lock_path)?;
+        }
     }
 
     let project_root = config::project_root();
@@ -532,11 +591,13 @@ fn run_one(global: bool, verbose: bool) -> Result<()> {
             .count()
     };
     eprintln!(
-        "Processed {} agent(s) ({} updated), {} skill(s) ({} updated), {} Pi package(s) ({} updated) (hooks ride with agents)",
+        "Processed {} agent(s) ({} updated), {} skill(s) ({} updated), {} hook(s) ({} updated), {} Pi package(s) ({} updated)",
         stats.agents_refreshed,
         count_updated(ItemKind::Agent),
         stats.skills_refreshed,
         count_updated(ItemKind::Skill),
+        stats.hooks_refreshed,
+        count_updated(ItemKind::Hook),
         stats.pi_refreshed,
         count_updated(ItemKind::PiExtension),
     );
