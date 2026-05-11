@@ -88,7 +88,7 @@ Built-in flags from `tmux list-windows`:
 | `!` | `window_activity_flag` | Output activity since last view (requires `monitor-activity on`) |
 | `~` | `window_silence_flag` | No output for N seconds (requires `monitor-silence N`) |
 
-Flightdeck's primary signal is `window_bell_flag`. If a project has `monitor-silence` enabled, `window_silence_flag` is a useful secondary signal for detecting stuck panes.
+Flightdeck's primary signal is `window_bell_flag`. The daemon fallback path reads `window_bell_flag`, `window_activity_flag`, and `pane_in_mode` from the same per-tick `tmux list-panes -aF` metadata cache it uses to resolve immutable pane ids, so it does not call `tmux display-message` once per fallback pane. If a project has `monitor-silence` enabled, `window_silence_flag` is a useful secondary signal for detecting stuck panes.
 
 Quick scan command:
 

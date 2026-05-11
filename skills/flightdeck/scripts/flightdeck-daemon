@@ -194,7 +194,7 @@ done
 _check_deps_inline() {
   local missing=()
   local cmd
-  for cmd in tmux jq flock awk sha256sum; do
+  for cmd in tmux jq flock awk sha256sum cksum; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
   if (( ${#missing[@]} > 0 )); then
@@ -329,21 +329,27 @@ resolve_pane_id() {
   echo "$pid"
 }
 
-# Per-tick cache of (pane_id → target, pane_id → window_id). Refreshed
-# at the start of each tick via refresh_pane_cache. Replaces a per-pane
-# `tmux list-panes -a` invocation (was O(N_total_panes) per pane per
-# tick — quadratic across the full tmux server pane list).
-declare -A PANE_TARGET_CACHE PANE_WINDOW_CACHE
+# Per-tick cache of pane metadata keyed by pane_id. Refreshed at the
+# start of each tick via one tmux list-panes pass. Replaces per-pane
+# `tmux list-panes -a` / `tmux display-message` lookups (quadratic pane
+# scans plus one extra bell subprocess per fallback pane per tick).
+declare -A PANE_TARGET_CACHE PANE_WINDOW_CACHE PANE_BELL_CACHE PANE_ACTIVITY_CACHE PANE_MODE_CACHE
 
 refresh_pane_cache() {
   PANE_TARGET_CACHE=()
   PANE_WINDOW_CACHE=()
-  local pid tgt wid
-  while IFS=$'\t' read -r pid tgt wid; do
+  PANE_BELL_CACHE=()
+  PANE_ACTIVITY_CACHE=()
+  PANE_MODE_CACHE=()
+  local pid tgt wid bell activity in_mode
+  while IFS='|' read -r pid tgt wid bell activity in_mode; do
     [[ -z "$pid" ]] && continue
     PANE_TARGET_CACHE[$pid]="$tgt"
     PANE_WINDOW_CACHE[$pid]="$wid"
-  done < <(tmux list-panes -a -F '#{pane_id}	#{session_name}:#{window_index}.#{pane_index}	#{window_id}' 2>/dev/null)
+    PANE_BELL_CACHE[$pid]="${bell:-0}"
+    PANE_ACTIVITY_CACHE[$pid]="${activity:-0}"
+    PANE_MODE_CACHE[$pid]="${in_mode:-0}"
+  done < <(tmux list-panes -a -F '#{pane_id}|#{session_name}:#{window_index}.#{pane_index}|#{window_id}|#{window_bell_flag}|#{window_activity_flag}|#{pane_in_mode}' 2>/dev/null)
 }
 
 pane_target_from_id() {
@@ -354,6 +360,21 @@ pane_target_from_id() {
 window_id_for_pane() {
   local pid="$1"
   echo "${PANE_WINDOW_CACHE[$pid]:-}"
+}
+
+bell_flag_for_pane() {
+  local pid="$1"
+  echo "${PANE_BELL_CACHE[$pid]:-0}"
+}
+
+activity_flag_for_pane() {
+  local pid="$1"
+  echo "${PANE_ACTIVITY_CACHE[$pid]:-0}"
+}
+
+pane_in_mode_for_pane() {
+  local pid="$1"
+  echo "${PANE_MODE_CACHE[$pid]:-0}"
 }
 
 pane_alive() {
@@ -376,6 +397,19 @@ session_alive() {
 capture_pane() {
   local target="$1"
   tmux capture-pane -t "$target" -p -S "-${CAPTURE_LINES}" 2>/dev/null
+}
+
+capture_hash_12() {
+  # Fallback capture hashing is a hot path. Keep it to one cksum process
+  # instead of the previous sha256sum | cut | head pipeline. This rolling
+  # checksum only needs stable change detection within this daemon run;
+  # it is not a security boundary.
+  local sum crc len
+  sum=$(cksum <<< "$1" 2>/dev/null) || { printf '000000000000'; return; }
+  read -r crc len _ <<< "$sum"
+  [[ "$crc" =~ ^[0-9]+$ ]] || crc=0
+  [[ "$len" =~ ^[0-9]+$ ]] || len=0
+  printf '%08x%04x' "$crc" "$(( len & 0xffff ))"
 }
 
 stability_for_harness() {
@@ -1882,11 +1916,11 @@ run_loop() {
       win_id=$(window_id_for_pane "$inner_id")
       local pane_harness="${PANE_HARNESS[$inner_id]:-$HARNESS}"
       local bell
-      bell=$(tmux display-message -p -t "$target" '#{window_bell_flag}' 2>/dev/null || echo 0)
+      bell=$(bell_flag_for_pane "$inner_id")
       local buf
       buf=$(capture_pane "$target" "$pane_harness" || echo "")
       local hash
-      hash=$(printf '%s' "$buf" | sha256sum | cut -d' ' -f1 | head -c 12)
+      hash=$(capture_hash_12 "$buf")
       local stab; stab=$(stability_for_harness "$pane_harness")
 
       # Per-tick debug-pane hook: log every observation for the targeted
