@@ -211,6 +211,41 @@ export default function qol(pi: ExtensionAPI): void {
 		thinkingTimerStore.enabled = !!ctx?.hasUI && settingBoolean("thinkingTimer.enabled", true, ctx?.cwd);
 	};
 
+	// Working indicator mode.
+	// The built-in pi-tui Loader ticks every 80ms during streaming. Each tick
+	// mutates a line in statusContainer; once total rendered content exceeds the
+	// terminal viewport (overlay content like /tree, or chat overflow), every tick
+	// trips pi-tui's firstChanged < prevViewportTop branch and triggers a full
+	// screen + scrollback clear (visible flash). This setting lets the user trade
+	// the spinner animation away for a stable display in overflow scenarios.
+	// Implementation note: Loader.restartAnimation() bails out when frames.length
+	// is <= 1, so a single-frame indicator does NOT start the setInterval at all.
+	const applyWorkingIndicatorMode = (ctx: ExtensionContext): void => {
+		if (!ctx.hasUI) return;
+		const mode = settingString("workingIndicator.mode", "animated", ctx.cwd);
+		switch (mode) {
+			case "hidden":
+				ctx.ui.setWorkingVisible(false);
+				return;
+			case "messageOnly":
+				ctx.ui.setWorkingVisible(true);
+				ctx.ui.setWorkingIndicator({ frames: [] });
+				return;
+			case "static":
+				ctx.ui.setWorkingVisible(true);
+				ctx.ui.setWorkingIndicator({ frames: [ctx.ui.theme.fg("accent", "●")] });
+				return;
+			case "slow":
+				ctx.ui.setWorkingVisible(true);
+				ctx.ui.setWorkingIndicator({ intervalMs: 320 });
+				return;
+			default:
+				ctx.ui.setWorkingVisible(true);
+				ctx.ui.setWorkingIndicator(undefined);
+				return;
+		}
+	};
+
 	const updateThinkingTimerEnabled = (ctx: ExtensionContext): boolean => {
 		thinkingTimerStore.cwd = ctx.cwd;
 		thinkingTimerStore.theme = ctx.ui.theme;
@@ -494,6 +529,7 @@ export default function qol(pi: ExtensionAPI): void {
 		installPendingQueueThemePatch(ctx);
 		if (ctx.hasUI) {
 			ctx.ui.setHiddenThinkingLabel(hiddenThinkingLabel(ctx.ui.theme, ctx.cwd));
+			applyWorkingIndicatorMode(ctx);
 			gitState = makeFallbackGitState(ctx.cwd);
 			void refreshStatusline(ctx);
 			installSessionTitle(ctx);

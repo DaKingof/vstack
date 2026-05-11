@@ -800,6 +800,23 @@
           "default": true,
           "category": "Thinking",
           "apply": "live"
+        },
+        {
+          "key": "workingIndicator.mode",
+          "label": "Working indicator mode",
+          "description": "Control Pi's built-in streaming spinner. The default animated spinner ticks every 80ms; in terminals where rendered content overflows the viewport (chat scrolled past the top, /tree open, etc.) each tick can trigger a pi-tui full-screen redraw and visible flash. Use 'slow' for a calmer animation, 'static' / 'messageOnly' to keep the row visible without the 80ms timer, or 'hidden' to remove the row entirely.",
+          "type": "enum",
+          "enumValues": [
+            "animated",
+            "slow",
+            "static",
+            "messageOnly",
+            "hidden"
+          ],
+          "default": "animated",
+          "category": "Thinking",
+          "apply": "reload",
+          "requiresReload": true
         }
       ]
     }

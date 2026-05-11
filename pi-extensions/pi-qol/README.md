@@ -125,6 +125,7 @@ Use `/qol notify-test` to verify your terminal/tmux notification path.
 ### Thinking timer
 
 - `thinkingTimer.enabled`: show elapsed time next to collapsed `Thinking...` labels when the model emits thinking blocks.
+- `workingIndicator.mode`: control Pi's built-in streaming spinner. The default `animated` spinner ticks every 80ms; when total rendered content overflows the terminal (chat scrolled past the top, `/tree` open with a tall tree, etc.) each tick can trip pi-tui's full-screen redraw path and produce a visible flash. Use `slow` for a calmer animation, `static` or `messageOnly` to keep the working row visible without the 80ms timer, or `hidden` to remove the row entirely.
 
 ## Notes
 
