@@ -267,7 +267,7 @@ function renderDashboardLines(snapshot: FlightdeckSnapshot, theme: Theme, width:
 	// Keyhints — same pattern as pi-agents-tmux dashboard header:
 	// `<title> <stats> · Alt+F toggle · F6 popup · <daemon-health>`. Both
 	// shortcuts read from extension settings so user overrides are reflected.
-	const toggleShortcut = settingString("dashboardShortcut", "alt+f", cwd);
+	const toggleShortcut = settingString("dashboardShortcut", "alt+m", cwd);
 	const popupShortcut = settingString("popupShortcut", "f6", cwd);
 	const toggleHint = toggleShortcut === "none" ? "" : theme.fg("dim", ` · ${formatShortcutHint(toggleShortcut)} toggle`);
 	const popupHint = popupShortcut === "none" ? "" : theme.fg("dim", ` · ${formatShortcutHint(popupShortcut)} popup`);
@@ -1120,7 +1120,7 @@ export default function flightdeck(pi: ExtensionAPI): void {
 			handler: async (ctx) => openPopup(pi, ctx as ExtensionContext),
 		});
 	}
-	const dashboardShortcut = settingString("dashboardShortcut", "alt+f");
+	const dashboardShortcut = settingString("dashboardShortcut", "alt+m");
 	if (dashboardShortcut !== "none") {
 		pi.registerShortcut(dashboardShortcut as Parameters<typeof pi.registerShortcut>[0], {
 			description: "Cycle the flightdeck dashboard widget",
