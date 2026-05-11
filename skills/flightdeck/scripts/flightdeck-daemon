@@ -67,6 +67,8 @@
 #                                   firing classifier wakes.
 #   FD_OC_POLL_SEC      2           Per-opencode-pane subscriber poll
 #                                   interval against /session/<id>/message.
+#   FD_OC_BACKOFF_MAX_SEC 16        Max OpenCode subscriber exponential
+#                                   backoff after unchanged polls.
 set -euo pipefail
 
 # Resolve daemon state dir + session-keyed file paths via shared helper so
@@ -105,6 +107,7 @@ HEARTBEAT_TICKS="${FD_HEARTBEAT_TICKS:-60}"
 MAX_LIFETIME="${FD_MAX_LIFETIME:-14400}"  # 4h; 0 disables
 GRACE_SEC="${FD_GRACE_SEC:-30}"           # cold-start wake-suppression window
 OC_POLL_SEC="${FD_OC_POLL_SEC:-2}"        # opencode subscriber poll interval
+OC_BACKOFF_MAX_SEC="${FD_OC_BACKOFF_MAX_SEC:-16}" # max opencode unchanged-poll backoff
 
 # Canonical classifier tag allowlist for stable-wake. Only these wake the
 # master from a stable buffer. Bell wake is independent and unconditional.
@@ -981,6 +984,28 @@ clear_bell_for_window() {
 PANE_REGISTRY="$_daemon_script_dir/pane-registry"
 WAKE_EVENTS_LOG=$(oc_wake_events_log "$SESSION_KEY")
 
+oc_bell_marker_file() {
+  local pane_id="$1"
+  printf '%s/oc-bell-%s' "$STATE_DIR" "$(oc_pane_id_safe "$pane_id")"
+}
+
+bell_marker_mtime() {
+  local marker="$1" token
+  [[ -f "$marker" ]] || { echo 0; return; }
+  token=$(head -n1 "$marker" 2>/dev/null || echo "")
+  if [[ "$token" =~ ^[0-9]+$ ]]; then
+    echo "$token"
+    return
+  fi
+  stat -c %Y "$marker" 2>/dev/null || stat -f %m "$marker" 2>/dev/null || echo 0
+}
+
+touch_oc_bell_marker() {
+  local pane_id="$1" marker
+  marker=$(oc_bell_marker_file "$pane_id")
+  printf '%s\n' "$(date +%s%N)" > "$marker" 2>/dev/null || touch "$marker" 2>/dev/null || true
+}
+
 oc_subscriber_loop() {
   # Run defensively: don't let the parent's set -e/pipefail kill the
   # subscriber on a transient curl/jq hiccup. We log + retry on the
@@ -994,6 +1019,14 @@ oc_subscriber_loop() {
   exec 200<&- 2>/dev/null || true
   local pane_id="$1" oc_url="$2" session_id="$3" parent_pid="$4"
   local last_hash=""
+  local base_sleep="$OC_POLL_SEC" max_sleep="$OC_BACKOFF_MAX_SEC" next_sleep="$OC_POLL_SEC"
+  [[ "$base_sleep" =~ ^[1-9][0-9]*$ ]] || base_sleep=2
+  [[ "$max_sleep" =~ ^[1-9][0-9]*$ ]] || max_sleep=16
+  (( max_sleep < base_sleep )) && max_sleep="$base_sleep"
+  next_sleep="$base_sleep"
+  local bell_marker last_bell_mtime
+  bell_marker=$(oc_bell_marker_file "$pane_id")
+  last_bell_mtime=$(bell_marker_mtime "$bell_marker")
   # Comma-bracketed list of question request_ids we've already emitted
   # for this pane, e.g., ",que_abc,que_def,". Lookup uses substring
   # match. Resets only on subscriber restart — once a question is
@@ -1048,13 +1081,14 @@ oc_subscriber_loop() {
       done < <(jq -r '.[].id // empty' <<< "$qresp" 2>/dev/null)
     fi
 
-    local resp last_text hash tag text_excerpt
+    local resp last_text hash tag text_excerpt response_changed=0
     resp=$(curl -s --max-time 5 "$oc_url/session/$session_id/message" 2>/dev/null)
     if [[ -n "$resp" ]]; then
       last_text=$(jq -r "$OC_LAST_ASSISTANT_JQ" <<< "$resp" 2>/dev/null)
       if [[ -n "$last_text" ]]; then
         hash=$(printf '%s' "$last_text" | sha256sum | awk '{print substr($1,1,12)}')
         if [[ "$hash" != "$last_hash" ]]; then
+          response_changed=1
           if [[ -n "${CLASSIFIER:-}" && -x "${CLASSIFIER:-}" ]]; then
             # Adapter input has no TUI footer — pass --no-footer-gate
             # so the classifier doesn't gate option-list / merge / etc
@@ -1088,7 +1122,27 @@ oc_subscriber_loop() {
       printf '%s [oc-sub-tick] pane=%s curl_empty\n' "$(date -Iseconds)" "$pane_id" \
         >> "$sub_log" 2>/dev/null || true
     fi
-    sleep "$OC_POLL_SEC"
+
+    local current_bell_mtime bell_seen=0 prev_sleep="$next_sleep"
+    current_bell_mtime=$(bell_marker_mtime "$bell_marker")
+    if [[ "$current_bell_mtime" =~ ^[0-9]+$ && "$last_bell_mtime" =~ ^[0-9]+$ && "$current_bell_mtime" -gt "$last_bell_mtime" ]]; then
+      bell_seen=1
+      last_bell_mtime="$current_bell_mtime"
+    fi
+    if (( response_changed == 1 || bell_seen == 1 )); then
+      next_sleep="$base_sleep"
+    else
+      if (( next_sleep < max_sleep )); then
+        next_sleep=$(( next_sleep * 2 ))
+        (( next_sleep > max_sleep )) && next_sleep="$max_sleep"
+      fi
+    fi
+    if [[ "$next_sleep" != "$prev_sleep" ]]; then
+      printf '%s [oc-sub-backoff] pane=%s sleep=%ss response_changed=%s bell_seen=%s max=%ss\n' \
+        "$(date -Iseconds)" "$pane_id" "$next_sleep" "$response_changed" "$bell_seen" "$max_sleep" \
+        >> "$sub_log" 2>/dev/null || true
+    fi
+    sleep "$next_sleep"
   done
 }
 
@@ -1941,6 +1995,7 @@ run_loop() {
         continue
       fi
       if (( bell == 1 )) && [[ "${LAST_BELL_HASH[$inner_id]:-}" != "$hash" ]]; then
+        touch_oc_bell_marker "$inner_id"
         local tag; tag=$(classify_buffer "$buf")
         tick_reasons+=("bell:$inner_id:$tag")
         tick_pending_ids+=("$inner_id")
@@ -2038,6 +2093,7 @@ run_loop() {
           for i in "${!tick_pending_ids[@]}"; do
             if [[ "${tick_pending_ids[$i]}" == "$bell_pane" ]]; then
               LAST_BELL_HASH[$bell_pane]="${tick_pending_hashes[$i]}"
+              touch_oc_bell_marker "$bell_pane"
               break
             fi
           done

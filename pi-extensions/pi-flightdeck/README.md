@@ -47,6 +47,8 @@ Configurable in `/extensions:settings` under `Flightdeck Dashboard`.
 | `stateDir` | _(auto)_ | Override `FD_STATE_DIR` resolution |
 | `flightdeckStateDir` | `tmp` | Project-relative master-state directory (`FLIGHTDECK_STATE_DIR`) |
 
+Daemon tuning env vars remain owned by the flightdeck skill/daemon, not this read-only extension. Notable operator knob: `FD_OC_BACKOFF_MAX_SEC` (default `16`) caps OpenCode subscriber exponential backoff after unchanged `/question` + `/session/<id>/message` polls; bell markers in `FD_STATE_DIR` reset the subscriber back to `FD_OC_POLL_SEC`.
+
 ## Commands
 
 | Command | Action |

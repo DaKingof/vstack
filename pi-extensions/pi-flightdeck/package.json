@@ -162,7 +162,7 @@
         {
           "key": "stateDir",
           "label": "Daemon state dir override",
-          "description": "Override for FD_STATE_DIR resolution. Leave empty to use the same resolution flightdeck-daemon uses ($XDG_RUNTIME_DIR/flightdeck or /tmp/flightdeck-$UID).",
+          "description": "Override for FD_STATE_DIR resolution. Leave empty to use the same resolution flightdeck-daemon uses ($XDG_RUNTIME_DIR/flightdeck or /tmp/flightdeck-$UID). Daemon tuning env vars such as FD_OC_BACKOFF_MAX_SEC are configured outside this read-only extension.",
           "type": "string",
           "default": "",
           "category": "Refresh",
