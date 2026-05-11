@@ -414,11 +414,15 @@ case "$ACTION" in
     ;;
 
   find-by-pane)
-    # Print the issue id whose registry entry has the given pane_target.
-    # Empty stdout (exit 1) when no match.
+    # Print the issue id whose registry entry matches the given target.
+    # Accepts either `pane_target` (session:window.pane) or `pane_id`
+    # (%N) — needed because `list --format inner-panes` now emits the
+    # immutable pane_id when present, so daemon callers pass `%N` to
+    # `find-by-pane` and must still resolve back to the issue id. Empty
+    # stdout (exit 1) when no match (cross-harness verify follow-up).
     PANE_TARGET="${1:-}"
-    [[ -z "$PANE_TARGET" ]] && { echo "Usage: find-by-pane <pane-target>" >&2; exit 2; }
-    issue=$("$FD_STATE" get ".issues // {} | to_entries[] | select(.value.pane_target == \"$PANE_TARGET\") | .key" 2>/dev/null | tr -d '"' | head -n1)
+    [[ -z "$PANE_TARGET" ]] && { echo "Usage: find-by-pane <pane-target-or-pane-id>" >&2; exit 2; }
+    issue=$("$FD_STATE" get ".issues // {} | to_entries[] | select(.value.pane_target == \"$PANE_TARGET\" or .value.pane_id == \"$PANE_TARGET\") | .key" 2>/dev/null | tr -d '"' | head -n1)
     if [[ -z "$issue" ]]; then
       exit 1
     fi

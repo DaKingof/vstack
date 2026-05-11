@@ -430,14 +430,23 @@ function countSubscribers(stateDir: string, sessionKey: string | undefined): Dae
 	// `fd-<type>-subscriber-<session_key>-<pane_safe>.pid`. Filtering keeps
 	// the overlay's count specific to the current flightdeck session and
 	// avoids overcounting when multiple daemons share the state dir.
+	// We also verify the recorded pid is alive so a stale pid file from a
+	// crashed subscriber doesn't inflate the count (cross-harness verify
+	// follow-up): the daemon's per-tick watchdog removes those eventually,
+	// but the dashboard ticks faster than the watchdog can act, so the UI
+	// can show a phantom subscriber for one render cycle without this.
 	const infix = sessionKey ? `-${sessionKey}-` : "";
 	for (const entry of entries) {
 		if (!entry.endsWith(".pid")) continue;
 		if (!entry.includes(infix)) continue;
-		if (entry.startsWith("fd-subscriber-")) counts.opencode += 1;
-		else if (entry.startsWith("fd-cc-subscriber-")) counts.claude += 1;
-		else if (entry.startsWith("fd-pi-subscriber-")) counts.pi += 1;
-		else if (entry.startsWith("fd-cx-subscriber-")) counts.codex += 1;
+		let bucket: keyof typeof counts | undefined;
+		if (entry.startsWith("fd-subscriber-")) bucket = "opencode";
+		else if (entry.startsWith("fd-cc-subscriber-")) bucket = "claude";
+		else if (entry.startsWith("fd-pi-subscriber-")) bucket = "pi";
+		else if (entry.startsWith("fd-cx-subscriber-")) bucket = "codex";
+		if (!bucket) continue;
+		const pid = readPidFile(join(stateDir, entry));
+		if (isPidAlive(pid)) counts[bucket] += 1;
 	}
 	return counts;
 }
