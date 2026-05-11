@@ -56,15 +56,28 @@ Arguments support autocomplete.
 
 ## Behavior
 
-- The extension injects instructions in `before_agent_start`; it does not post-process model output.
-- The canonical setting is `mode` (`off`, `lite`, `full`, `ultra`, or `micro`). Older `enabled` + `defaultMode` settings are only read as a local fallback.
-- `/caveman` commands create a per-session override when `sessionOverrideAllowed` is on. Changing the extension-manager `mode` setting clears the session override so the configured mode takes over immediately.
-- Session override state and the last active mode persist in the Pi session and restore from the active branch.
-- Settings live in Pi/vstack `settings.json`; project settings override user settings.
-- QOL can use the caveman bridge for its compact statusline badge and `Alt+C` editor shortcut.
-- The hard clarity-safety escape only fires when the user prompt names an explicit irreversible destructive operation (force-push, drop table, rm -rf, hard reset, destructive/irreversible). The model still self-elects plain prose for genuine destructive confirmations via an inline self-clarity rule, but no longer escapes on soft signals like "confused" or "security".
-- The clarity-safety branch writes plain prose for the turn and does **not** emit any marker line. Caveman resumes automatically next turn via re-injection. (Prior versions used a literal `Caveman resume` sentinel; the model generalized that as a `Caveman <verb>:` labeling pattern and leaked it back into normal output — e.g. `Caveman ask:`, `Caveman question:`.)
-- Boundary toggles keep caveman out of text destined for other systems: code/identifiers, commit messages and PR descriptions, formal reviews, and external writes (issue/PR bodies + comments, code review, chat/email). Caveman is for in-chat replies.
+- Mode is stored in your Pi settings and applied at the start of every model turn. The extension steers style; it doesn't rewrite the model's output.
+- `/caveman` slash commands set a per-session override. Changing the default in the extension manager replaces any active override.
+- When you type a destructive command (force-push, hard reset, drop table, rm -rf, etc.), caveman steps aside for that one reply and the model writes plain English. Caveman resumes automatically on the next turn.
+- Caveman applies to chat replies only. Commit messages, PR descriptions, formal reviews, and anything you send to other systems (issue bodies, PR comments, chat, email) stay normal English.
+- pi-qol uses this extension to show a Caveman badge in the status line and bind Alt+C to cycle modes.
+
+## Settings
+
+All settings are toggled in the extension manager (or written directly to Pi/vstack `settings.json`).
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `mode` | `off` | Default caveman mode for new sessions. |
+| `showStatusBadge` | `true` | Show the caveman badge in the status line while active. |
+| `sessionOverrideAllowed` | `true` | Allow `/caveman` commands to override the default within a session. |
+| `autoClarityEscape` | `true` | Switch to plain English for one reply when the user prompt names a destructive operation. |
+| `resumeAfterClarityEscape` | `true` | Resume caveman automatically on the next turn after a safety override. |
+| `boundaryNormalForCode` | `true` | Keep code blocks and quoted errors normal English. |
+| `boundaryNormalForCommits` | `true` | Keep commit messages and PR descriptions normal English. |
+| `boundaryNormalForReviews` | `true` | Keep formal reviews normal English. |
+| `boundaryNormalForExternalWrites` | `true` | Keep issue bodies, PR comments, code review messages, and chat/email normal English. |
+| `customPromptSuffix` | `""` | Extra project-specific guidance appended to the caveman directive. |
 
 ## Claude-bridge users
 
