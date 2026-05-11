@@ -107,12 +107,13 @@ describe("instructions() snapshot matrix", () => {
 		assert.match(rendered, /complete sentence/i, "lite must keep complete sentences (distinguishes from full's fragments)");
 	});
 
-	it("every non-micro clean mode includes a Bad/Good few-shot pair", () => {
+	it("every clean mode includes a Bad/Good few-shot pair", () => {
 		writeUserConfig({ mode: "full", boundaryNormalForCode: true, boundaryNormalForCommits: true, boundaryNormalForReviews: true, boundaryNormalForExternalWrites: true });
 		for (const mode of MODES) {
 			const rendered = instructions(mode, projectDir, false);
-			assert.match(rendered, /^Bad: /m, `${mode} clean missing Bad: example`);
-			assert.match(rendered, /^Good: /m, `${mode} clean missing Good: example`);
+			// lite labels its bad examples with a discriminator ('Bad (caveman shorthand...)') so plain /^Bad: / is too narrow.
+			assert.match(rendered, /^Bad[ (][^\n]+:?/m, `${mode} clean missing Bad: example`);
+			assert.match(rendered, /^Good[ :]/m, `${mode} clean missing Good: example`);
 		}
 	});
 
@@ -135,8 +136,27 @@ describe("instructions() snapshot matrix", () => {
 		// the way full/ultra do — live testing showed lite leaking into bullet-
 		// list fragments because it inherited caveman identity framing.
 		assert.match(rendered, /complete sentences?/i, "lite must enforce complete sentences");
-		assert.match(rendered, /NOT caveman/i, "lite must explicitly distinguish itself from caveman fragments");
-		assert.match(rendered, /lite stays in prose/i, "lite must remind model that shorthand patterns belong to full\/ultra, not lite");
+		assert.match(rendered, /NOT (caveman|compressed)/i, "lite must explicitly distinguish itself from caveman shorthand");
+		assert.match(rendered, /NO 'X = Y'|equation shorthand/i, "lite must explicitly forbid '=' shorthand");
+	});
+
+	it("every clean mode includes the anti-markdown-header rule with concrete forbidden tokens", () => {
+		writeUserConfig({ mode: "full", boundaryNormalForCode: true, boundaryNormalForCommits: true, boundaryNormalForReviews: true, boundaryNormalForExternalWrites: true });
+		for (const mode of MODES) {
+			const rendered = instructions(mode, projectDir, false);
+			assert.match(rendered, /No markdown section headers/i, `${mode} clean must include the anti-markdown rule`);
+			assert.match(rendered, /`\*\*Section\*\*`/, `${mode} clean must name **Section** as forbidden`);
+			assert.match(rendered, /`## Heading`/, `${mode} clean must name ## Heading as forbidden`);
+		}
+	});
+
+	it("non-lite clean modes include a per-mode length anchor", () => {
+		writeUserConfig({ mode: "full", boundaryNormalForCode: true, boundaryNormalForCommits: true, boundaryNormalForReviews: true, boundaryNormalForExternalWrites: true });
+		for (const mode of ["full", "ultra", "micro"] as const) {
+			const rendered = instructions(mode, projectDir, false);
+			assert.match(rendered, /Length anchor:/i, `${mode} clean must include a length anchor`);
+			assert.match(rendered, /~\d+–\d+ tokens/, `${mode} clean length anchor must give a numeric range`);
+		}
 	});
 
 	it("no rendered prompt contains a blank-line block split (bridge anchor relies on single block)", () => {
