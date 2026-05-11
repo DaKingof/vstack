@@ -202,6 +202,14 @@ Daemon env vars (read by `flightdeck-daemon`):
 | `FD_MAX_LIFETIME` | `14400` | Seconds before daemon exec()s itself for a fresh process (0 disables) |
 | `FD_STATE_DIR` | `$XDG_RUNTIME_DIR/flightdeck` (or `/tmp/flightdeck-$UID`) | Daemon-private state directory (heartbeat, busy, wake-pending, subscriber pid files). Must be user-owned, mode 0700 |
 
+## Testing
+
+Local tests live under `tests/` (see `tests/README.md`). `tests/live-wake.sh` is the full daemon wake smoke test: it spawns a real Pi master in tmux, starts `flightdeck-daemon --in-tmux-window --master-harness pi`, rings a bash inner-pane bell, then asserts the wake reached Pi through `pi-bridge history` and that the daemon log recorded `harness=pi via=pi-bridge`. Runtime is roughly 2 minutes and requires tmux, a real `pi` binary, GNU bash 5+, GNU date, `jq`, and `git`.
+
+Use `tests/live-wake.sh --no-tmux` for CI-friendly shape checks only. It validates GNU bash/date, executable script paths, and bash syntax without spawning tmux, Pi, or the daemon.
+
+Daemon artifacts can be cleaned between runs with `rm -f /run/user/$UID/flightdeck/fd-*-s*.* /tmp/flightdeck-$UID/fd-*-s*.* 2>/dev/null || true`.
+
 ## Workflows
 
 | Workflow | Trigger | Purpose |

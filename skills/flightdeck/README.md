@@ -39,6 +39,15 @@ Flightdeck's required dependencies (`github`, `linear`, `project-management`) ar
 
 - `jq`, `bash` 4+, `flock` (util-linux), `tmux` 3.x, `gh`
 
+## Testing
+
+Test scripts live under `tests/`.
+
+- `tests/live-wake.sh` is the full live daemon wake smoke test. It requires tmux, a real `pi` binary, GNU bash 5+, GNU date, `jq`, and `git`; runtime is roughly 2 minutes. It spawns a Pi master, starts `flightdeck-daemon --in-tmux-window --master-harness pi`, rings an inner-pane bell, and verifies the wake appears in `pi-bridge history` with `harness=pi via=pi-bridge` in the daemon log.
+- `tests/live-wake.sh --no-tmux` is a CI-friendly shape check that validates executable paths and bash syntax without spawning tmux, Pi, or the daemon.
+
+See `tests/README.md` for setup and cleanup of `${FD_STATE_DIR}` artifacts such as `/run/user/$UID/flightdeck/fd-*-s*.*`.
+
 ## Configuration (env vars)
 
 See `SKILL.md § Configuration` for the canonical list (master-loop + daemon). Common overrides:
