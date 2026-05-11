@@ -4,7 +4,7 @@ Classification tags and per-tag handler logic for the prompts that surface acros
 
 ## Classification tags
 
-`scripts/prompt-classify` reads a captured pane buffer and returns one of these tags. Each tag has a corresponding handler in `workflows/handle-prompt.md`.
+`scripts/prompt-classify` reads a captured pane buffer and returns most of these tags; computed pipeline tags use the same handler vocabulary. Each tag has a corresponding handler in `workflows/handle-prompt.md`.
 
 | Tag | Sentinel pattern (illustrative) | Handler |
 |-----|--------------------------------|---------|
@@ -13,14 +13,14 @@ Classification tags and per-tag handler logic for the prompts that surface acros
 | `rebase-multi-choice` | `"How should I resolve the .* merge conflicts"` with options including `Rebase + force push` | Combined preserve/apply/verify payload |
 | `audit-relation-prompt` | `"Create issue .*"` or `"Create the audited follow-up issues"` with structure column showing `child of` / `related` | Default `related` |
 | `merge-ready-but-unknown` | `"Mergeable status still UNKNOWN"` or `"GitHub mergeable status stuck at UNKNOWN"` | Force-merge predicate (see `conflict-detection.md`) |
-| `scope-creep-detected` | Computed: `gh pr view --json files | length > 2 × scope_files_declared` | Escalate to user |
+| `scope-creep-detected` | Computed: `gh pr view --json files | length > 2 × scope_files_declared` | Escalate to user via `handle-prompt.md` § 8 |
 | `merge-now` | `"PR .* is approved with CI passing. Merge now"` | Auto-merge if no overlap with later queue |
 | `external-fix-suggestions` | `"Apply the external review fix suggestions"` | Apply per expansion bias unless scope-creep risk |
 | `cycle-fix-suggestions` | `"Apply fix suggestions"` post-review (also matches topical variants like `"Apply doc-wording fix from reviewer-doc?"`) | Apply per expansion bias |
 | `force-merge-confirm` | `"Mergeable status still UNKNOWN after .+ min.* Force merge"` | Force-merge predicate |
 | `descope-related` | `"Descope CC-.* to reflect"` | Auto-descope when reconciliation flags overlap |
 | `rendering` | Buffer doesn't end with a recognized terminator (e.g., `Enter to select` footer or `❯ ` cursor) | Re-poll, do not act |
-| `generic-multi-choice` | Buffer matches "multi-choice" shape but no specific sentinel | Escalate to user |
+| `generic-multi-choice` | Buffer matches "multi-choice" shape but no specific sentinel | Auto-decide by bounded policy; escalate only on destructive, ambiguous, or novel choices |
 
 If a buffer matches multiple sentinels, the most specific tag wins (e.g., `force-merge-confirm` before `merge-ready-but-unknown` before `generic-multi-choice`).
 

@@ -105,7 +105,7 @@ Either way, this workflow returns to `watch.md` § 2 for the next polling pass.
 ## Skip-If
 
 - The two-signal rule was not satisfied → return to `watch.md` § 2 without teardown; re-poll next cycle.
-- The pane is already deregistered or the window is already gone → idempotent; just log and return.
+- The issue is already terminal and its window is already gone (or terminate's final cleanup already removed the registry entry) → idempotent; just log and return.
 
 ## Returns
 

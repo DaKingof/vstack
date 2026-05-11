@@ -140,7 +140,7 @@ For each tracked issue currently in a non-terminal state (`waiting | prompting |
    | `descope-related` | `prompting` | substate = tag |
    | `multi-select-tabbed` | `prompting` | substate = tag (handler picks via `--option-multi`) |
    | `awaiting-direction` | `prompting` | substate = tag (handler synthesizes a continuation directive from registry intent) |
-   | `generic-multi-choice` | `prompting` | substate = tag (handler auto-decides per § 10 of `handle-prompt.md`, escalates only on novelty) |
+   | `generic-multi-choice` | `prompting` | substate = tag (handler auto-decides per § 11 of `handle-prompt.md`, escalates only on novelty/destructive ambiguity) |
    | `oc-question` | `prompting` | substate = tag; handler uses structured event details, not pane text |
    | `pi-question` | `prompting` | substate = tag; handler uses structured event details, including `allowCustom` |
 

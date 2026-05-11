@@ -152,7 +152,9 @@ See `patterns/conflict-detection.md` § Handler: `merge-ready-but-unknown`.
 
 ---
 
-## § 8: Handler — `external-fix-suggestions` & `cycle-fix-suggestions`
+## § 8: Handler — `external-fix-suggestions`, `cycle-fix-suggestions`, and computed `scope-creep-detected`
+
+For `scope-creep-detected`, do not answer the pane. Set `master_state.paused_for_user = {issue_id: <ISSUE>, reason: "scope-creep-detected", prompt_text: <summary of actual_files vs scope_files_declared>}` and yield to the user. The tag is computed by the watch/handler pipeline from PR file counts, not emitted by `prompt-classify` from pane text.
 
 Per-issue agent surfaces a list of review-suggested fixes with options (All / subset / None).
 

@@ -197,7 +197,7 @@ On "Stick with planned cycle / Done": proceed to § 8.
 
 ## § 8: Pane Lifecycle
 
-Do **not** close panes. Pane lifecycle stays with the user — they may want to inspect transcripts post-session, or resume a paused issue manually.
+Do **not** close any additional panes here. Terminal issue windows were already closed by `close-issue.md` after the two-signal check; any remaining paused/non-terminal panes stay with the user so they can inspect transcripts or resume manually.
 
 § 5's `flightdeck-state archive` rotated the live state away, so a subsequent `flightdeck start` (or bare `watch`) in the same tmux session creates a fresh master-state file — no stale `issues` / `merge_queue` carryover. Past sessions remain inspectable via `tmp/flightdeck-state-<SESSION>-<TS>.json.archive` and the summary file.
 
