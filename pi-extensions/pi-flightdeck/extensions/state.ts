@@ -7,7 +7,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -147,17 +147,35 @@ function nonEmpty(value: unknown): string | undefined {
 	return trimmed ? trimmed : undefined;
 }
 
+// Tmux context (session name/id + current pane id) is stable for the
+// life of the pi process. Cache the lookup after the first call to skip
+// a tmux subprocess per poll tick (perf review finding #2).
+let TMUX_CONTEXT_CACHE: TmuxContext | undefined;
+let TMUX_CONTEXT_RESOLVED = false;
+
 export function resolveTmuxContext(): TmuxContext | undefined {
-	if (!process.env.TMUX) return undefined;
+	if (TMUX_CONTEXT_RESOLVED) return TMUX_CONTEXT_CACHE;
+	if (!process.env.TMUX) {
+		TMUX_CONTEXT_RESOLVED = true;
+		return undefined;
+	}
 	const result = spawnSync("tmux", ["display-message", "-p", "#S\t#{session_id}\t#{pane_id}"], {
 		encoding: "utf8",
 		timeout: 1500,
 	});
-	if (result.status !== 0) return undefined;
+	if (result.status !== 0) {
+		TMUX_CONTEXT_RESOLVED = true;
+		return undefined;
+	}
 	const [name, id, pane] = (result.stdout ?? "").trim().split("\t");
-	if (!name || !id) return undefined;
+	if (!name || !id) {
+		TMUX_CONTEXT_RESOLVED = true;
+		return undefined;
+	}
 	const sessionKey = id.startsWith("$") ? `s${id.slice(1)}` : id;
-	return { sessionName: name, sessionId: id, sessionKey, paneId: pane || undefined };
+	TMUX_CONTEXT_CACHE = { sessionName: name, sessionId: id, sessionKey, paneId: pane || undefined };
+	TMUX_CONTEXT_RESOLVED = true;
+	return TMUX_CONTEXT_CACHE;
 }
 
 export function resolveStateDir(settings?: SettingsLike): string {
@@ -169,7 +187,19 @@ export function resolveStateDir(settings?: SettingsLike): string {
 	return `/tmp/flightdeck-${uid}`;
 }
 
+// Per-cwd project root cache. Cwd changes infrequently (only on cd /
+// session switch) so caching avoids a git subprocess per tick.
+const PROJECT_ROOT_CACHE = new Map<string, string>();
+
 export function resolveProjectRoot(cwd: string): string {
+	const cached = PROJECT_ROOT_CACHE.get(cwd);
+	if (cached !== undefined) return cached;
+	const resolved = resolveProjectRootUncached(cwd);
+	PROJECT_ROOT_CACHE.set(cwd, resolved);
+	return resolved;
+}
+
+function resolveProjectRootUncached(cwd: string): string {
 	// Inside a git worktree, prefer the main repo root (the parent of
 	// `--git-common-dir`) so flightdeck state lookup resolves to the
 	// canonical `<main-root>/tmp/flightdeck-state-*.json` instead of the
@@ -318,15 +348,58 @@ function fileMtimeSec(path: string): number | undefined {
 	}
 }
 
+// Bounded tail read: only the last ~maxLines*estLineLength bytes are
+// pulled from disk per call, so per-tick cost stays roughly constant as
+// daemon logs grow into MBs over long sessions (perf review finding #1).
+// readFileSync on a 50MB log every 1.5s tick is the original failure
+// mode — here we cap the byte read and grow on a miss.
 function readLastLines(path: string, maxLines: number): string[] {
+	const est = 256; // bytes/line heuristic
+	let budget = Math.max(8192, maxLines * est);
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		const chunk = readTailChunk(path, budget);
+		if (chunk === undefined) return [];
+		// First chunk may start mid-line; drop the leading partial unless we
+		// read the entire file (offset reached 0).
+		const lines = chunk.text.split(/\r?\n/);
+		if (!chunk.atStart && lines.length > 0) lines.shift();
+		while (lines.length && !lines[lines.length - 1]) lines.pop();
+		if (lines.length >= maxLines || chunk.atStart) {
+			return lines.length <= maxLines ? lines : lines.slice(lines.length - maxLines);
+		}
+		// Didn't get enough lines; double the read budget and retry.
+		budget *= 4;
+	}
+	// Final fallback to a full read — only hit when the file's lines are
+	// pathologically long (avg > ~4 KB) which the daemon log shouldn't
+	// produce.
 	try {
 		const text = readFileSync(path, "utf8");
 		const lines = text.split(/\r?\n/);
 		while (lines.length && !lines[lines.length - 1]) lines.pop();
-		if (lines.length <= maxLines) return lines;
-		return lines.slice(lines.length - maxLines);
+		return lines.length <= maxLines ? lines : lines.slice(lines.length - maxLines);
 	} catch {
 		return [];
+	}
+}
+
+function readTailChunk(path: string, budgetBytes: number): { text: string; atStart: boolean } | undefined {
+	let fd: number | undefined;
+	try {
+		const size = statSync(path).size;
+		const readBytes = Math.min(size, budgetBytes);
+		const start = size - readBytes;
+		if (readBytes === 0) return { text: "", atStart: true };
+		fd = openSync(path, "r");
+		const buf = Buffer.allocUnsafe(readBytes);
+		const got = readSync(fd, buf, 0, readBytes, start);
+		return { text: buf.toString("utf8", 0, got), atStart: start === 0 };
+	} catch {
+		return undefined;
+	} finally {
+		if (fd !== undefined) {
+			try { closeSync(fd); } catch { /* ignore */ }
+		}
 	}
 }
 

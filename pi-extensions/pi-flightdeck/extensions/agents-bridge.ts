@@ -44,19 +44,41 @@ export function getAgentsBridge(): AgentsBridge | undefined {
 /**
  * Resolve tmux pane-target strings (`session:window.pane`) to tmux pane ids
  * (`%N`) via a single `tmux list-panes -a` call. Empty Map on tmux failure.
+ *
+ * Caching: the result is only useful for joining tracked-issue
+ * pane_target strings against pi-agents-tmux's stats bridge. Refresh
+ * cadence is tied to the caller's `issueKey` (joined string of
+ * pane_targets) so a poll tick that sees the same tracked-issue set
+ * reuses the cached map. A coarse TTL guards against drift when a pane
+ * dies / is replaced inside an unchanged issue set (perf review
+ * finding #2).
  */
-export function buildPaneTargetToIdMap(): Map<string, string> {
+let PANE_MAP_CACHE: { map: Map<string, string>; key: string; expires: number } | undefined;
+const PANE_MAP_TTL_MS = 5000;
+
+export function buildPaneTargetToIdMap(issueKey: string = ""): Map<string, string> {
+	const now = Date.now();
+	if (PANE_MAP_CACHE && PANE_MAP_CACHE.key === issueKey && PANE_MAP_CACHE.expires > now) {
+		return PANE_MAP_CACHE.map;
+	}
 	const map = new Map<string, string>();
-	if (!process.env.TMUX) return map;
+	if (!process.env.TMUX) {
+		PANE_MAP_CACHE = { map, key: issueKey, expires: now + PANE_MAP_TTL_MS };
+		return map;
+	}
 	const result = spawnSync("tmux", ["list-panes", "-a", "-F", "#{session_name}:#{window_name}.#{pane_index}\t#{pane_id}"], {
 		encoding: "utf8",
 		timeout: 1500,
 	});
-	if (result.status !== 0) return map;
+	if (result.status !== 0) {
+		PANE_MAP_CACHE = { map, key: issueKey, expires: now + PANE_MAP_TTL_MS };
+		return map;
+	}
 	for (const line of (result.stdout ?? "").split(/\r?\n/)) {
 		const [target, paneId] = line.split("\t");
 		if (target && paneId) map.set(target, paneId);
 	}
+	PANE_MAP_CACHE = { map, key: issueKey, expires: now + PANE_MAP_TTL_MS };
 	return map;
 }
 

@@ -829,7 +829,17 @@ export default function flightdeck(pi: ExtensionAPI): void {
 			const turnsPerPane = Math.max(1, Math.floor(settingNumber("conversationsHistory", 5, cwd)));
 			const excerptChars = Math.max(120, Math.floor(settingNumber("conversationExcerptChars", 800, cwd)));
 			cache.conversations = foldWakeEventsIntoConversations(cache.conversations, snapshot.wakeEvents, turnsPerPane, excerptChars);
-			cache.paneTargetToId = buildPaneTargetToIdMap();
+			// Skip the tmux list-panes call entirely when there are no issues
+			// to join against. Key the cache by the joined pane_target set so
+			// repeated polls with the same issue set reuse the cached map
+			// instead of re-shelling tmux every 1.5s (perf review finding #2).
+			const issues = snapshot.master ? Object.values(snapshot.master.issues) : [];
+			if (issues.length === 0 || !getAgentsBridge()) {
+				cache.paneTargetToId = new Map();
+			} else {
+				const issueKey = issues.map((issue) => issue.pane_target ?? "").sort().join("|");
+				cache.paneTargetToId = buildPaneTargetToIdMap(issueKey);
+			}
 		}
 		cache.lastSnapshot = snapshot;
 		return snapshot;
