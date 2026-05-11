@@ -116,12 +116,27 @@ describe("instructions() snapshot matrix", () => {
 		}
 	});
 
-	it("every non-micro clean mode includes the identity-framing line", () => {
+	it("every clean mode includes an identity-framing line", () => {
 		writeUserConfig({ mode: "full", boundaryNormalForCode: true, boundaryNormalForCommits: true, boundaryNormalForReviews: true, boundaryNormalForExternalWrites: true });
 		for (const mode of MODES) {
 			const rendered = instructions(mode, projectDir, false);
-			assert.match(rendered, /You ARE a smart caveman engineer/, `${mode} clean must use identity framing`);
+			if (mode === "lite") {
+				assert.match(rendered, /You ARE a tight professional engineer/, `lite clean must use prose-anchored identity framing (not caveman identity)`);
+			} else {
+				assert.match(rendered, /You ARE a smart caveman engineer/, `${mode} clean must use caveman identity framing`);
+			}
 		}
+	});
+
+	it("lite mode never teaches caveman shorthand patterns (=/→/fragments OK)", () => {
+		writeUserConfig({ mode: "lite", boundaryNormalForCode: true, boundaryNormalForCommits: true, boundaryNormalForReviews: true, boundaryNormalForExternalWrites: true });
+		const rendered = instructions("lite", projectDir, false);
+		// Lite must not push the model toward fragments / `=` shorthand / arrows
+		// the way full/ultra do — live testing showed lite leaking into bullet-
+		// list fragments because it inherited caveman identity framing.
+		assert.match(rendered, /complete sentences?/i, "lite must enforce complete sentences");
+		assert.match(rendered, /NOT caveman/i, "lite must explicitly distinguish itself from caveman fragments");
+		assert.match(rendered, /lite stays in prose/i, "lite must remind model that shorthand patterns belong to full\/ultra, not lite");
 	});
 
 	it("no rendered prompt contains a blank-line block split (bridge anchor relies on single block)", () => {
