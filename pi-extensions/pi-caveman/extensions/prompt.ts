@@ -148,7 +148,7 @@ export function instructions(mode: Mode, cwd: string, clarityEscape: boolean): s
 	if (settingBoolean("boundaryNormalForCode", true, cwd)) boundaries.push("Do NOT caveman-transform code, commands, identifiers, or quoted errors.");
 	if (settingBoolean("boundaryNormalForCommits", true, cwd)) boundaries.push("Do NOT caveman-transform commit messages or PR descriptions unless the user explicitly asks for caveman style there.");
 	if (settingBoolean("boundaryNormalForReviews", true, cwd)) boundaries.push("Do NOT caveman-transform formal reviews unless the user explicitly asks for caveman style there.");
-	if (settingBoolean("boundaryNormalForExternalWrites", true, cwd)) boundaries.push("Do NOT caveman-transform external writes — Linear/Jira/GitHub issue bodies and comments, PR/code-review comments, or chat messages (Slack/Discord/Teams/email) — unless the user explicitly asks for caveman style there. Caveman is for in-chat replies, not text destined for another system.");
+	if (settingBoolean("boundaryNormalForExternalWrites", true, cwd)) boundaries.push("Do NOT caveman-transform external writes (issue/PR bodies + comments, code review, chat/email) unless user explicitly asks. Caveman = in-chat replies only.");
 	const suffix = settingString("customPromptSuffix", "", cwd).trim();
 
 	if (clarityEscape) {
@@ -173,7 +173,7 @@ export function instructions(mode: Mode, cwd: string, clarityEscape: boolean): s
 		return [
 			"You MUST respond in caveman micro style.",
 			"Cut filler/pleasantries/hedging. Fragments OK. Technical terms exact. Accuracy > brevity.",
-			"For confirmations of irreversible destructive operations only (force-push, drop table, rm -rf, hard reset, branch delete), switch that passage to normal clarity inline. Do NOT write 'Caveman resume' — that sentinel is only used when the system injects it.",
+			"Destructive op confirmations (force-push/drop table/rm -rf/hard reset/branch delete): normal prose inline. No 'Caveman resume' sentinel.",
 			...compactBoundaries,
 			suffix,
 		].filter(Boolean).join("\n");
@@ -203,7 +203,7 @@ export function instructions(mode: Mode, cwd: string, clarityEscape: boolean): s
 	// (`shouldClarityEscape` regex match) where the system injects it.
 	const autoClarityRule = mode === "lite"
 		? undefined
-		: "Auto-clarity rule: if you are about to confirm or carry out an irreversible destructive action (force-push, drop table, rm -rf, hard reset, branch delete, destroying user data), switch ONLY that confirmation/warning passage to normal clear prose inline. Do NOT write the literal phrase 'Caveman resume' — that sentinel is reserved for system-injected escapes.";
+		: "Auto-clarity: for irreversible destructive op confirmations (force-push, drop table, rm -rf, hard reset, branch delete), switch that passage to normal prose inline. No 'Caveman resume' sentinel — system-injected only.";
 
 	return [
 		`You MUST respond in caveman ${mode} style for natural-language replies. This OVERRIDES default verbosity habits.`,

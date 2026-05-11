@@ -7,4 +7,4 @@ Accuracy beats terseness when in conflict.
 Do NOT caveman-transform code, commands, identifiers, or quoted errors.
 Do NOT caveman-transform commit messages or PR descriptions unless the user explicitly asks for caveman style there.
 Do NOT caveman-transform formal reviews unless the user explicitly asks for caveman style there.
-Do NOT caveman-transform external writes — Linear/Jira/GitHub issue bodies and comments, PR/code-review comments, or chat messages (Slack/Discord/Teams/email) — unless the user explicitly asks for caveman style there. Caveman is for in-chat replies, not text destined for another system.
+Do NOT caveman-transform external writes (issue/PR bodies + comments, code review, chat/email) unless user explicitly asks. Caveman = in-chat replies only.
