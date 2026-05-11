@@ -146,7 +146,16 @@ case "$ACTION" in
     # off` doesn't help: pi invokes `tmux rename-window` directly via IPC,
     # bypassing the OSC-2 gate. pane_id is stable for the life of the
     # pane, regardless of rename / split / harness restart.
-    PANE_ID=$(tmux display-message -t "$PANE_TARGET" -p '#{pane_id}' 2>/dev/null || echo "")
+    #
+    # Validate the target exists before resolving the id. `tmux
+    # display-message -t <bogus>` silently returns the active pane's id
+    # (footgun: an init call with a typoed window name would store the
+    # caller's own pane id and reconcile would never drop it). list-panes
+    # exits non-zero for a missing target, so use it as the gate.
+    PANE_ID=""
+    if tmux list-panes -t "$PANE_TARGET" >/dev/null 2>&1; then
+      PANE_ID=$(tmux display-message -t "$PANE_TARGET" -p '#{pane_id}' 2>/dev/null || echo "")
+    fi
 
     issue_obj=$(jq -n \
       --arg window "$WINDOW" \
@@ -460,11 +469,15 @@ case "$ACTION" in
       pane_target=$("$FD_STATE" get ".issues[\"$issue\"].pane_target // empty" | tr -d '"')
       window=$("$FD_STATE" get ".issues[\"$issue\"].window // empty" | tr -d '"')
       if [[ -z "$pane_id" && -n "$pane_target" ]]; then
-        resolved=$(tmux display-message -t "$pane_target" -p '#{pane_id}' 2>/dev/null || echo "")
-        if [[ -n "$resolved" ]]; then
-          "$FD_STATE" set ".issues[\"$issue\"].pane_id" "\"$resolved\""
-          pane_id="$resolved"
-          BACKFILLED+=("$issue")
+        # Same list-panes gate as init: avoid tmux's silent fallback to
+        # the active pane when the recorded pane_target no longer exists.
+        if tmux list-panes -t "$pane_target" >/dev/null 2>&1; then
+          resolved=$(tmux display-message -t "$pane_target" -p '#{pane_id}' 2>/dev/null || echo "")
+          if [[ -n "$resolved" ]]; then
+            "$FD_STATE" set ".issues[\"$issue\"].pane_id" "\"$resolved\""
+            pane_id="$resolved"
+            BACKFILLED+=("$issue")
+          fi
         fi
       fi
       alive=1

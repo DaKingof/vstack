@@ -604,7 +604,10 @@ wake_master() {
     bridge_bin=$(pi_resolve_bridge_bin 2>/dev/null || echo "")
     master_pid=$(resolve_pi_master_pid "$master_id" || echo "")
     if [[ -n "$bridge_bin" && -n "$master_pid" ]]; then
-      if "$bridge_bin" send --pid "$master_pid" '/flightdeck watch --from-daemon' >/dev/null 2>&1; then
+      # 10s timeout caps the worst case if the bridge socket hangs;
+      # pi-bridge send normally returns in <100ms (ack from bridge
+      # daemon, not from master turn completion).
+      if timeout 10 "$bridge_bin" send --pid "$master_pid" '/flightdeck watch --from-daemon' >/dev/null 2>&1; then
         log wake "master=$master_id harness=pi via=pi-bridge pid=$master_pid reasons=$combined"
         return 0
       fi
@@ -1398,7 +1401,14 @@ resolve_oc_meta() {
 # --- Main loop -----------------------------------------------------------------
 run_loop() {
   declare -A LAST_HASH HASH_SINCE NOTIFIED_HASH LAST_BELL_HASH LAST_GONE_LOG FIRST_SEEN PANE_HARNESS
-  declare -A OC_SUBSCRIBED OC_PANE_TARGET
+  # Initialize associative arrays with `=()` so `${#arr[@]}` reads 0 under
+  # `set -u` even before any keys are populated. Bash quirk: `declare -A
+  # foo` alone is treated as "not set" for `${#foo[@]}` (raises unbound
+  # variable), and `[[ -v foo[@] ]]` is unreliable in 5.x — it returns
+  # false even when the array has entries. Explicit `=()` is the only form
+  # that lets us read the count safely without a separate guard (#3
+  # finding 2).
+  declare -A OC_SUBSCRIBED=() OC_PANE_TARGET=()
   # Startup banner — only visible when the daemon runs in --in-tmux-window
   # mode (stdout connected to a tty). In detach mode stdout is the log file
   # so the `-t 1` guard avoids double-writing the same lines.
@@ -1511,13 +1521,6 @@ run_loop() {
   local HEARTBEAT_COUNTER=0
   local START_EPOCH; START_EPOCH=$(date +%s)
   local HEARTBEAT_FILE; HEARTBEAT_FILE=$(fd_heartbeat_file "$STATE_DIR" "$SESSION_KEY")
-  # `${#assoc_array[@]}` on an empty `declare -A` array raises
-  # "unbound variable" under set -u (bash quirk — the `:-` default form
-  # doesn't help for the `${#arr[@]}` count form). Pi-only / claude-only /
-  # codex-only sessions never populate OC_SUBSCRIBED, so reading the count
-  # directly here used to kill the daemon at startup with no useful error
-  # other than a stale pid file (#3 finding 2).
-  if [[ -v OC_SUBSCRIBED[@] ]]; then _oc_sub_count=${#OC_SUBSCRIBED[@]}; else _oc_sub_count=0; fi
 
   # Auto-detect master harness when caller didn't pass --master-harness.
   # `pi-bridge list` is authoritative for pi masters: if there's a bridge
@@ -1530,7 +1533,7 @@ run_loop() {
       log master-harness "auto-detected master harness=pi via pi-bridge list cwd match"
     fi
   fi
-  log start "pid=$$ session_id=$SESSION_ID name=$SESSION_NAME master_id=$master_id master_harness=${MASTER_HARNESS:-unknown} inner_ids=${INNER_IDS[*]} oc_subscribed=$_oc_sub_count"
+  log start "pid=$$ session_id=$SESSION_ID name=$SESSION_NAME master_id=$master_id master_harness=${MASTER_HARNESS:-unknown} inner_ids=${INNER_IDS[*]} oc_subscribed=${#OC_SUBSCRIBED[@]}"
   # Separate traps:
   #   - EXIT: cleanup only (called on natural exit too).
   #   - INT/TERM: cleanup + explicit exit (so SIGTERM from `stop` actually
