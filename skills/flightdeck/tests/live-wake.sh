@@ -174,6 +174,17 @@ FD_DIR="${FD_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/flightdeck}"
 [[ -d "$FD_DIR" ]] || FD_DIR="/tmp/flightdeck-$(id -u)"
 rm -f "$FD_DIR"/fd-*"$SESSION_KEY"* 2>/dev/null || true
 
+section "pane-poll batch smoke"
+if [[ -n "${TMUX:-}" ]]; then
+  BATCH_OUT=$(jq -nc --arg pane "$INNER_PANE" '[{issue:"FDLIVE-BATCH",pane_id:$pane,pane_target:"",harness:"bash",worktree:null,pr_number:null}]' \
+    | "$PANE_POLL" --batch -)
+  jq -e --arg pane "$INNER_PANE" 'select(.issue == "FDLIVE-BATCH" and .pane_target == $pane and ((.dead // false) | not))' \
+    <<< "$BATCH_OUT" >/dev/null || fail "pane-poll --batch did not return live inner pane: $BATCH_OUT"
+  pass "pane-poll --batch returned live inner pane"
+else
+  note "TMUX env unavailable; skipping pane-poll --batch smoke"
+fi
+
 section "start daemon"
 # tmux new-window does not inherit the caller's temporary env assignments;
 # seed the session environment before --in-tmux-window spawns the daemon.
@@ -200,12 +211,11 @@ while (( SECONDS < deadline )); do
   if grep -q '/skill:flightdeck watch --from-daemon' <<< "$HIST"; then
     pass "wake delivered through pi-bridge history"
     LOG_PATH="$FD_DIR/fd-daemon-${SESSION_KEY}.log"
-    if [[ -f "$LOG_PATH" ]]; then
-      note "daemon wake log:"
-      grep 'harness=pi via=pi-bridge' "$LOG_PATH" | tail -n 3 | sed 's/^/    /' || true
-      grep -q 'harness=pi via=pi-bridge' "$LOG_PATH" || fail "daemon log missing pi-bridge wake channel"
-      pass "daemon log shows harness=pi via=pi-bridge"
-    fi
+    [[ -f "$LOG_PATH" ]] || fail "daemon log missing: $LOG_PATH"
+    note "daemon wake log:"
+    grep 'harness=pi via=pi-bridge' "$LOG_PATH" | tail -n 3 | sed 's/^/    /' || true
+    grep -q 'harness=pi via=pi-bridge' "$LOG_PATH" || fail "daemon log missing pi-bridge wake channel"
+    pass "daemon log shows harness=pi via=pi-bridge"
     exit 0
   fi
   sleep 1

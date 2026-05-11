@@ -194,7 +194,7 @@ Daemon env vars (read by `flightdeck-daemon`):
 |----------|---------|---------|
 | `FD_POLL_SEC` | `2` | Inner-pane poll cadence |
 | `FD_OC_POLL_SEC` | `2` | OpenCode subscriber base poll cadence |
-| `FD_OC_BACKOFF_MAX_SEC` | `16` | Maximum OpenCode subscriber exponential backoff after unchanged `/question` + `/session/<id>/message` polls; resets to `FD_OC_POLL_SEC` on new question ids, response hash change, or daemon bell marker |
+| `FD_OC_BACKOFF_MAX_SEC` | `16` | Maximum OpenCode subscriber exponential backoff after unchanged `/question` + `/session/<id>/message` polls; resets to `FD_OC_POLL_SEC` on new question ids, response hash change, or daemon bell marker (the daemon clears the tmux bell after marking it) |
 | `FD_GRACE_SEC` | `30` | Cold-start grace per pane; bells suppressed during this window |
 | `FD_WAKE_PENDING_TTL` | `300` | Wake-pending revert threshold when master crashes mid-turn |
 | `FD_MASTER_TURN_TTL` | `3600` | Maximum master turn duration before the busy lock is treated as stale even if the master pane is still alive |
@@ -205,7 +205,7 @@ Daemon env vars (read by `flightdeck-daemon`):
 
 ## Testing
 
-Local tests live under `tests/` (see `tests/README.md`). `tests/live-wake.sh` is the full daemon wake smoke test: it spawns a real Pi master in tmux, starts `flightdeck-daemon --in-tmux-window --master-harness pi`, rings a bash inner-pane bell, then asserts the wake reached Pi through `pi-bridge history` and that the daemon log recorded `harness=pi via=pi-bridge`. Runtime is roughly 2 minutes and requires tmux, a real `pi` binary, GNU bash 5+, GNU date, `jq`, and `git`.
+Local tests live under `tests/` (see `tests/README.md`). `tests/live-wake.sh` is the full daemon wake smoke test: it spawns a real Pi master in tmux, smoke-tests `pane-poll --batch -` against the live bash inner pane when run inside tmux, starts `flightdeck-daemon --in-tmux-window --master-harness pi`, rings that pane's bell, then asserts the wake reached Pi through `pi-bridge history` and that the daemon log recorded `harness=pi via=pi-bridge` (failing if the log is absent). Runtime is roughly 2 minutes and requires tmux, a real `pi` binary, GNU bash 5+, GNU date, `jq`, and `git`.
 
 Use `tests/live-wake.sh --no-tmux` for CI-friendly shape checks only. It validates GNU bash/date, executable script paths, and bash syntax without spawning tmux, Pi, or the daemon.
 

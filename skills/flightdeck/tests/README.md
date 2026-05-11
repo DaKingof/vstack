@@ -17,9 +17,10 @@ These tests are local smoke tests for the `flightdeck` skill's harness adapters 
 It asserts that:
 
 1. a real Pi master session registers with `pi-bridge` from an isolated temporary project;
-2. `flightdeck-daemon start --in-tmux-window --master-harness pi` can launch against that master and a bash inner pane;
-3. a terminal bell in the inner pane is detected by the daemon fallback path; and
-4. the daemon wakes the Pi master through `pi-bridge send`, observable in `pi-bridge history`, with `harness=pi via=pi-bridge` in the daemon log.
+2. `pane-poll --batch -` returns the live bash inner pane from a registry-shaped JSON input (when the test itself is running inside tmux, matching normal local usage);
+3. `flightdeck-daemon start --in-tmux-window --master-harness pi` can launch against that master and a bash inner pane;
+4. a terminal bell in the inner pane is detected by the daemon fallback path; and
+5. the daemon wakes the Pi master through `pi-bridge send`, observable in `pi-bridge history`, with `harness=pi via=pi-bridge` in the daemon log. The test fails if that daemon log is absent.
 
 Run full mode from inside tmux:
 

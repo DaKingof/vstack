@@ -43,7 +43,7 @@ Flightdeck's required dependencies (`github`, `linear`, `project-management`) ar
 
 Test scripts live under `tests/`.
 
-- `tests/live-wake.sh` is the full live daemon wake smoke test. It requires tmux, a real `pi` binary, GNU bash 5+, GNU date, `jq`, and `git`; runtime is roughly 2 minutes. It spawns a Pi master, starts `flightdeck-daemon --in-tmux-window --master-harness pi`, rings an inner-pane bell, and verifies the wake appears in `pi-bridge history` with `harness=pi via=pi-bridge` in the daemon log.
+- `tests/live-wake.sh` is the full live daemon wake smoke test. It requires tmux, a real `pi` binary, GNU bash 5+, GNU date, `jq`, and `git`; runtime is roughly 2 minutes. It spawns a Pi master, smoke-tests `pane-poll --batch -` against the live inner pane when run inside tmux, starts `flightdeck-daemon --in-tmux-window --master-harness pi`, rings an inner-pane bell, and verifies the wake appears in `pi-bridge history` with `harness=pi via=pi-bridge` in the daemon log (failing if the log is absent).
 - `tests/live-wake.sh --no-tmux` is a CI-friendly shape check that validates executable paths and bash syntax without spawning tmux, Pi, or the daemon.
 
 See `tests/README.md` for setup and cleanup of `${FD_STATE_DIR}` artifacts such as `/run/user/$UID/flightdeck/fd-*-s*.*`.
@@ -56,7 +56,7 @@ See `SKILL.md § Configuration` for the canonical list (master-loop + daemon). C
 |----------|---------|---------|
 | `FD_POLL_SEC` | `2` | Daemon inner-pane poll cadence |
 | `FD_OC_POLL_SEC` | `2` | OpenCode subscriber base poll cadence |
-| `FD_OC_BACKOFF_MAX_SEC` | `16` | Maximum OpenCode subscriber exponential backoff after unchanged `/question` + `/session/<id>/message` polls; resets on new question ids, response hash change, or daemon bell marker |
+| `FD_OC_BACKOFF_MAX_SEC` | `16` | Maximum OpenCode subscriber exponential backoff after unchanged `/question` + `/session/<id>/message` polls; resets on new question ids, response hash change, or daemon bell marker (the daemon clears the tmux bell after marking it) |
 | `FD_MASTER_TURN_TTL` | `3600` | Maximum master turn duration before the busy lock is treated as stale |
 | `FD_WAKE_PENDING_TTL` | `300` | Wake-pending revert threshold when master crashes mid-turn |
 | `FD_ADAPTER_FRESHNESS_TTL` | `5` | Seconds to cache HTTP/WebSocket adapter freshness probes (`0` disables cache) |
