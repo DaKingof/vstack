@@ -151,10 +151,20 @@ case "$ACTION" in
 
   init)
     gc_tmp_orphans "$FILE"
+    # Acquire the same lock the update_state helper uses so concurrent
+    # `pane-registry init` paths don't race here (bugs review finding #5):
+    # one path could pass the `-f $FILE` existence check while another is
+    # mid-write, leaving the loser to truncate freshly-written state.
+    init_lock="${FILE}.lock"
+    init_tmp="${FILE}.tmp.$$"
+    trap 'rm -f "$init_tmp"' EXIT
+    exec 9>"$init_lock"
+    flock 9
     if [[ -f "$FILE" ]]; then
       # Idempotent — don't clobber existing state (compaction-recovery path).
       # Stale `terminated: true` files are rotated by `terminate.md § 5` via
       # the `archive` action, so a present file here is always a live session.
+      exec 9>&-
       exit 0
     fi
     started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -169,7 +179,9 @@ case "$ACTION" in
         merge_queue: [],
         conflict_graph: {edges: [], computed_at: null},
         paused_for_user: null
-      }' > "$FILE"
+      }' > "$init_tmp"
+    mv "$init_tmp" "$FILE"
+    exec 9>&-
     ;;
 
   get)
@@ -262,7 +274,7 @@ case "$ACTION" in
     # resolution the daemon uses. Both writers MUST agree on this path or
     # the daemon never sees the master-busy signal (silent wake-during-turn
     # race).
-    [[ ${#ARGS[@]} -lt 1 ]] && { echo "Usage: master-busy <lock|unlock|check> [--master-pane <%N>]" >&2; exit 2; }
+    [[ ${#ARGS[@]} -lt 1 ]] && { echo "Usage: master-busy <lock|unlock|check> [--master-pane <%N>] [--owner-pid <PID>]" >&2; exit 2; }
     sub_action="${ARGS[0]}"
     # Resolve session_id-keyed busy file path (matches daemon's SESSION_KEY).
     sid=$(tmux display-message -p -t "$SESSION" '#{session_id}' 2>/dev/null || echo "")
@@ -275,11 +287,12 @@ case "$ACTION" in
     case "$sub_action" in
       lock)
         master_pane=""
+        owner_pid=""
         for ((i=1; i<${#ARGS[@]}; i++)); do
-          if [[ "${ARGS[$i]}" == "--master-pane" ]]; then
-            master_pane="${ARGS[$((i+1))]}"
-            break
-          fi
+          case "${ARGS[$i]}" in
+            --master-pane) master_pane="${ARGS[$((i+1))]}" ;;
+            --owner-pid)   owner_pid="${ARGS[$((i+1))]}" ;;
+          esac
         done
         if [[ -z "$master_pane" ]]; then
           # Auto-resolve from the current pane this script runs from.
@@ -304,8 +317,19 @@ case "$ACTION" in
         exec 8>"$session_lock"
         flock 8
         tmp="${busy_file}.tmp.$$"
-        jq -nc --argjson pid $$ --arg mp "$master_pane" --arg sa "$started_at" \
-          '{pid:$pid, master_pane_id:$mp, started_at:$sa}' > "$tmp"
+        # owner_pid: caller's long-lived agent PID, if known. The previous
+        # implementation wrote `$$` of this wrapper script — which exits
+        # immediately after the file is written, so the daemon's
+        # `kill -0 $pid` check always reported the master as "not busy"
+        # and could deliver a wake mid-turn (bugs review finding #1).
+        # Daemon treats a missing pid field as "validate by pane + TTL".
+        if [[ -n "$owner_pid" && "$owner_pid" =~ ^[1-9][0-9]*$ ]]; then
+          jq -nc --argjson pid "$owner_pid" --arg mp "$master_pane" --arg sa "$started_at" \
+            '{pid:$pid, master_pane_id:$mp, started_at:$sa}' > "$tmp"
+        else
+          jq -nc --arg mp "$master_pane" --arg sa "$started_at" \
+            '{master_pane_id:$mp, started_at:$sa}' > "$tmp"
+        fi
         mv "$tmp" "$busy_file"
         rm -f "$wake_pending"
         exec 8>&-

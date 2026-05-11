@@ -345,7 +345,7 @@ function readJsonLines(path: string, maxLines: number): unknown[] {
 	return out;
 }
 
-function countSubscribers(stateDir: string): DaemonHealth["subscriberCounts"] {
+function countSubscribers(stateDir: string, sessionKey: string | undefined): DaemonHealth["subscriberCounts"] {
 	const counts = { opencode: 0, claude: 0, pi: 0, codex: 0 };
 	let entries: string[];
 	try {
@@ -353,8 +353,14 @@ function countSubscribers(stateDir: string): DaemonHealth["subscriberCounts"] {
 	} catch {
 		return counts;
 	}
+	// Subscriber pid filenames are scoped by session key:
+	// `fd-<type>-subscriber-<session_key>-<pane_safe>.pid`. Filtering keeps
+	// the overlay's count specific to the current flightdeck session and
+	// avoids overcounting when multiple daemons share the state dir.
+	const infix = sessionKey ? `-${sessionKey}-` : "";
 	for (const entry of entries) {
 		if (!entry.endsWith(".pid")) continue;
+		if (!entry.includes(infix)) continue;
 		if (entry.startsWith("fd-subscriber-")) counts.opencode += 1;
 		else if (entry.startsWith("fd-cc-subscriber-")) counts.claude += 1;
 		else if (entry.startsWith("fd-pi-subscriber-")) counts.pi += 1;
@@ -393,7 +399,7 @@ export function readDaemonHealth(
 		pidFile: paths.pid,
 		sessionKey,
 		stateDir,
-		subscriberCounts: countSubscribers(stateDir),
+		subscriberCounts: countSubscribers(stateDir, sessionKey),
 		wakeEventsPath: paths.wakeEvents,
 		wakeEventsRecent,
 		wakePending,

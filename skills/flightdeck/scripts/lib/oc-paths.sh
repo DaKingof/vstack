@@ -32,7 +32,30 @@ oc_pane_id_safe() {
   echo "${id#%}"
 }
 
-oc_subscriber_pid_file()  { echo "$(fd_resolve_state_dir)/fd-subscriber-$(oc_pane_id_safe "$1").pid"; }
+# Per-pane subscriber PID file. Caller MUST pass session_key as $2 so the
+# filename is scoped to a single flightdeck session (e.g.
+# `fd-subscriber-s21-pane-403.pid`). Without the session-key scope, two
+# concurrent daemons would glob each other's subscriber files on stop and
+# kill cross-session sidecars (bugs review finding #3).
+oc_subscriber_pid_file()  { echo "$(fd_resolve_state_dir)/fd-subscriber-${2:?session_key required}-$(oc_pane_id_safe "$1").pid"; }
+
+# Cheap adapter-freshness probe for OC: the opencode-serve process spawned
+# by open-terminal records its pid in `oc_spawn_file($issue).server_pid`.
+# If that pid is dead, the registered url/session won't accept requests,
+# the subscriber would crash on first call, and the daemon would silently
+# skip the capture-pane fallback (cross-harness review finding #2). The
+# probe is fast (one file read + one signal-0 check) so it's safe to call
+# from `pane-registry oc-attach-args` on every resolution.
+oc_adapter_is_fresh() {
+  local issue="$1"
+  [[ -z "$issue" ]] && return 1
+  local spawn_file pid
+  spawn_file=$(oc_spawn_file "$issue")
+  [[ -f "$spawn_file" ]] || return 1
+  pid=$(jq -r '.server_pid // empty' "$spawn_file" 2>/dev/null)
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
 
 # Per-port opencode-serve subprocess paths. Server is spawned by
 # open-terminal as a detached background process (setsid+nohup) and

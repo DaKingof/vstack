@@ -28,7 +28,31 @@ cc_pane_id_safe() {
   echo "${id#%}"
 }
 
-cc_subscriber_pid_file() { echo "$(fd_resolve_state_dir)/fd-cc-subscriber-$(cc_pane_id_safe "$1").pid"; }
+# Session-keyed subscriber PID file. Caller MUST pass session_key as $2.
+# See oc_subscriber_pid_file for the rationale (cross-session glob race).
+cc_subscriber_pid_file() { echo "$(fd_resolve_state_dir)/fd-cc-subscriber-${2:?session_key required}-$(cc_pane_id_safe "$1").pid"; }
+
+# Freshness probe for the claude-channel adapter (cross-harness review
+# finding #2). The cc spawn file doesn't carry a server pid, so we check
+# the two artifacts the subscriber needs: a reachable HTTP port and an
+# existing transcript file. /dev/tcp is bash-native (no nc dependency)
+# and short-timed via SECONDS guard.
+cc_adapter_is_fresh() {
+  local issue="$1"
+  [[ -z "$issue" ]] && return 1
+  local spawn_file port transcript
+  spawn_file=$(cc_spawn_file "$issue")
+  [[ -f "$spawn_file" ]] || return 1
+  port=$(jq -r '.port // empty' "$spawn_file" 2>/dev/null)
+  transcript=$(jq -r '.transcript // empty' "$spawn_file" 2>/dev/null)
+  [[ -n "$transcript" && -f "$transcript" ]] || return 1
+  [[ "$port" =~ ^[1-9][0-9]*$ ]] || return 1
+  # Bash /dev/tcp probe with a hard cap. Errors (port closed, ECONNREFUSED)
+  # produce a non-zero exit immediately.
+  ( exec 3<>"/dev/tcp/127.0.0.1/$port" ) 2>/dev/null || return 1
+  exec 3>&- 3<&-
+  return 0
+}
 
 # Probe a TCP port on 127.0.0.1 — returns 0 if free, 1 if in use.
 cc_port_is_free() {

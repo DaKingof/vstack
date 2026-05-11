@@ -30,7 +30,34 @@ cx_pane_id_safe() {
   echo "${id#%}"
 }
 
-cx_subscriber_pid_file() { echo "$(fd_resolve_state_dir)/fd-cx-subscriber-$(cx_pane_id_safe "$1").pid"; }
+# Session-keyed subscriber PID file. Caller MUST pass session_key as $2.
+# See oc_subscriber_pid_file for the rationale (cross-session glob race).
+cx_subscriber_pid_file() { echo "$(fd_resolve_state_dir)/fd-cx-subscriber-${2:?session_key required}-$(cx_pane_id_safe "$1").pid"; }
+
+# Freshness probe for the codex app-server adapter (cross-harness review
+# finding #2). cx_spawn_file records ws_url (host:port). Probe the port
+# via /dev/tcp; if unreachable, return non-zero so the daemon falls back
+# to capture-pane instead of marking the pane subscribed against a dead
+# app-server.
+cx_adapter_is_fresh() {
+  local issue="$1"
+  [[ -z "$issue" ]] && return 1
+  local spawn_file url host port
+  spawn_file=$(cx_spawn_file "$issue")
+  [[ -f "$spawn_file" ]] || return 1
+  url=$(jq -r '.url // empty' "$spawn_file" 2>/dev/null)
+  [[ -n "$url" ]] || return 1
+  # url is ws://host:port — strip the scheme and split on `:`.
+  url="${url#ws://}"
+  url="${url#wss://}"
+  host="${url%%:*}"
+  port="${url##*:}"
+  port="${port%%/*}"
+  [[ -n "$host" && "$port" =~ ^[1-9][0-9]*$ ]] || return 1
+  ( exec 3<>"/dev/tcp/$host/$port" ) 2>/dev/null || return 1
+  exec 3>&- 3<&-
+  return 0
+}
 
 cx_port_is_free() {
   local port="$1"

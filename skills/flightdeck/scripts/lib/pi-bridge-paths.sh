@@ -24,7 +24,9 @@ pi_pane_id_safe() {
   echo "${id#%}"
 }
 
-pi_subscriber_pid_file() { echo "$(fd_resolve_state_dir)/fd-pi-subscriber-$(pi_pane_id_safe "$1").pid"; }
+# Session-keyed subscriber PID file. Caller MUST pass session_key as $2.
+# See oc_subscriber_pid_file for the rationale (cross-session glob race).
+pi_subscriber_pid_file() { echo "$(fd_resolve_state_dir)/fd-pi-subscriber-${2:?session_key required}-$(pi_pane_id_safe "$1").pid"; }
 
 # Resolve the pi-bridge CLI. Prefer an explicit test/operator override,
 # then PATH, then the canonical vstack install path. Empty stdout +

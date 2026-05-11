@@ -57,9 +57,11 @@ Master mode entry point. Polls every spawned issue pane, classifies their prompt
    For codex / opencode / pi masters, prefer the tmux-window spawn mode (set `FD_SPAWN_MODE=tmux-window` env or pass `--in-tmux-window`). The daemon runs inside a dedicated tmux window in the same session; lifetime ties to the tmux session (which is the architectural boundary of a flightdeck session anyway). When stdout is a tty (i.e., this mode) the daemon prints a startup banner and tees every `log()` / `warn()` line to the window in addition to the on-disk log, so the window shows live activity instead of being blank — detach mode keeps stdout pointed at the log file and writes only to disk. Detach mode is the default for Claude Code where `run_in_background` reparenting is reliable.
 6. **Atomic master-busy lock** — write `tmp/fd-master-<SESSION_KEY>.busy` via temp+mv:
    ```
-   .agents/skills/flightdeck/scripts/flightdeck-state master-busy lock
+   .agents/skills/flightdeck/scripts/flightdeck-state master-busy lock --owner-pid "$MASTER_OWNER_PID"
    ```
    This signals the daemon that master is mid-turn and prevents wake delivery during processing.
+
+   `MASTER_OWNER_PID` should be a long-lived PID inside the master's process tree — the harness binary running the agent (pi, claude, codex, opencode) or the calling agent's interpreter. Pi masters can use `pgrep -u $(id -u) -nf '^pi( |$)' || echo ""`. Claude / OpenCode / Codex masters can pass the pid of their CLI process or omit the flag entirely; when the flag is absent the daemon falls back to validating the lock by `master_pane_id` tmux-liveness plus a TTL (`FD_MASTER_TURN_TTL`, default 3600s), which is correct for cases where no stable long-lived pid is exposed. **Do NOT** pass the calling shell's `$$` — it exits before the daemon ever reads the lock file, so the pid check would always report the master as not busy and a wake could land mid-turn.
 7. **Drain pending events** for hint-level visibility into which panes are ready:
    ```
    PENDING=$(.agents/skills/flightdeck/scripts/flightdeck-daemon events --session "$SESSION_ID")

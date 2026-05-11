@@ -16,7 +16,7 @@
 #     master's atomic ack action).
 #
 # Master contract (MANDATORY):
-#   1. Turn-start: atomic write BUSY_FILE = '{"pid":<pid>,"master_pane_id":
+#   1. Turn-start: atomic write BUSY_FILE = '{"pid":<long-lived-pid>?,"master_pane_id":
 #      "%N","started_at":"<ISO>"}' via temp+mv.
 #   2. Drain hint: events=$(flightdeck-daemon events --session <id>)
 #   3. Handle panes per registry/classifier.
@@ -97,6 +97,10 @@ CLASSIFIER="${FD_CLASSIFIER:-$_default_classifier}"
 [[ ! -x "$CLASSIFIER" ]] && CLASSIFIER=""
 VERBOSE="${FD_VERBOSE:-0}"
 WAKE_PENDING_TTL="${FD_WAKE_PENDING_TTL:-300}"
+# Bound on a master turn's lifetime. The master-busy lock is treated as
+# stale beyond this even when the recorded pane is still alive, so an
+# agent that crashed mid-turn without unlocking eventually unblocks wakes.
+MASTER_TURN_TTL="${FD_MASTER_TURN_TTL:-3600}"
 HEARTBEAT_TICKS="${FD_HEARTBEAT_TICKS:-60}"
 MAX_LIFETIME="${FD_MAX_LIFETIME:-14400}"  # 4h; 0 disables
 GRACE_SEC="${FD_GRACE_SEC:-30}"           # cold-start wake-suppression window
@@ -423,28 +427,48 @@ is_master_busy() {
   [[ ! -f "$BUSY_FILE" ]] && return 1
 
   local fields
-  fields=$(jq -r '[(.pid // ""|tostring), (.master_pane_id // "")] | @tsv' "$BUSY_FILE" 2>/dev/null) || {
+  fields=$(jq -r '[(.pid // ""|tostring), (.master_pane_id // ""), (.started_at // "")] | @tsv' "$BUSY_FILE" 2>/dev/null) || {
     return 1  # malformed JSON
   }
-  local lock_pid lock_pane
+  local lock_pid lock_pane lock_started
   lock_pid=$(echo "$fields" | awk -F'\t' '{print $1}')
   lock_pane=$(echo "$fields" | awk -F'\t' '{print $2}')
+  lock_started=$(echo "$fields" | awk -F'\t' '{print $3}')
 
-  # Required fields.
-  [[ -z "$lock_pid" || -z "$lock_pane" ]] && return 1
-
-  # Numeric pid check (reject pid=0; valid PIDs start at 1).
-  [[ ! "$lock_pid" =~ ^[1-9][0-9]*$ ]] && return 1
-
-  # Pane match.
+  # Required field: pane match. pid is optional (older lockfiles, or callers
+  # that don't know their long-lived owner pid).
+  [[ -z "$lock_pane" ]] && return 1
   [[ "$lock_pane" != "$master_id" ]] && return 1
 
-  # PID liveness. NEVER remove BUSY_FILE here — TOCTOU-safe: a fresh master
-  # could `mv` a new lock between our read and `rm`, and we'd delete the live
-  # lock. Master will overwrite on next turn (atomic temp+mv); GC cleans
-  # truly orphaned files at startup.
-  if ! kill -0 "$lock_pid" 2>/dev/null; then
+  # Pane must still exist in tmux. A vanished pane means the master's
+  # window/process is gone; the lock is stale.
+  if ! tmux list-panes -t "$lock_pane" >/dev/null 2>&1; then
     return 1
+  fi
+
+  # Owner PID check, when present. If absent (master-busy lock was written
+  # without --owner-pid), fall through to the TTL gate. Reject pid=0 / pid=$$
+  # of a long-dead helper script (bugs review finding #1: the wrapper used
+  # to write its own short-lived `$$` here, so `kill -0` always failed and
+  # the daemon treated the master as not busy mid-turn).
+  if [[ -n "$lock_pid" && "$lock_pid" != "null" && "$lock_pid" != "0" ]]; then
+    if [[ "$lock_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$lock_pid" 2>/dev/null; then
+      return 0
+    fi
+    # Pid was recorded but is dead. Fall through to TTL — the agent may have
+    # crashed mid-turn and we want to eventually wake on someone else.
+  fi
+
+  # TTL gate: if started_at parses and exceeds MASTER_TURN_TTL, treat the
+  # lock as stale even if the pane is still alive.
+  if [[ -n "$lock_started" ]]; then
+    local started_epoch now_epoch age
+    started_epoch=$(date -d "$lock_started" +%s 2>/dev/null || echo 0)
+    now_epoch=$(date +%s)
+    age=$(( now_epoch - started_epoch ))
+    if (( age > MASTER_TURN_TTL )); then
+      return 1
+    fi
   fi
 
   return 0
@@ -511,6 +535,22 @@ clear_stale_wake_pending() {
 }
 
 # --- Wake delivery -------------------------------------------------------------
+
+# Build the wake message payload for a given master harness. Each TUI
+# parses commands with its own grammar prefix; sending the slash form to
+# codex (which uses `$` for commands) or to a Pi session via the bridge
+# (slash/skill expansion is bypassed) means the master LLM only sees raw
+# text it has to interpret rather than a real command invocation
+# (cross-harness review finding #1). Default keeps the legacy slash form
+# for unspecified harnesses so existing claude/opencode behavior is
+# unchanged.
+wake_payload_for_harness() {
+  case "${1:-}" in
+    codex) printf '%s' '$flightdeck watch --from-daemon' ;;
+    pi)    printf '%s' '/skill:flightdeck watch --from-daemon' ;;
+    *)     printf '%s' '/flightdeck watch --from-daemon' ;;
+  esac
+}
 
 # Resolve the pi-bridge pid for a pi master pane. Pi runs in alt-screen mode
 # and reads keyboard input through its own loop, NOT through tmux's pasted
@@ -599,6 +639,9 @@ wake_master() {
   # Pi master: bypass tmux paste entirely — pi's alt-screen input loop
   # doesn't read pasted scrollback, so the wake message would be invisible
   # to the agent (#4 finding 1). pi-bridge `send` is the canonical channel.
+  local wake_payload
+  wake_payload=$(wake_payload_for_harness "$MASTER_HARNESS")
+
   if [[ "$MASTER_HARNESS" == "pi" ]]; then
     local bridge_bin master_pid
     bridge_bin=$(pi_resolve_bridge_bin 2>/dev/null || echo "")
@@ -607,7 +650,7 @@ wake_master() {
       # 10s timeout caps the worst case if the bridge socket hangs;
       # pi-bridge send normally returns in <100ms (ack from bridge
       # daemon, not from master turn completion).
-      if timeout 10 "$bridge_bin" send --pid "$master_pid" '/flightdeck watch --from-daemon' >/dev/null 2>&1; then
+      if timeout 10 "$bridge_bin" send --pid "$master_pid" "$wake_payload" >/dev/null 2>&1; then
         log wake "master=$master_id harness=pi via=pi-bridge pid=$master_pid reasons=$combined"
         return 0
       fi
@@ -618,7 +661,7 @@ wake_master() {
   fi
 
   local buffer_name="fd-wake-${SESSION_KEY}"
-  if ! printf '%s' '/flightdeck watch --from-daemon' | tmux load-buffer -b "$buffer_name" -; then
+  if ! printf '%s' "$wake_payload" | tmux load-buffer -b "$buffer_name" -; then
     log wake-fail "load-buffer failed"
     locked_rm_wake_pending
     return 1
@@ -1004,7 +1047,7 @@ cc_subscriber_loop() {
 
 spawn_cc_subscriber() {
   local pane_id="$1" transcript="$2"
-  local pid_file; pid_file=$(cc_subscriber_pid_file "$pane_id")
+  local pid_file; pid_file=$(cc_subscriber_pid_file "$pane_id" "$SESSION_KEY")
   if [[ -f "$pid_file" ]]; then
     local existing; existing=$(cat "$pid_file" 2>/dev/null || echo "")
     if [[ "$existing" =~ ^[1-9][0-9]*$ ]] && kill -0 "$existing" 2>/dev/null; then
@@ -1176,7 +1219,7 @@ pi_subscriber_loop() {
 
 spawn_pi_subscriber() {
   local pane_id="$1" pi_pid="$2" pi_socket="${3:-}"
-  local pid_file; pid_file=$(pi_subscriber_pid_file "$pane_id")
+  local pid_file; pid_file=$(pi_subscriber_pid_file "$pane_id" "$SESSION_KEY")
   if [[ -f "$pid_file" ]]; then
     local existing; existing=$(cat "$pid_file" 2>/dev/null || echo "")
     if [[ "$existing" =~ ^[1-9][0-9]*$ ]] && kill -0 "$existing" 2>/dev/null; then
@@ -1261,7 +1304,7 @@ cx_subscriber_loop() {
 
 spawn_cx_subscriber() {
   local pane_id="$1" cx_url="$2" thread_id="$3"
-  local pid_file; pid_file=$(cx_subscriber_pid_file "$pane_id")
+  local pid_file; pid_file=$(cx_subscriber_pid_file "$pane_id" "$SESSION_KEY")
   if [[ -f "$pid_file" ]]; then
     local existing; existing=$(cat "$pid_file" 2>/dev/null || echo "")
     if [[ "$existing" =~ ^[1-9][0-9]*$ ]] && kill -0 "$existing" 2>/dev/null; then
@@ -1288,7 +1331,7 @@ resolve_cx_meta() {
 
 spawn_oc_subscriber() {
   local pane_id="$1" oc_url="$2" session_id="$3"
-  local pid_file; pid_file=$(oc_subscriber_pid_file "$pane_id")
+  local pid_file; pid_file=$(oc_subscriber_pid_file "$pane_id" "$SESSION_KEY")
   if [[ -f "$pid_file" ]]; then
     local existing; existing=$(cat "$pid_file" 2>/dev/null || echo "")
     if [[ "$existing" =~ ^[1-9][0-9]*$ ]] && kill -0 "$existing" 2>/dev/null; then
@@ -1322,9 +1365,12 @@ collect_descendants() {
 }
 
 kill_all_oc_subscribers() {
+  # Glob is scoped to this session's key. Without the scope, this would
+  # reap subscribers belonging to other concurrent flightdeck daemons in
+  # the same shared state dir (bugs review finding #3).
   shopt -s nullglob
   local f pid descendants
-  for f in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid "$STATE_DIR"/fd-pi-subscriber-*.pid "$STATE_DIR"/fd-cx-subscriber-*.pid; do
+  for f in "$STATE_DIR"/fd-subscriber-"${SESSION_KEY}"-*.pid "$STATE_DIR"/fd-cc-subscriber-"${SESSION_KEY}"-*.pid "$STATE_DIR"/fd-pi-subscriber-"${SESSION_KEY}"-*.pid "$STATE_DIR"/fd-cx-subscriber-"${SESSION_KEY}"-*.pid; do
     pid=$(cat "$f" 2>/dev/null || echo "")
     if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
       # Reap the entire descendant tree (pipeline children) BEFORE
@@ -2019,10 +2065,11 @@ case "$ACTION" in
     # Reap subscriber pid files explicitly. Daemon's EXIT trap may not
     # complete cleanly under the SIGTERM-then-SIGKILL race (KILL after
     # 0.5s grace), leaving subscriber pid files behind. Do it from the
-    # stop action directly so cleanup is deterministic. Covers both
-    # opencode (fd-subscriber-*) and claude (fd-cc-subscriber-*) types.
+    # stop action directly so cleanup is deterministic. Glob is scoped to
+    # this session's key so a stop on session A doesn't reap session B's
+    # subscribers (bugs review finding #3).
     shopt -s nullglob
-    for _sub_file in "$STATE_DIR"/fd-subscriber-*.pid "$STATE_DIR"/fd-cc-subscriber-*.pid "$STATE_DIR"/fd-pi-subscriber-*.pid "$STATE_DIR"/fd-cx-subscriber-*.pid; do
+    for _sub_file in "$STATE_DIR"/fd-subscriber-"${SESSION_KEY}"-*.pid "$STATE_DIR"/fd-cc-subscriber-"${SESSION_KEY}"-*.pid "$STATE_DIR"/fd-pi-subscriber-"${SESSION_KEY}"-*.pid "$STATE_DIR"/fd-cx-subscriber-"${SESSION_KEY}"-*.pid; do
       _sub_pid=$(cat "$_sub_file" 2>/dev/null || echo "")
       if [[ "$_sub_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$_sub_pid" 2>/dev/null; then
         # Reap pipeline descendants BEFORE the subscriber itself

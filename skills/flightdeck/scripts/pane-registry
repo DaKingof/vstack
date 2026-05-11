@@ -340,30 +340,37 @@ case "$ACTION" in
     ;;
 
   oc-attach-args)
-    # Print "--url <U> --session <S>" when both are set in the registry
-    # for the given issue. Empty stdout when either is missing — caller
-    # uses that to decide adapter-vs-fallback.
+    # Print "--url <U> --session <S>" when both are set AND the
+    # opencode-serve process is alive. Empty stdout when stale or
+    # missing — caller falls back to capture-pane. Without the
+    # freshness gate the daemon would mark the pane as subscribed
+    # against a dead adapter and silently disable fallback polling
+    # (cross-harness review finding #2).
     ISSUE="${1:-}"
     [[ -z "$ISSUE" ]] && { echo "Usage: oc-attach-args <ISSUE>" >&2; exit 2; }
     line=$("$FD_STATE" get ".issues[\"$ISSUE\"] // {} | [(.oc_url // \"\"), (.oc_session_id // \"\")] | @tsv" 2>/dev/null | tr -d '"')
     url=$(awk -F'\t' '{print $1}' <<< "$line")
     sid=$(awk -F'\t' '{print $2}' <<< "$line")
     if [[ -n "$url" && -n "$sid" && "$url" != "null" && "$sid" != "null" ]]; then
-      printf -- "--url %s --session %s\n" "$url" "$sid"
+      if oc_adapter_is_fresh "$ISSUE" 2>/dev/null; then
+        printf -- "--url %s --session %s\n" "$url" "$sid"
+      fi
     fi
     ;;
 
   cc-channel-args)
-    # Print "--url <U> --transcript <T>" when both are set for the
-    # given claude issue. Empty stdout when missing — caller falls
-    # back to tmux send-keys / capture-pane.
+    # Print "--url <U> --transcript <T>" when both are set AND the
+    # claude channel server port is reachable and the transcript
+    # file exists. Same fallback contract as `oc-attach-args`.
     ISSUE="${1:-}"
     [[ -z "$ISSUE" ]] && { echo "Usage: cc-channel-args <ISSUE>" >&2; exit 2; }
     line=$("$FD_STATE" get ".issues[\"$ISSUE\"] // {} | [(.cc_url // \"\"), (.cc_transcript // \"\")] | @tsv" 2>/dev/null | tr -d '"')
     url=$(awk -F'\t' '{print $1}' <<< "$line")
     transcript=$(awk -F'\t' '{print $2}' <<< "$line")
     if [[ -n "$url" && -n "$transcript" && "$url" != "null" && "$transcript" != "null" ]]; then
-      printf -- "--url %s --transcript %s\n" "$url" "$transcript"
+      if cc_adapter_is_fresh "$ISSUE" 2>/dev/null; then
+        printf -- "--url %s --transcript %s\n" "$url" "$transcript"
+      fi
     fi
     ;;
 
@@ -384,15 +391,18 @@ case "$ACTION" in
     ;;
 
   cx-bridge-args)
-    # Print "--url <U> --thread <T>" when both are set for the given
-    # codex issue. Empty stdout when missing.
+    # Print "--url <U> --thread <T>" when both are set AND the codex
+    # app-server port is reachable. Same fallback contract as the other
+    # adapter args (cross-harness review finding #2).
     ISSUE="${1:-}"
     [[ -z "$ISSUE" ]] && { echo "Usage: cx-bridge-args <ISSUE>" >&2; exit 2; }
     line=$("$FD_STATE" get ".issues[\"$ISSUE\"] // {} | [(.cx_ws // \"\"), (.cx_thread_id // \"\")] | @tsv" 2>/dev/null | tr -d '"')
     url=$(awk -F'\t' '{print $1}' <<< "$line")
     thread=$(awk -F'\t' '{print $2}' <<< "$line")
     if [[ -n "$url" && -n "$thread" && "$url" != "null" && "$thread" != "null" ]]; then
-      printf -- "--url %s --thread %s\n" "$url" "$thread"
+      if cx_adapter_is_fresh "$ISSUE" 2>/dev/null; then
+        printf -- "--url %s --thread %s\n" "$url" "$thread"
+      fi
     fi
     ;;
 
