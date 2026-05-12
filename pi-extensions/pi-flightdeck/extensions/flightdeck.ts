@@ -321,16 +321,26 @@ function renderDashboardLines(snapshot: FlightdeckSnapshot, theme: Theme, width:
 		return framePanel(lines, width, theme);
 	}
 	// expanded
-	const lines = [header, ""];
+	const lines = [header];
 	for (const [index, issue] of issues.entries()) {
 		const isLast = index === issues.length - 1;
 		const stats = usageForIssue(issue, paneMap, bridge);
 		lines.push(`${panelBranch(theme, isLast ? "└" : "├", treeStyle)}${renderIssueLine(issue, theme, snapshot, stats)}`);
-		const stem = panelBranch(theme, "│", treeStyle);
 		const detailRows = renderIssueDetailLines(issue, theme, stats);
-		for (const row of detailRows) lines.push(`${stem}${row}`);
+		for (const [detailIndex, row] of detailRows.entries()) {
+			lines.push(`${dashboardChildBranch(theme, treeStyle, isLast, detailIndex === detailRows.length - 1)}${row}`);
+		}
 	}
 	return framePanel(lines, width, theme);
+}
+
+function dashboardChildBranch(theme: Theme, style: TreeStyle, parentLast: boolean, childLast: boolean): string {
+	if (style === "ascii") {
+		const parentStem = parentLast ? "    " : "|   ";
+		return theme.fg("muted", `${parentStem}${childLast ? "`-- " : "|-- "}`);
+	}
+	const parentStem = parentLast ? "   " : "│  ";
+	return theme.fg("muted", `${parentStem}${childLast ? "└─ " : "├─ "}`);
 }
 
 function renderIssueLine(issue: IssueRecord, theme: Theme, _snapshot: FlightdeckSnapshot, stats?: AgentsBridgeItem): string {
