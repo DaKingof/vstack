@@ -311,13 +311,32 @@ case "${1:-}" in
       [[ -d "$WT_PATH" ]] && rm -rf "$WT_PATH"
     fi
     git -C "$PROJECT_ROOT" worktree prune
-    # Only delete local branch if merged (branch -d checks this)
-    [[ -n "$BRANCH" ]] && git -C "$PROJECT_ROOT" branch -d "$BRANCH" 2>/dev/null
+    # Only delete local branch if merged (branch -d checks this). If the
+    # worktree was removed but branch deletion is unsafe, report exactly what
+    # remains instead of letting set -e exit silently after partial cleanup.
+    BRANCH_DELETE_FAILED=false
+    if [[ -n "$BRANCH" ]] && git -C "$PROJECT_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+      DELETE_OUTPUT=""
+      if ! DELETE_OUTPUT=$(git -C "$PROJECT_ROOT" branch -d "$BRANCH" 2>&1); then
+        BRANCH_DELETE_FAILED=true
+        echo "Error: Removed worktree but could not delete local branch '$BRANCH'." >&2
+        echo "  Remaining branch: $BRANCH" >&2
+        echo "  Worktree path removed/pruned: $WT_PATH" >&2
+        echo "  Safe delete refused by: git branch -d $BRANCH" >&2
+        if [[ -n "$DELETE_OUTPUT" ]]; then
+          printf '%s\n' "$DELETE_OUTPUT" | sed 's/^/  git: /' >&2
+        fi
+        echo "  After verifying it is safe, delete manually with: git -C \"$PROJECT_ROOT\" branch -D \"$BRANCH\"" >&2
+      fi
+    fi
     echo "Removed: $WT_PATH"
     if [[ -n "$WT_REAL" && "$CWD_REAL" == "$WT_REAL"* ]]; then
       echo "" >&2
       echo "Warning: Session cwd was inside deleted worktree. Start a new session from:" >&2
       echo "  $PROJECT_ROOT" >&2
+    fi
+    if [[ "$BRANCH_DELETE_FAILED" == true ]]; then
+      exit 1
     fi
     ;;
 

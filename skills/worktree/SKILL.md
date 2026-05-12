@@ -32,6 +32,8 @@ Resolves project root via `git rev-parse`, detects default branch automatically,
 | `check` | Pre-create git state check (JSON: uncommitted, unpushed) |
 | `push` | Push worktree branch with auto-rebase |
 
+`remove` deletes the worktree before deleting the local branch. Branch deletion uses safe `git branch -d`; if that fails after worktree removal, the script exits non-zero with a diagnostic naming the remaining branch and manual `git branch -D` recovery command.
+
 ### `create` flags
 
 | Flag | Effect |

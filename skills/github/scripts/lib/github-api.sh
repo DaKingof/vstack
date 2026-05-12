@@ -584,26 +584,25 @@ bot_review_status() {
 
     local reviews comments body_reactions own_reactions threads first_comment_id
 
-    reviews=$(gh api "repos/{owner}/{repo}/pulls/$pr/reviews" 2>/dev/null || echo "[]")
-    comments=$(gh api "repos/{owner}/{repo}/issues/$pr/comments" 2>/dev/null || echo "[]")
-    body_reactions=$(gh api "repos/{owner}/{repo}/issues/$pr/reactions" 2>/dev/null || echo "[]")
+    reviews=$(gh_rest "repos/{owner}/{repo}/pulls/$pr/reviews") || return 1
+    comments=$(gh_rest "repos/{owner}/{repo}/issues/$pr/comments") || return 1
+    body_reactions=$(gh_rest "repos/{owner}/{repo}/issues/$pr/reactions") || return 1
 
     first_comment_id=$(jq -r --arg u "$reviewer" \
         '[.[] | select(.user.login == $u)] | first | .id // empty' \
         <<<"$comments" 2>/dev/null || echo "")
     if [[ -n "$first_comment_id" ]]; then
-        own_reactions=$(gh api "repos/{owner}/{repo}/issues/comments/$first_comment_id/reactions" 2>/dev/null || echo "[]")
+        own_reactions=$(gh_rest "repos/{owner}/{repo}/issues/comments/$first_comment_id/reactions") || return 1
     else
         own_reactions="[]"
     fi
 
     # Fetch review threads via GraphQL (REST does not expose isResolved cleanly)
     local repo_info owner repo
-    repo_info=$(get_repo_info 2>/dev/null) || repo_info=""
-    if [[ -n "$repo_info" ]]; then
-        owner=$(get_owner "$repo_info")
-        repo=$(get_repo "$repo_info")
-        local query='
+    repo_info=$(get_repo_info) || return 1
+    owner=$(get_owner "$repo_info")
+    repo=$(get_repo "$repo_info")
+    local query='
 query($owner: String!, $repo: String!, $pr: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
@@ -617,11 +616,8 @@ query($owner: String!, $repo: String!, $pr: Int!) {
     }
   }
 }'
-        threads=$(gh_graphql "$query" -F owner="$owner" -F repo="$repo" -F pr="$pr" 2>/dev/null \
-            | jq -c '.repository.pullRequest.reviewThreads.nodes // []' 2>/dev/null || echo "[]")
-    else
-        threads="[]"
-    fi
+    threads=$(gh_graphql "$query" -F owner="$owner" -F repo="$repo" -F pr="$pr" \
+        | jq -c '.repository.pullRequest.reviewThreads.nodes // []') || return 1
 
     bot_review_status_compute "$reviewer" "$reviews" "$comments" "$body_reactions" "$own_reactions" "$threads"
 }
@@ -630,13 +626,14 @@ query($owner: String!, $repo: String!, $pr: Int!) {
 # in any way (formal review, issue comment, or reaction on the PR body).
 detect_bot_reviewers() {
     local pr="$1"
+    local reviews comments reactions
+    reviews=$(gh_rest "repos/{owner}/{repo}/pulls/$pr/reviews") || return 1
+    comments=$(gh_rest "repos/{owner}/{repo}/issues/$pr/comments") || return 1
+    reactions=$(gh_rest "repos/{owner}/{repo}/issues/$pr/reactions") || return 1
     {
-        gh api "repos/{owner}/{repo}/pulls/$pr/reviews" \
-            --jq '.[].user.login | select(endswith("[bot]"))' 2>/dev/null || true
-        gh api "repos/{owner}/{repo}/issues/$pr/comments" \
-            --jq '.[].user.login | select(endswith("[bot]"))' 2>/dev/null || true
-        gh api "repos/{owner}/{repo}/issues/$pr/reactions" \
-            --jq '.[].user.login | select(endswith("[bot]"))' 2>/dev/null || true
+        jq -r '.[].user.login | select(endswith("[bot]"))' <<<"$reviews"
+        jq -r '.[].user.login | select(endswith("[bot]"))' <<<"$comments"
+        jq -r '.[].user.login | select(endswith("[bot]"))' <<<"$reactions"
     } | sort -u | grep -v '^$' || true
 }
 

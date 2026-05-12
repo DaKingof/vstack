@@ -23,6 +23,8 @@ Run from the main checkout of a git repo with an `origin` remote. Optionally add
 
 Defaults: detects branch from `origin/HEAD` (fallback: `main`), creates worktrees under sibling `trees/`, symlinks `.env.local` automatically.
 
+`remove` deletes the worktree first, then tries `git branch -d` for the associated local branch. If Git refuses the safe branch delete (for example, the branch is not merged into the current main checkout), the command exits non-zero and prints a diagnostic naming the remaining branch plus the manual `git branch -D` recovery command.
+
 ## Configuration
 
 Set in `.env.local` — all optional:

@@ -24,12 +24,14 @@
 #   0 - All configured reviewers reached a terminal state (approved/changes/skipped)
 #   1 - Timeout: at least one reviewer still pending
 #   2 - Checklist timeout: terminal verdicts in but bot still posting threads
+#   3 - GitHub auth/API error before reliable status could be read
 #
 # JSON output (always when --json):
 #   {
-#     "status": "complete" | "checklist_timeout" | "timeout" | "no_reviewers",
+#     "status": "complete" | "checklist_timeout" | "timeout" | "no_reviewers" | "error",
 #     "verdict": "approved" | "changes" | "pending",
 #     "elapsed_seconds": <int>,
+#     "error": <string>,           # only when status == "error"
 #     "reviewers": [ {reviewer,status,signals,updated_at,unresolved_threads} ... ],
 #     "pending_reviewers":  [...],
 #     "approved_reviewers": [...],
@@ -81,6 +83,60 @@ done
 PR_NUM="${POSITIONAL[0]:?Usage: bot-review-wait <PR#> [poll_interval] [max_wait] [--json] [--reviewers \"bot1,bot2\"] [--skip \"bot3,bot4\"]}"
 POLL_INTERVAL="${POSITIONAL[1]:-15}"
 MAX_WAIT="${POSITIONAL[2]:-600}"
+elapsed=0
+
+emit_error() {
+  local message="$1"
+  if $JSON_OUTPUT; then
+    jq -n \
+      --arg s "error" \
+      --arg v "pending" \
+      --argjson elapsed "$elapsed" \
+      --arg error "$message" \
+      '{
+        status: $s,
+        verdict: $v,
+        elapsed_seconds: $elapsed,
+        error: $error,
+        reviewers: [],
+        pending_reviewers: [],
+        approved_reviewers: [],
+        changes_reviewers: [],
+        skipped_reviewers: []
+      }'
+  fi
+  echo "Error: $message" >&2
+}
+
+ensure_gh_ready() {
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "gh CLI not found" >&2
+    return 1
+  fi
+
+  local auth_output
+  if auth_output=$(gh auth status 2>&1); then
+    return 0
+  fi
+
+  # A bad GH_TOKEN/GITHUB_TOKEN masks gh keyring auth. If keyring auth works
+  # with those variables removed, prefer the working auth source instead of
+  # polling until timeout with every API read degraded to "unknown".
+  if [[ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]] && \
+     env -u GH_TOKEN -u GITHUB_TOKEN gh auth status >/dev/null 2>&1; then
+    echo "Warning: GH_TOKEN/GITHUB_TOKEN failed gh auth; unsetting them and using gh keyring auth." >&2
+    unset GH_TOKEN GITHUB_TOKEN
+    return 0
+  fi
+
+  printf '%s\n' "$auth_output" >&2
+  return 1
+}
+
+if ! ensure_gh_ready; then
+  emit_error "GitHub CLI authentication failed"
+  exit 3
+fi
 
 # --- skipped set ---
 declare -A SKIPPED=()
@@ -95,9 +151,14 @@ if [[ -n "$REVIEWERS_ARG" ]]; then
 elif [[ -n "${BOT_REVIEWERS:-}" ]]; then
   IFS=',' read -ra REVIEWERS <<< "$BOT_REVIEWERS"
 else
+  detected_reviewers=""
+  if ! detected_reviewers=$(detect_bot_reviewers "$PR_NUM"); then
+    emit_error "GitHub API failure while detecting bot reviewers for PR #$PR_NUM"
+    exit 3
+  fi
   while IFS= read -r bot; do
     [[ -n "$bot" ]] && REVIEWERS+=("$bot")
-  done < <(detect_bot_reviewers "$PR_NUM" 2>/dev/null || true)
+  done <<<"$detected_reviewers"
 fi
 
 # Trim whitespace from reviewer entries.
@@ -111,21 +172,30 @@ REVIEWERS=("${trimmed[@]}")
 
 PHASE3_MAX=300       # Sticky-checklist wait after terminal verdict
 PHASE3_INTERVAL=10
-elapsed=0
 
 # Per-iteration: collect all reviewers' status into a JSON array.
 collect_reviewers() {
   local arr='[]'
   for r in "${REVIEWERS[@]}"; do
     local entry
-    entry=$(bot_review_status "$PR_NUM" "$r" 2>/dev/null || \
-            jq -n -c --arg u "$r" '{reviewer:$u,status:"unknown",signals:[],updated_at:"",unresolved_threads:0}')
+    if ! entry=$(bot_review_status "$PR_NUM" "$r"); then
+      return 1
+    fi
     if [[ -n "${SKIPPED[$r]:-}" ]]; then
       entry=$(jq -c '.status = "skipped" | .signals += ["config:skipped"]' <<<"$entry")
     fi
     arr=$(jq -c --argjson e "$entry" '. + [$e]' <<<"$arr")
   done
   printf '%s' "$arr"
+}
+
+collect_reviewers_or_exit() {
+  local entries
+  if ! entries=$(collect_reviewers); then
+    emit_error "GitHub API failure while reading bot review status for PR #$PR_NUM"
+    exit 3
+  fi
+  printf '%s' "$entries"
 }
 
 # Bucket reviewer logins by status; aggregate verdict.
@@ -273,7 +343,7 @@ while [ $elapsed -lt $phase1_end ] && [[ -n "$BOT_CHECK_NAME" ]]; do
   check_lines=$(gh pr checks "$PR_NUM" 2>&1 | grep -E "^\s*${BOT_CHECK_NAME}\s" || true)
   if [ -n "$check_lines" ]; then
     if echo "$check_lines" | grep -qE '\b(pass|fail)\b'; then
-      entries=$(collect_reviewers)
+      entries=$(collect_reviewers_or_exit)
       if ! any_blocking "$entries"; then
         if wait_for_checklist; then
           emit_result "complete" "$entries"
@@ -295,7 +365,7 @@ done
 
 # --- Main poll loop: per-reviewer status until all terminal or timeout ---
 while [ $elapsed -lt $MAX_WAIT ]; do
-  entries=$(collect_reviewers)
+  entries=$(collect_reviewers_or_exit)
   if ! any_blocking "$entries"; then
     if wait_for_checklist; then
       emit_result "complete" "$entries"
@@ -303,7 +373,7 @@ while [ $elapsed -lt $MAX_WAIT ]; do
     else
       # Refresh entries — the checklist wait can take minutes; reviewers
       # may have updated their state in the meantime.
-      entries=$(collect_reviewers)
+      entries=$(collect_reviewers_or_exit)
       if any_blocking "$entries"; then
         # Something regressed to pending while we waited on the checklist.
         # Continue the main loop to re-evaluate.
@@ -318,7 +388,7 @@ while [ $elapsed -lt $MAX_WAIT ]; do
 done
 
 # --- Timeout: one final read ---
-entries=$(collect_reviewers)
+entries=$(collect_reviewers_or_exit)
 if ! any_blocking "$entries"; then
   # Crossed the line right at the bell.
   if wait_for_checklist; then
