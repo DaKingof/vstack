@@ -3,7 +3,19 @@
 ![tool_batch composite result with Read/grep/Bash rows](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-tool-renderer/assets/tool-batch.png)
 ![Edit tool with side-by-side diff renderer](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-tool-renderer/assets/edit-diff.png)
 
-Compact renderers for Pi tools, plus an optional `tool_batch` composite tool.
+Compact renderers for Pi tools. Optional `tool_batch` composite tool. Optional rich diff UI for edits, writes, and bash patches.
+
+## Highlights
+
+- Compact one-line tool rows for `read`, `bash`, `grep`, `find`, `ls`.
+- `tool_batch` runs multiple independent read/search/list/diagnostic bash calls and renders one combined result.
+- Optional rich Shiki diffs for `edit`/`write` with side-by-side previews, hunk counts, and inline word highlights.
+- Compact user-message cards with a green border and red π marker.
+- Compaction summaries and skill invocations render with the same compact chrome.
+- Generic renderers for OpenAI-style tools (`web_search`, `webfetch`, `Agent`, `Task*`) and MCP tools.
+- `apply_patch` call/result preview when the tool is present.
+
+Defaults leave `edit`/`write` on Pi's built-in renderers. Enable **Render edits/writes compactly** to opt in.
 
 ## Install
 
@@ -22,18 +34,7 @@ vstack add vanillagreencom/vstack --pi-extension pi-tool-renderer --harness pi -
 
 Restart Pi after installation.
 
-## Defaults
-
-- Re-registers `read`, `bash`, and available `grep`/`find`/`ls` with compact self-rendered rows while delegating execution to Pi's original tools.
-- Registers `tool_batch` so multiple independent read/search/list/diagnostic bash calls can render as one combined result.
-- Leaves `edit` and `write` on Pi's built-in renderers by default so standard diff/edit UI is preserved.
-- Compacts user-message cards by default (`compactUserMessages=true`).
-- Renders compaction summaries as compact tool-style rows by default (`compactCompactionMessages=true`).
-- Keeps Pi's normal expand/collapse keybinding (`Ctrl+O`).
-
 ## `tool_batch`
-
-`tool_batch` accepts calls for `read`, `grep`, `find`, `ls`, and diagnostic `bash`.
 
 ```json
 {
@@ -44,39 +45,101 @@ Restart Pi after installation.
 }
 ```
 
-Prefer it for independent inspection calls. Do **not** use it for mutating commands, order-dependent commands, streaming output, or commands that should be inspected separately.
+Accepts `read`, `grep`, `find`, `ls`, and diagnostic `bash`. Per-call arguments can be flat or wrapped in `args`.
 
-Per-call arguments can be flat, as above, or `{ "tool": "read", "args": { "path": "README.md" } }`.
+Prefer it for independent inspection calls. **Don't** use it for mutating commands, order-dependent commands, streaming output, or anything you want to inspect separately.
 
-`tool_batch` does not reduce per-call output while the combined result fits Pi's normal tool-result budget. If the aggregate would exceed that budget, it caps only enough child output to keep the single batch result safe, preserving head and tail for capped children. Use separate calls or explicit `read` `offset`/`limit` chunks when you need the maximum output budget from each call.
+If the combined output would exceed Pi's normal tool-result budget, child outputs are capped to fit (head + tail preserved). Use separate calls or `read` `offset`/`limit` for the full budget per call.
 
-## Optional renderers
+## Settings
 
-Enable through `pi-extension-manager` settings:
+All settings live in the extension manager under **Tool Renderer**.
 
-- `renderMutationTools=true`: compact `edit`/`write` renderers with rich red/green diff summaries, hunk counts, syntax highlighting, and optional side-by-side previews (`splitDiffs`).
-- `renderBashDiffs=false`: keep read-only bash commands that output unified/git patches to a single compact summary line by default; enable to render those outputs with the rich Shiki diff UI.
-- `renderGitDiffCommandDiffs=false`: keep explicit `git diff` bash commands to a single compact summary line by default; enable to restore the rich Shiki diff UI for those commands.
-- `applyPatchRenderer` / `applyPatchPreview`: render `apply_patch` calls/results with parsed file patch previews.
-- Generic OpenAI-style tool renderers for names such as `web_search`, `webfetch`, `fetch_content`, `Agent`, and `Task*`.
-- MCP-looking tool renderers (`mcp`, `mcp__server__tool`, etc.) with `mcpOutputMode`.
-- `workingIndicator`: optionally use a compact pulse or hide Pi's streaming indicator.
-- `toolChrome`: optional global container chrome (`off`, `transparent`, or `outlines`).
-- `rightMarginGuard=true`: render compact tool chrome, wrapped lines, diffs, and compact user-message borders one column short to avoid right-margin auto-wrap flashes in tmux and some terminals.
-- `pendingStatusAnimation=false`: animate pending compact tool bullets; disabled by default for more stable streaming output at the bottom of terminal panes.
+### General
 
-Output modes can be tuned live with `readOutputMode`, `searchOutputMode`, `bashOutputMode`, and `mcpOutputMode`.
+| Setting | What it does |
+| --- | --- |
+| Enable compact renderers | Override built-in read/bash/search renderers. |
+| Tree connector style | `unicode` or `ascii`. |
+| Stack separate native tool calls | Legacy renderer for consecutive native tool calls. Prefer `tool_batch`. |
+| Stack child display | `rows`, `headline`, or `anchor-list` when stacking is on. |
 
-## Legacy stacking
+### Batch tool
 
-`stackToolCalls=true` enables legacy stacking for separate native tool calls. It is disabled by default because current Pi still reserves spacer rows for hidden sibling tool entries. `stackChildDisplay` controls the tradeoff:
+| Setting | What it does |
+| --- | --- |
+| Register tool_batch | Add the composite tool. |
+| Batch max calls | Max calls per `tool_batch` invocation. |
 
-- `rows`: render child tools as separate compact `├`/`└` rows.
-- `headline`: hide child rows and show the list only when expanded.
-- `anchor-list`: hide child rows and show the compact list in the headline by default.
+### Messages
 
-`hideStackChildRows` remains as a legacy alias for `stackChildDisplay="headline"` when `stackChildDisplay` is unset.
+| Setting | What it does |
+| --- | --- |
+| Compact user messages | Green border + red π marker instead of filled background. |
+| User message trailing blank line | Extra blank line after user messages. |
+| Compact compaction summaries | Compact bullet style instead of Pi's padded box. |
+| Compact skill invocation messages | Compact `/skill:name` rows. |
+| Align assistant messages | Remove Pi's one-column left padding from assistant text. |
+| Styled markdown code blocks | Render fenced code blocks as syntax-highlighted panels. |
 
-## Limits
+### Read / Search / Bash output
 
-This package mostly changes rendering, not underlying tool execution. The `tool_batch` helper is a single tool result, so it enforces an aggregate safety cap when combined child output would exceed Pi's normal result budget; individual built-in tools still apply their own truncation first. Hidden `Thinking...` labels and reserved spacer rows require Pi core renderer changes to remove completely.
+| Setting | What it does |
+| --- | --- |
+| Read output mode | `preview`, `summary`, or `hidden`. |
+| Search output mode | `preview`, `count`, or `hidden`. |
+| Bash output mode | `opencode`, `preview`, `summary`, or `hidden`. |
+| Expanded read/search/bash preview lines | Per-tool expand-time line caps. |
+| Command preview characters | Max command chars in collapsed bash rows. |
+| Collapsed bash preview lines | Tail lines shown when `bashOutputMode=preview`. |
+
+### Bash diffs
+
+| Setting | What it does |
+| --- | --- |
+| Render bash diffs | Detect diff output from read-only bash and render rich diff UI. Off by default. |
+| Render git diff command diffs | Show rich diff UI for explicit `git diff` commands. Off by default. |
+
+### Mutation (edit/write)
+
+| Setting | What it does |
+| --- | --- |
+| Render edits/writes compactly | Override Pi's built-in edit/write renderers. Off by default. |
+| Split diff view | Side-by-side rich diffs on wide terminals. |
+| Collapsed / expanded diff preview lines | Line budgets for collapsed and expanded rows. |
+| Edit/write call preview | Show safe call-phase diff previews before execution completes. |
+| Edit/write call preview lines | Line budget for call-phase previews. |
+| Syntax-highlight diffs | Use Shiki when a language can be detected. |
+| Inline word diff highlights | Highlight changed words in paired removed/added lines. |
+| Diff line backgrounds | Fill added/removed lines with success/error backgrounds. |
+| Show diff hunk metadata | Include hunk counts and truncation hints. |
+
+### Generic tools
+
+| Setting | What it does |
+| --- | --- |
+| Generic external tool renderers | Render `web_search`, `webfetch`, `Agent`, `Task*` and similar. |
+| Render apply_patch | Install `apply_patch` call/result renderers without changing execution. |
+| apply_patch call preview | Parse arguments and render diff previews during the call phase. |
+| apply_patch preview lines | Line budget for collapsed `apply_patch` diffs. |
+| MCP output mode | `preview`, `summary`, or `hidden`. |
+| MCP preview lines | Line budget for MCP/generic tool previews. |
+
+### Chrome
+
+| Setting | What it does |
+| --- | --- |
+| Global tool chrome | `off`, `transparent`, or `outlines` (muted horizontal rules above/below). |
+| Guard terminal right margin | Render one column short to avoid auto-wrap flashes in tmux. |
+| Animate pending tool status | Blink pending bullets. Off for stable streaming. |
+| Working indicator | `default`, `pulse`, or `hidden`. |
+
+### Safety
+
+| Setting | What it does |
+| --- | --- |
+| Max renderer line width | Hard cap for single rendered lines. |
+
+## Notes
+
+This package mostly changes rendering, not tool execution. `tool_batch` is one tool result, so it caps combined child output if needed; individual built-in tools still apply their own truncation first.

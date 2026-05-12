@@ -4,7 +4,18 @@
 ![Task summary](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-background-tasks/assets/task-summary.png)
 ![Inline mini-dashboard](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-background-tasks/assets/inline-dashboard.png)
 ![Full dashboard](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-background-tasks/assets/dashboard.png)
-Pi package for explicit, non-blocking background shell tasks.
+
+Run shell commands in the background without blocking the conversation.
+
+## Highlights
+
+- `bg_task` tool spawns, lists, tails, stops, and clears tracked tasks.
+- `/bg` dashboard for browsing and controlling tasks interactively.
+- `Alt+.` arms the next bash command to run in the background.
+- Long-running monitors (`watch`, `tail -f`, `journalctl -f`, polling loops) are auto-backgrounded.
+- Wakeups when a task exits, with optional wakeups on matching output.
+- Inline mini-dashboard above the editor; full dashboard on `Alt+Shift+H` or `F5`.
+- Persistent log files keep full output even when tool output is truncated.
 
 ## Install
 
@@ -23,24 +34,12 @@ vstack add vanillagreencom/vstack --pi-extension pi-background-tasks --harness p
 
 Restart Pi after installation.
 
-## What it provides
-
-- `bg_task` tool for spawning, listing, tailing logs, stopping, and clearing tracked tasks.
-- Ships `instructions.md` so vstack/npm install adds `bg_task`/`bg_status` usage rules to the scope's `APPEND_SYSTEM.md`, removed on uninstall or disable.
-- `bg_status` compatibility tool for list/log/stop by PID.
-- `/bg` dashboard and task-control command.
-- `Alt+.` arms a one-shot diversion so the next not-yet-started bash command runs as a background task instead of blocking the turn.
-- `Alt+H` toggles the inline mini-dashboard shown/hidden; `Alt+Shift+H` and `F5` open the full dashboard.
-- Automatic diversion of clearly long-running bash monitors such as `watch`, `tail -f`, `journalctl -f`, and session/tmux polling loops.
-- Persistent log files under `${PI_BG_TASK_DIR:-$TMPDIR/vstack-pi-bg}`; truncated log output includes the full log path.
-- Wakeups when a task exits, and optional wakeups when output matches a substring or `/regex/flags` pattern.
-
 ## Commands
 
 | Command | Action |
 | --- | --- |
 | `/bg` | Open the dashboard. |
-| `/bg:next` | Arm the same one-shot diversion as `Alt+.` for the next bash command. |
+| `/bg:next` | Arm the next bash command for backgrounding. |
 | `/bg:run <command>` | Spawn a background shell task. |
 | `/bg:list` | Show tracked tasks. |
 | `/bg log <id\|pid>` | Show a task log tail. |
@@ -48,50 +47,78 @@ Restart Pi after installation.
 | `/bg:stop <id\|pid>` | Terminate a running task. |
 | `/bg:clear` | Remove finished tasks. |
 
-Arguments support autocomplete, including task IDs for `log`, `watch`, and `stop`.
+Arguments support autocomplete, including task IDs.
 
-## Bash auto-backgrounding
-
-The extension intercepts bash commands before they start. When a command is clearly a monitor or polling loop, it is spawned through the same background-task manager and the foreground bash tool is replaced with a short acknowledgement that includes the background task id, PID, and log path. This keeps the agent turn moving while the command continues to run.
-
-Built-in auto-background matches are intentionally conservative:
-
-- `watch ...`
-- `tail -f ...` and `journalctl -f ...`
-- delayed Pi session/tmux monitors such as `sleep 50; pi-bridge history ...`
-- shell loops with `sleep` that appear to monitor Pi session bridge, tmux panes, agent/delegate state, or long finite/open-ended polling loops
-
-Use `Alt+.` or `/bg:next` when you know the next bash command should be backgrounded even if it does not match the conservative patterns. The shortcut cannot detach a bash process that has already started, because Pi's built-in bash tool does not expose a public process handle to extensions. If pressed while a tool is already running, it applies to the next bash command that has not yet started.
-
-Settings:
-
-- `autoBackgroundBash` toggles built-in automatic diversion.
-- `autoBackgroundPatterns` adds newline-separated regular expressions for project-specific monitor commands.
-- `backgroundBashShortcut` changes the default `Alt+.` binding, or set it to `none` to disable.
-- `dashboardShortcut` changes the default `Alt+Shift+H` full-dashboard binding; `F5` is also registered as an additional dashboard shortcut.
-- `forcedBackgroundNotifyOnOutput` optionally wakes the agent on output from shortcut-forced background tasks. Exit wakeups are always enabled for forced tasks.
-- `forcedBackgroundWindowSeconds` controls how long `Alt+.`/`/bg:next` stays armed.
-
-## Tool usage
+## Tool
 
 ```json
-{"action":"spawn","command":"sleep 20; echo done","notifyOnExit":true}
+{ "action": "spawn", "command": "sleep 20; echo done", "notifyOnExit": true }
 ```
 
-Useful `spawn` options:
+Useful spawn options: `notifyOnExit` (default true), `notifyOnOutput`, `notifyPattern` (substring or `/regex/flags`), `timeoutSeconds`, `title`.
 
-- `notifyOnExit`: defaults to `true`.
-- `notifyOnOutput`: defaults to `false`.
-- `notifyPattern`: substring or `/regex/flags` gate for output wakeups.
-- `timeoutSeconds`: defaults to `0` (no timeout).
-- `title`: optional display label.
+## Auto-background
+
+Bash commands matching obvious monitor patterns are intercepted before they start and run as a background task instead. The foreground bash tool returns a short acknowledgement with the task id, PID, and log path so the agent turn keeps moving.
+
+Built-in matches: `watch ...`, `tail -f`, `journalctl -f`, Pi-bridge/tmux polling loops, and shell loops with `sleep` that monitor session state.
+
+Use `Alt+.` or `/bg:next` to force the next bash command into the background even if it doesn't match the built-in patterns. The shortcut applies only to commands not yet started.
+
+## Settings
+
+All settings live in the extension manager under **Background Tasks**.
+
+### Execution
+
+| Setting | What it does |
+| --- | --- |
+| Default timeout | Spawn timeout. `0` disables. |
+| Auto-background blocking bash monitors | Auto-divert long-running bash commands into `bg_task`. |
+| Extra auto-background patterns | Newline-separated regexes for project-specific monitors. |
+| Shortcut arming window | Seconds `Alt+.`/`/bg:next` stays armed. |
+| Force-kill grace | Milliseconds between SIGTERM and SIGKILL. |
+
+### Wakeups
+
+| Setting | What it does |
+| --- | --- |
+| Shortcut output wakeups | Wake the agent on new output from shortcut-forced tasks. |
+| Output settle delay | Debounce before output wakeups fire. |
+
+### Output
+
+| Setting | What it does |
+| --- | --- |
+| In-memory output buffer | Per-task in-memory cap. Logs always keep full output. |
+| Wakeup output tail | Characters included in output/exit wakeup messages. |
+| Dashboard/log tail | Characters shown in dashboard and log actions. |
+
+### UI
+
+| Setting | What it does |
+| --- | --- |
+| Show task widget | Compact background-task widget. |
+| Widget placement | Above or below the editor. |
+| Tool output style | `compact` one-liner or `stacked` rows with Ctrl+O details. |
+| Expanded tool log lines | Maximum lines shown when expanding log output. |
+| Dashboard output line cap | Maximum lines in the interactive dashboard viewport. |
+| Mini-dashboard default mode | `compact`, `expanded`, or `hidden`. |
+| Mini-dashboard finished retention | Seconds finished tasks stay visible in the inline widget. |
+| Background next bash shortcut | Default `alt+.`. |
+| Mini-dashboard toggle shortcut | Default `alt+h`. |
+| Dashboard shortcut | Default `alt+shift+h` (F5 also works). |
+
+### Storage
+
+| Setting | What it does |
+| --- | --- |
+| Task log directory | Override log file location. `PI_BG_TASK_DIR` env var still wins. |
 
 ## Notes
 
-Tasks are scoped to the current Pi runtime and are stopped on session shutdown. On Unix, shells start in their own process group so `/bg:stop` and shutdown terminate child processes as well as the shell. For Pi bridge, session monitoring, and tmux/agent pane monitoring, prefer `bg_task`, `/bg:run`, or the built-in auto-backgrounding over raw foreground polling loops.
-
-Background tasks inherit Pi's current process environment and working directory. The extension also prepends `${PI_CODING_AGENT_DIR:-~/.pi/agent}/bin` to `PATH` when that directory exists, so installed Pi package CLIs such as `pi-bridge` are available. Project env files such as `.env.local` are not sourced by the shell automatically; they are available only when the invoked framework/tool loads them, or when the command explicitly sources them.
+Tasks are scoped to the current Pi runtime and stopped on session shutdown. Shells start in their own process group so `/bg:stop` and shutdown terminate children. Tasks inherit Pi's environment and working directory.
 
 ## Attribution
 
-This package is locally owned by vstack and is based on ideas and portions of the MIT-licensed `@ifi/pi-background-tasks` package from `ifiokjr/oh-pi`. See `THIRD_PARTY_NOTICES.md`.
+Locally owned by vstack, based on the MIT-licensed `@ifi/pi-background-tasks` from `ifiokjr/oh-pi`. See `THIRD_PARTY_NOTICES.md`.

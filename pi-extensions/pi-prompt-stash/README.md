@@ -2,7 +2,15 @@
 
 ![Prompt Stash popup](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-prompt-stash/assets/stash-popup.png)
 
-Per-session prompt stash history for Pi.
+Per-session prompt stash. Save a draft, write something else, restore later.
+
+## Highlights
+
+- `Alt+S` with editor text stashes the prompt and clears the editor.
+- `Alt+S` with empty editor opens the stash popup.
+- Searchable popup with restore, delete, and clear-all.
+- Stashes are per-session and survive Pi restarts within the session.
+- Optional deduplication discards older entries with identical text.
 
 ## Install
 
@@ -29,20 +37,26 @@ Restart Pi after installation.
 
 ## Keys
 
-- `Alt+S` with editor text: stash the current prompt and clear the editor.
-- `Alt+S` with an empty editor: open the stash popup.
-
-Popup controls:
-
 | Key | Action |
 | --- | --- |
+| `Alt+S` (editor has text) | Stash the current prompt and clear the editor. |
+| `Alt+S` (editor empty) | Open the stash popup. |
 | Type | Search stashed prompts. |
 | `↑` / `↓` | Move selection. |
-| `Enter` | Restore the selected prompt into the editor. The stash is unchanged. |
+| `Enter` | Restore the selected prompt. Stash unchanged. |
 | `Ctrl+D` or `Delete` | Delete the selected prompt. |
 | `Ctrl+X`, then `Enter` | Delete all stashed prompts. |
 | `Esc` | Close. |
 
-## Storage
+## Settings
 
-Stashes are stored per Pi session under `~/.pi/agent/vstack/sessions/<session-id>/prompt-stash/prompt-stash.json`, even when the package is enabled by project settings. Legacy `~/.pi/agent/vstack/prompt-stash/sessions/<session-id>/` trees are migrated on first stash. Legacy manager config under `prompt-stash` is still read, and legacy `.pi/prompt-stash.json` files are imported into the current session and removed on load/use.
+All settings live in the extension manager under **Prompt Stash**.
+
+| Setting | What it does |
+| --- | --- |
+| Stash shortcut | Default `alt+s`. |
+| Store file | File name inside the per-session stash directory. |
+| Deduplicate prompts | Remove older entries with identical text when stashing. |
+| Popup width | Preferred popup width. |
+| Popup max height | Maximum overlay height. |
+| Visible stash rows | Rows shown before scrolling. |

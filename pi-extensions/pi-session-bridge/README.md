@@ -2,7 +2,15 @@
 
 ![Session bridge CLI flow](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-session-bridge/assets/session-bridge-cli.png)
 
-Pi package that keeps the normal interactive Pi TUI visible while exposing a structured Unix-domain JSONL side channel for external controllers. It is **not** Pi `--mode rpc`; it keeps the live TUI and borrows compatible JSONL command/response conventions where useful.
+Control a running Pi session from outside the TUI. The interactive Pi terminal stays visible; a Unix-domain socket exposes a structured JSONL side channel for external clients.
+
+## Highlights
+
+- External clients send prompts, steering, follow-ups, and aborts without tmux key injection.
+- Subscribe to live Pi events (messages, tool calls, agent end) without scraping panes.
+- Discover active Pi sessions through registry files; target by pid, cwd, session, or name.
+- `pi-bridge` CLI handles common operations; raw JSONL protocol is documented for any language.
+- When `pi-questions` is loaded, external clients can list, answer, and reject pending questions.
 
 ## Install
 
@@ -21,37 +29,14 @@ vstack add vanillagreencom/vstack --pi-extension pi-session-bridge --harness pi 
 
 Restart Pi after installation.
 
-## What it provides
-
-- Normal Pi TUI stays in the terminal.
-- External clients discover active Pi processes from registry files.
-- External clients send prompts, steering, follow-ups, and aborts without tmux key injection.
-- External clients subscribe to structured live Pi events without pane scraping.
-- When `pi-questions` is also loaded, external clients can list, answer, and reject pending structured questions.
-
-## Discovery
-
-Default paths:
-
-```text
-${PI_BRIDGE_DIR:-/tmp/pi-session-bridge-$UID}/instances/<pid>.json
-${PI_BRIDGE_DIR:-/tmp/pi-session-bridge-$UID}/pi-<pid>.sock
-```
-
-Override with:
-
-```bash
-export PI_BRIDGE_DIR=/some/private/dir
-```
-
-The bridge directory is created `0700`; instance files are `0600`.
+`pi-bridge` is symlinked into the install scope's `bin/` (`.pi/bin/pi-bridge` project, `~/.pi/agent/bin/pi-bridge` global). Add the directory to `PATH` or run by path.
 
 ## Commands
 
 | Command | Action |
 | --- | --- |
 | `/bridge:status` | Show socket and registry paths. |
-| `/bridge:ping [text]` | Emit a `bridge_pong` event; default text is `pong`. |
+| `/bridge:ping [text]` | Emit a `bridge_pong` event without calling a model. |
 
 ## `pi-bridge` CLI
 
@@ -68,20 +53,15 @@ pi-bridge questions --pid <pid>
 pi-bridge answer --pid <pid> --request-id que_... --answers '[["Stop here"]]'
 pi-bridge reject --pid <pid> --request-id que_...
 pi-bridge emit --pid <pid> "hello"
-pi-bridge request --pid <pid> '{"type":"get_state"}'
 ```
 
-If exactly one active bridge exists, target flags are optional. Target filters include `--pid`, `--socket`, `--session`, `--name`, and `--cwd`.
-
-For `pi-questions` tabs with `allowCustom=true`, answer strings may be free-form text.
-
-When installed via vstack, `pi-bridge` is symlinked into the install scope's `bin/` directory (`.pi/bin/pi-bridge` for project scope, `~/.pi/agent/bin/pi-bridge` for global scope). Add that directory to `PATH`, run it by path, or use the raw socket protocol below from any language.
+If exactly one active bridge exists, target flags are optional. Filters: `--pid`, `--socket`, `--session`, `--name`, `--cwd`.
 
 ## Raw protocol
 
-Connect to the advertised Unix socket and exchange one strict JSON object per LF-delimited record. Requests may include `id`; responses use `type:"response"` with the same `id`.
+Connect to the advertised Unix socket and exchange one JSON object per LF-delimited record. Requests may include `id`; responses use `type:"response"` with the same `id`.
 
-Common requests:
+Example requests:
 
 ```json
 {"id":"1","type":"get_state"}
@@ -89,60 +69,40 @@ Common requests:
 {"id":"3","type":"steer","message":"Focus on errors"}
 {"id":"4","type":"follow_up","message":"Summarize when done"}
 {"id":"5","type":"abort"}
-{"id":"6","type":"history","limit":50}
-{"id":"7","type":"subscribe","enabled":true}
-{"id":"8","type":"emit","message":"no-LLM test event"}
-{"id":"9","type":"get_commands"}
-{"id":"10","type":"questions"}
-{"id":"11","type":"answer","requestId":"que_example","answers":[["Stop here"]]}
-{"id":"12","type":"reject","requestId":"que_example"}
 ```
 
-Responses and events:
+Example response and event:
 
 ```json
 {"type":"response","id":"1","command":"get_state","success":true,"data":{}}
 {"type":"event","event":"message_update","timestamp":"...","data":{}}
-{"type":"event","event":"question","timestamp":"...","data":{"action":"opened","requestId":"que_example"}}
 ```
 
-Clients receive events by default. Send `subscribe` with `enabled:false` to suppress live events on that connection.
+Clients receive events by default. Send `{"type":"subscribe","enabled":false}` to mute them.
 
-## Slash command behavior (vstack#10)
+## Slash command notes
 
-Messages delivered via `pi-bridge send` go through
-`pi.sendUserMessage`, which currently hardcodes
-`expandPromptTemplates: false` in `@earendil-works/pi-coding-agent`.
-That affects three pi resolver paths differently:
+`pi-bridge send` does **not** expand slash commands the way Pi's editor does. Effects:
 
-| Command shape | Via `pi-bridge send` | Via interactive editor |
-|---|---|---|
-| Bare extension command, e.g. `/flightdeck`, `/bridge:ping` | **Works** — routed through `pi.on("input")` → `_tryExecuteExtensionCommand`, which fires regardless of the expansion gate. |  Works |
-| Skill command, e.g. `/skill:flightdeck watch` | **Arrives as raw text to the LLM.** `_expandSkillCommand` is skipped. The LLM may infer intent but the skill body is not auto-loaded. | Works (full slash resolver runs) |
-| Prompt template, e.g. `/clear-ai`, project-defined `/<name>` from `.pi/prompts/*` | **Arrives as raw text.** `expandPromptTemplate` is skipped. | Works |
+- Bare extension commands (e.g. `/flightdeck`, `/bridge:ping`) work.
+- Skill commands (`/skill:foo`) arrive as raw text to the LLM — the skill body isn't auto-loaded.
+- Prompt templates (`/<name>` from `.pi/prompts/*`) arrive as raw text.
 
-Workarounds:
+Workaround: send the bare extension command form, or have the extension re-dispatch via `ctx.ui.pasteToEditor("/skill:foo\n")`.
 
-- Callers that need a skill to load should send the bare extension
-  command form. The flightdeck daemon's pi master wake takes this
-  approach: `/flightdeck watch --from-daemon` is dispatched by the
-  pi-flightdeck extension which then re-dispatches into the skill via
-  `ctx.ui.pasteToEditor("/skill:flightdeck watch ...\n")`.
-- The proper fix is an upstream change to
-  `@earendil-works/pi-coding-agent`'s `sendUserMessage` to accept an
-  `expandPromptTemplates` option (tracked at vstack#10).
+## Settings
 
-## No-LLM checks
+All settings live in the extension manager under **Session Bridge**.
 
-```bash
-pi-bridge state --pid <pid>
-pi-bridge emit --pid <pid> "hello"
-pi-bridge send --pid <pid> "/bridge:ping hello"
-pi-bridge history --pid <pid> 20
-```
-
-`/bridge:ping` is handled by the extension and emits `bridge_pong` without calling a model.
+| Setting | What it does |
+| --- | --- |
+| Bridge directory | Override the sockets/registry directory. `PI_BRIDGE_DIR` env var still wins. |
+| Event history limit | Events retained for history clients. |
+| Max request line bytes | Maximum JSONL request size accepted. |
+| Registry heartbeat | Ms between registry file updates. |
+| Notify on start | In-TUI notification when the bridge starts. |
+| Show status badge | Show `bridge:<pid>` in the Pi footer. |
 
 ## Security
 
-The socket can trigger real agent work in the owning Pi process. Keep `PI_BRIDGE_DIR` private and do not expose the socket to other users or containers you do not trust.
+The socket can trigger real agent work in the owning Pi process. Keep `PI_BRIDGE_DIR` private. Don't expose the socket to other users or untrusted containers.

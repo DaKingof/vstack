@@ -13,6 +13,8 @@ metadata:
 
 # Flightdeck
 
+> If you're modifying flightdeck scripts, the daemon, or `lib/flightdeck-core/` — read [`DEVELOPMENT.md`](./DEVELOPMENT.md) first. It has the TS port status, parity-test workflow, debugging entry points, and operational caveats.
+
 ## STOP — Required Setup
 
 1. Verify `$TMUX` is set. If unset, **exit immediately with no-op**: print `Flightdeck requires tmux; skipping.` and return control to the caller. Flightdeck does nothing outside tmux.

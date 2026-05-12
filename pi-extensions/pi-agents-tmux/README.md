@@ -2,7 +2,17 @@
 
 https://github.com/user-attachments/assets/36192e57-a6e4-47f9-b47c-dd26920906ae
 
-Pi package for delegating work to specialized agents from a running Pi session.
+Delegate work to specialized agents from a running Pi session. Agents run either as visible persistent tmux panes or as background one-shot sessions.
+
+## Highlights
+
+- `subagent` tool delegates one task, parallel tasks, or sequential chains.
+- Agents with `pane: true` open a visible tmux pane that persists across turns. Other agents run in the background.
+- `/agents` browser lists project and user agents with search, preview, and one-key launch.
+- Dashboard widget shows live state, model, turns, tokens, and cost for every spawned agent.
+- Grouped completion notifications batch multiple agents finishing together.
+- `taskId` retrieval, mid-run steering, and pane stop without losing memory.
+- Stop kills the tmux process but preserves the session — next launch resumes it.
 
 ## Install
 
@@ -21,19 +31,9 @@ vstack add vanillagreencom/vstack --pi-extension pi-agents-tmux --harness pi -y
 
 Restart Pi after installation.
 
-## What it provides
+Persistent panes require running Pi inside tmux.
 
-- `subagent` tool for one-off delegation, parallel delegation, or sequential chains.
-- Ships `instructions.md` so vstack/npm install adds `subagent`/`steer_subagent`/`get_subagent_result`/`stop_subagent` usage rules to the scope's `APPEND_SYSTEM.md`, removed on uninstall or disable.
-- Project/user agent discovery from `.pi/agents`, `.claude/agents`, and `~/.pi/agent/agents`.
-- Visible persistent tmux panes for agents with `pane: true` frontmatter; other agents run as bg one-shot sessions.
-- Grouped, themed completion notifications for persistent pane results.
-- Durable task registry plus `get_subagent_result` recovery by `taskId` or latest agent task.
-- `steer_subagent` for bridge-based mid-run steering, and `stop_subagent` for killing panes and clearing active registry/dashboard state.
-- Session-scoped inbox/outbox handoff, transcript artifacts, and pane registries under `~/.pi/agent/vstack/sessions/<session-id>/pi-agents-tmux/`. Legacy `~/.pi/agent/vstack/pi-agents-tmux/sessions/<session-id>/` trees are migrated on session start.
-- Auto-sized grid tmux layout for pane agents, reflowed on every spawn, with pane titles like `agent:iced`.
-
-## Tool modes
+## Tool
 
 Single task:
 
@@ -41,95 +41,73 @@ Single task:
 { "agent": "rust", "task": "Inspect error handling and summarize findings." }
 ```
 
-Parallel tasks:
+Parallel:
 
 ```json
-{
-  "tasks": [
-    { "agent": "iced", "task": "Review the widget layout." },
-    { "agent": "reviewer-test", "task": "Check test coverage gaps." }
-  ]
-}
+{ "tasks": [
+  { "agent": "iced", "task": "Review the widget layout." },
+  { "agent": "reviewer-test", "task": "Check test coverage gaps." }
+] }
 ```
 
-Sequential chain:
+Chain (with `{previous}` placeholder):
 
 ```json
-{
-  "chain": [
-    { "agent": "scout", "task": "Map the relevant files." },
-    { "agent": "planner", "task": "Turn this into a plan: {previous}" }
-  ]
-}
+{ "chain": [
+  { "agent": "scout", "task": "Map the relevant files." },
+  { "agent": "planner", "task": "Turn this into a plan: {previous}" }
+] }
 ```
 
-Useful options:
+Useful options: `agentScope` (`project` default, `user`, `both`), `cwd` per task, `confirmProjectAgents` to prompt before running project agents.
 
-- `agentScope`: `project` (default), `user`, or `both`.
-- `cwd`: override working directory for a single task.
-- `confirmProjectAgents`: prompt before using project-local agents.
+Persistent panes return a `taskId`. Keep it to retrieve or steer the task later.
 
-Persistent pane delegations return a `taskId`. Keep it if you need to retrieve or steer the task later.
-
-### Resuming bg agents
-
-Bg (non-pane) agents resume by default per parent session: omitting `sessionKey` uses that agent's `default` lane. Pass `sessionKey: "<stable-id>"` when you want a separate named memory lane:
-
-```json
-{ "agent": "reviewer-arch", "task": "Re-review with the new diff.", "sessionKey": "review-PROJ-123" }
-```
-
-The extension routes pi at `runtime/sessions/bg-<agent>-<key>.jsonl`. Same `agent + sessionKey` across delegations resumes the same pi session and retains memory; different keys keep separate histories.
-
-Pane agents persist via their own pane session file, so `sessionKey` is ignored when the agent has `pane: true`. `stop_subagent` and `/agents:stop <name>` kill the live tmux process but preserve that session file. Default `subagent`, `/agents:start <name>`, and `/agents:send <name> ...` resume/reuse it. To start fresh, pass `forceSpawn: true` or run `/agents:new <name>`. To restore an older archived pane session, pass `resumeSession: "latest"` to `subagent` or run `/agents:resume <name> [latest|archive-file]`.
+Bg agents resume per parent session by default. Pass `sessionKey: "<stable-id>"` for a separate named memory lane. Pane agents persist via their own session file and ignore `sessionKey`.
 
 ## Commands
 
 | Command | Action |
 | --- | --- |
-| `/agents` | Open the browser using project scope. |
+| `/agents` | Open the agent browser. |
 | `/agents project\|user\|both` | Open the browser with an explicit scope. |
 | `/agents show <name> [scope]` | Inspect an agent. |
-| `/agents:start <name>` | Start/reuse a live pane or resume the saved pane session. |
-| `/agents:new <name>` | Stop any live pane, archive the saved pane session, and start fresh. |
-| `/agents:resume <name> [latest\|archive-file]` | Restore an archived pane session and start it. |
+| `/agents:start <name>` | Start or resume a pane. |
+| `/agents:new <name>` | Archive the saved session and start fresh. |
+| `/agents:resume <name> [latest\|archive-file]` | Restore an archived pane session. |
 | `/agents:send <name> <task>` | Queue a task for a persistent pane. |
 | `/agents:attach <name>` | Focus an existing pane. |
 | `/agents:stop <name>` | Stop a persistent pane. |
 | `/agents status` | Show pane status. |
 | `/agents collect` | Collect completed pane results. |
-| `/agents:trace <ref>` | Open/show one trace by task id, short id, or trace ref. |
+| `/agents:trace <ref>` | Open or show one trace by task id or short id. |
 | `/agents:toggle` | Toggle the persistent dashboard. |
 
-Arguments support autocomplete, including known agent names for `show`, `start`, `new`, `resume`, `send`, `attach`, and `stop`.
+Arguments support autocomplete, including known agent names.
 
 ## Browser keys
 
 - Type to search by name, description, source, path, model, denied tools, or pane status.
-- `Tab` / `Shift+Tab` switches scope tabs: project, user, both.
-- `↑/↓`, `-/=`, `Home/End` navigate the list; `←/→` switches focus between list and inspector.
-- In the inspector, `↑/↓`, `-/=`, `Home/End` scroll the system prompt preview.
+- `Tab` / `Shift+Tab` switches scope tabs.
+- `↑/↓`, `-/=`, `Home/End` navigate. `←/→` switches list/inspector focus.
 - `Enter` inserts `Use agent <name> to: ` into the editor.
-- `Alt+M` edits the selected agent's frontmatter (`model`, `deny-tools`, `color`). For vstack-managed project agents, changes are written to `[agent-frontmatter.pi]` in `vstack.toml` and only the generated Pi agent file is affected on refresh. Hand-authored agents are edited in place.
-- For `pane: true` agents, `Ctrl+P` starts/reuses a pane, `Ctrl+O` attaches, and `Ctrl+X` stops it.
+- `Alt+M` edits the selected agent's frontmatter.
+- For pane agents: `Ctrl+P` starts/reuses, `Ctrl+O` attaches, `Ctrl+X` stops.
 - `Esc` clears search or closes.
-- Popup left-pane rows show only a status icon plus agent name; scope, model, kind, task detail, and transcript metadata live in the right pane.
 
-Agent status legend (Nerd Font glyphs): `` live pane, `` pane-ready/startable, `` stale pane, `·` background. Background-mode agents (no `pane: true`) display as `bg` in user-facing labels; the internal kind is still `oneshot`.
-
-Dashboard row status: `` queued, `` working, `` completed, `` needs completion, `` failed / blocked. Live panes that finish a task stay visible as `completed` with a green check until a later queued/running task for the same pane replaces the row and moves it back to working.
-
-Non-interactive mode emits inline list/show output. Management commands remain available.
+Status legend: ` ` live pane, ` ` startable, ` ` stale, `·` background. Dashboard rows: ` ` queued, ` ` working, ` ` completed, ` ` needs completion, ` ` failed/blocked.
 
 ## Dashboard widget
 
-The inline agents widget (default toggle `Alt+A`, popup `Alt+Shift+A`; `F3` also opens the popup) shows live state for every spawned agent. Each row carries the agent name, its kind (`pane` or `bg`), and live usage stats refreshed from the transcript jsonl every poll cycle: ` N` (turns), `↑in ↓out` (tokens), and `$cost`. Compact mode aggregates totals across all agents on the trailing line. Expanded mode adds a `Total · ...` line at the bottom. Rows sort by start time so the order is stable while live updates patch usage in place.
+Alt+A cycles the widget hidden → compact → expanded. Alt+Shift+A or F3 opens the full `/agents` popup.
 
-Rendering contract: the dashboard/popup owns live lifecycle (`queued`, `working`, `completed`, `needs completion`). Inline tool output stays quieter when the dashboard is enabled: pane calls render as launch breadcrumbs, while bg/one-shot calls render the useful result preview without repeating the dashboard's lifecycle row.
+Each row shows agent name, kind (`pane` or `bg`), turn count, input/output tokens, and cost. Compact mode aggregates totals on a single line; expanded adds a `Total` row at the bottom.
+
+When the dashboard is on, inline tool output stays quiet — pane calls render as launch breadcrumbs, bg/one-shot calls show a result preview.
 
 ## Persistent pane agents
 
-Agents with `pane: true` frontmatter use a persistent tmux pane instead of one-shot JSON mode:
+Agents with `pane: true` use a visible tmux pane:
 
 ```yaml
 ---
@@ -142,71 +120,81 @@ pane: true
 ---
 ```
 
-Supported agent frontmatter fields:
+Frontmatter fields:
 
 | Field | Required | Values |
 | --- | --- | --- |
-| `name` | yes | Unique agent name used in `subagent`, `/agents`, pane title, and task ids. |
+| `name` | yes | Unique agent name. |
 | `description` | yes | Short description shown in `/agents` and completions. |
-| `deny-tools` | no | Comma-separated Pi tools to subtract from inherited active tools. Prefer this for maintainable restrictions; future parent tools are inherited unless explicitly denied. Vstack-generated agents deny recursive/control tools by default. Most also deny `question`; `planner` keeps `question` available for requirement clarification. Hand-authored agents can choose differently. View and modify this with `/agents` → `Alt+M`. |
-| `model` | no | Pi model id. Shorthands are accepted: `sonnet` → `claude-sonnet-4-5`, `opus*` → `claude-opus-4-5`, `haiku` → `claude-haiku-4-5`. Other values pass through unchanged, including provider ids like `openai-codex/gpt-5.5:xhigh`. |
-| `pane` | no | `true`, `yes`, `1`, or `pane` starts/reuses a visible persistent tmux pane. Omit or use `false` for bg one-shot mode. |
-| `persistentPane` | no | Legacy alias for `pane`. |
-| `color` | no | Statusline badge color for child panes. Valid values: `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`. Aliases: `orange` → `yellow`, `purple`/`violet` → `magenta`, `teal` → `cyan`. Unknown/empty values fall back to automatic color cycling. |
+| `deny-tools` | no | Comma-separated Pi tools to deny. Future parent tools are inherited unless explicitly denied. |
+| `model` | no | Pi model id; shorthands: `sonnet`, `opus*`, `haiku`. Other ids pass through. |
+| `pane` | no | `true` for a visible persistent pane; omit for bg one-shot. |
+| `color` | no | Pane badge color: `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`. Aliases: `orange`, `purple`/`violet`, `teal`. |
 
 Everything after the frontmatter is the agent's system prompt.
 
-The parent Pi session writes tasks to `inbox/<agent>/` and polls `outbox/<agent>/` under the session runtime directory. Sessions, prompt copies, launcher scripts, inbox/outbox, processed files, and pane registries are isolated by Pi session ID and never stored under the project's `.pi/` directory. Completions are delivered as a follow-up message that wakes the parent in a new turn when idle, or queues into the active turn when the parent is mid-stream — the parent should dispatch and end its turn rather than blocking on the result.
-
-Persistent panes require running Pi inside tmux. Completion files are collected in polling batches and shown as one grouped notification when multiple agents finish together. The notification includes summary, files changed, validation, source/archive paths, and the pane session transcript path.
-
-Pane tasks move through `queued → running → completed|blocked|failed`. If a child pane ends a turn without a valid completion record, the task is kept active and marked `needs_completion` instead of silently remaining queued; the child pane shows a warning asking it to call `complete_subagent`. `get_subagent_result({ "verbose": true })` includes artifact diagnostics for the expected outbox, inbox, processing, done, archive, and transcript paths, and malformed completion JSON is surfaced there instead of being swallowed by the poller.
+Pane tasks move through `queued → running → completed | blocked | failed`. If a child ends a turn without a valid completion record, the task is marked `needs_completion` and the child shows a warning.
 
 ## Result retrieval and steering
+
+Dispatch and end your turn — the extension wakes the parent on completion. Use `get_subagent_result` only as a fallback if you suspect a missed wake event. Pass `wait: true` to block the current turn (use sparingly).
 
 ```json
 { "taskId": "iced-..." }
 ```
 
-Use `get_subagent_result` with either `taskId` or `agent` (latest task for that agent). The expected flow is to dispatch, end the turn, and let the extension wake the parent on completion — then call `get_subagent_result` (without `wait`) only if you suspect a missed wake event. Pass `wait: true` (with optional `timeoutMs`) to block the current turn until the task reaches `completed`, `blocked`, `failed`, or diagnostic `needs_completion`; this is for cases where the user has explicitly asked the parent to hold the turn open. It reads the durable `tasks.json` registry. This is a recovery/status reader for persistent pane tasks; it does not create panes, steer agents, or change Flightdeck/Orchestration ownership rules.
+Use `steer_subagent` for mid-run correction. It targets `pi-session-bridge` when available; otherwise it queues a steering note for the pane to read when idle.
 
 ```json
 { "taskId": "iced-...", "message": "Prioritize the failing layout test.", "deliverAs": "steer" }
 ```
 
-Use `steer_subagent` for mid-run correction. It targets `pi-session-bridge` (`steer`, `send --auto`, or `follow-up`) only when `pi-bridge list --json` contains an exact match for the child pane's registered `sessionFile` under this parent session runtime. It never falls back to matching by cwd. If the exact bridge target is unavailable, it queues a clear steering note in the pane inbox; that fallback is read only when the pane is idle.
-
-Use `stop_subagent` to kill a persistent pane from the parent agent. It removes the pane registry/dashboard row and marks any non-terminal active task as blocked, but preserves the session file so the next default start/delegation resumes memory.
-
-## Cross-extension stats bridge
-
-The extension publishes a read-only stats bridge on `globalThis[Symbol.for("vstack.pi.agents")]` with two methods:
-
-- `getByPaneId(paneId: string)` — returns the current dashboard item for a tmux pane id (`%N`), including `usage` (input/output/cache/cost/turns/contextTokens) and `model` if known.
-- `list()` — returns all dashboard items.
-
-Other vstack extensions (e.g. `pi-flightdeck`) join their own per-pane records against this bridge to surface live cost/turns/tokens without depending on internals.
-
-## Artifacts and events
-
-- One-shot JSON-mode agents write JSONL transcripts under `transcripts/<agent>/`.
-- Persistent panes expose the full visible Pi session JSONL as their transcript path.
-- Oversized one-shot final output can still be preserved under `outputs/<agent>/`.
-- The extension emits best-effort in-process lifecycle events with legacy `subagents:*` names for compatibility: `subagents:ready`, `subagents:created`, `subagents:queued`, `subagents:started`, `subagents:completed`, `subagents:failed`, `subagents:needs_completion`, `subagents:steered`, and stop events via registry/dashboard cleanup.
-
-## In-process one-shot sessions (not implemented)
-
-A future backend could use Pi SDK `createAgentSession()` for non-pane one-shot agents to reduce process overhead, get direct session events, improve cancellation, and simplify transcript collection. Persistent `pane: true` agents should remain external visible Pi processes because they are intentionally tmux-observable, long-lived, steerable through the session bridge, and inspectable outside the parent turn.
+Use `stop_subagent` to kill a persistent pane. The session file is preserved; the next launch resumes memory.
 
 ## Settings
 
-`pi-extension-manager` exposes:
+All settings live in the extension manager under **Agents (tmux)**.
 
-- `maxParallelTasks` and `maxConcurrency` for one-shot delegation limits.
-- Dashboard controls: `dashboard`, `quietInlineWhenDashboard`, `dashboardMaxItems`, `dashboardCollapsed`, `dashboardShortcut` (default `alt+a` cycles dashboard mode), `popupShortcut` (default `alt+shift+a` opens the full `/agents` browser; `F3` is an additional popup shortcut), and `treeStyle`.
-- `collapsedItemCount` for compact result rendering.
-- `truncateResults`, `resultMaxBytes` (default 102400), `resultMaxLines` (default 4000), and `preserveFullOutput` for result truncation. Oversized one-shot outputs are saved under `~/.pi/agent/vstack/sessions/<session-id>/pi-agents-tmux/outputs/` when preservation is enabled.
-- `completionPollMs` and `childInboxPollMs` for persistent pane polling intervals.
-- `forceSessionBridgeForPanes` (default `true`) explicitly loads `pi-session-bridge` in new pane launchers so steering continues to work if settings drift.
-- `subagentModelSource` (default `frontmatter`) controls whether child Pi sessions use the agent `model:` value or inherit the parent session model.
-- `subagentThinkingSource` (default `frontmatter`) controls whether child Pi sessions use the thinking level encoded in the agent model (the `:effort` suffix on `model:`) or inherit the parent session thinking level. With `frontmatter`, `--thinking` is omitted from the child invocation so the model suffix governs; with `parent`, the parent's current level is passed through.
+### Execution
+
+| Setting | What it does |
+| --- | --- |
+| Max parallel tasks | Cap on tasks in one parallel agent call. |
+| Max concurrency | Cap on one-shot processes running simultaneously. |
+| Subagent model source | Use the agent's `model:` or inherit the parent session model. |
+| Subagent thinking source | Use the model `:effort` suffix or inherit the parent thinking level. |
+
+### Rendering
+
+| Setting | What it does |
+| --- | --- |
+| Show agent dashboard | Render the activity card above the editor. |
+| Quiet inline output with dashboard | Keep inline tool output to short crumbs. |
+| Dashboard max items | Maximum agent rows shown. |
+| Dashboard collapsed by default | Start collapsed. |
+| Tree connector style | `unicode` or `ascii`. |
+| Collapsed item count | Items shown in collapsed agent results. |
+
+### Output
+
+| Setting | What it does |
+| --- | --- |
+| Truncate agent results | Apply Pi-sized inline caps to tool output. |
+| Result max bytes | Inline byte cap per agent result. |
+| Result max lines | Inline line cap per agent result. |
+| Preserve full agent output | Save oversized output to the session runtime and include the artifact path. |
+
+### Persistent panes
+
+| Setting | What it does |
+| --- | --- |
+| Completion poll interval | Parent poll rate for pane completion files. |
+| Child inbox poll interval | Child pane poll rate for incoming tasks. |
+| Force session bridge for panes | Load `pi-session-bridge` in pane launchers so steering keeps working. |
+
+### Keyboard
+
+| Setting | What it does |
+| --- | --- |
+| Dashboard display shortcut | Cycles widget visibility. Default `alt+a`. |
+| Agents popup shortcut | Opens the full `/agents` browser. Default `alt+shift+a` (F3 also works). |

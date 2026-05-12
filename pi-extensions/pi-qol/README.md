@@ -5,7 +5,21 @@
 ![Session search popup](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-qol/assets/session-search.gif)
 ![/context usage breakdown](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-qol/assets/context-usage.png)
 
-Quality-of-life extension for Pi.
+Quality-of-life extension for Pi: compact statusline, multiline input, session naming and search, notifications, and a permission gate.
+
+## Highlights
+
+- Compact statusline with repo, branch, model, thinking level, and context percent.
+- Shift+Enter inserts a newline. Ctrl+J fallback for terminals that can't distinguish it.
+- Sessions auto-name from your first prompt. `/rename` overrides anytime.
+- `/search` browses previous sessions with snippet previews. F2 opens it instantly.
+- `/context` shows a Claude-style context-window breakdown.
+- `/handoff <goal>` drafts a focused prompt for a new session.
+- Permission gate prompts before risky `bash` commands. Default match: `rm -Rf`.
+- Notifications for ready, questions, blocked states, and task completion.
+- Thinking timer next to collapsed `Thinking...` labels.
+- Caveman badge and Alt+C mode cycling when `pi-caveman` is loaded.
+- Subagent-name badge in `pi-agents-tmux` child panes.
 
 ## Install
 
@@ -24,109 +38,136 @@ vstack add vanillagreencom/vstack --pi-extension pi-qol --harness pi -y
 
 Restart Pi after installation.
 
-## What it provides
-
-- Compact statusline and `π` prompt editor: shows repo/project, branch/dirty state, model, colorized thinking level, optional Caveman badge, context window size, remaining context percent, and (inside `pi-agents-tmux` child panes) an ANSI-background subagent-name badge while replacing Pi's default footer/editor chrome.
-- Reliable multiline input: `Shift+Enter` / `Shift+Return` inserts a newline when the terminal reports it distinctly; `ctrl+j` is the default fallback newline key. `Alt+Enter` is reserved for Pi follow-up messages. QOL can also style Pi's built-in steering/follow-up pending queue preview with an ANSI green left bar while leaving the restore hint muted. When `pi-caveman` is loaded, `Alt+C` cycles Caveman modes.
-- Compact image placeholders: existing pasted image paths can collapse to `[Image #N]` aliases and are attached on submit.
-- Session naming: `/rename [name]` sets or shows the friendly session name; automatic first-prompt naming is enabled by default.
-- Context usage: `/context` prints an inline Claude-style context-window visualization with estimated Pi/model category breakdowns.
-- Previous-session search: `/search` and optional `F2` overlay search prior sessions, preview snippets, resume, inject summarized context, or start a new session with summarized context.
-- Handoff: `/handoff <goal>` drafts a focused prompt for a new session, preserving the latest compaction summary plus retained branch entries.
-- Optional permission gate: when enabled, prompts before configured `bash` tool command fragments run; default match is `rm -Rf`.
-- Notifications: terminal/tmux/native notifications for ready-for-input, questions, direction needed, task completion, and critical/blocked states.
-- Optional custom compaction and idle compaction; disabled by default so Pi's compaction behavior is unchanged until enabled.
-- Thinking timer next to collapsed `Thinking...` labels; enabled by default and falls back to Pi defaults if internals change.
-
 ## Commands
 
 | Command | Action |
 | --- | --- |
-| `/qol` | Open the extension-manager settings popup (falls back to inline status when the manager is not installed). |
+| `/qol` | Open settings (or print status if extension-manager isn't installed). |
 | `/qol notify-test` | Send a test notification. |
-| `/qol:rename` | Regenerate the current session name from the first user prompt. |
-| `/qol:rename:full` | Regenerate the session name from the full conversation. |
-| `/rename [name]` | Set or show the current session's friendly name. |
-| `/context` | Show inline context-window usage, model/context limit, and estimated category breakdowns. |
-| `/search [query]` | Open previous-session search, optionally prefilled with a query. |
+| `/rename [name]` | Set or show the current session's name. |
+| `/qol:rename` | Regenerate the session name from the first prompt. |
+| `/qol:rename:full` | Regenerate from the full conversation. |
+| `/context` | Show context-window usage with category breakdown. |
+| `/search [query]` | Open previous-session search. |
 | `/search:refresh` | Refresh the session search cache. |
-| `/search:resume-pending <id>` | Internal recovery command inserted into the editor when a resume/fork action must be confirmed by pressing Enter. |
-| `/handoff <goal>` | Draft a focused handoff prompt for a new session. |
+| `/handoff <goal>` | Draft a handoff prompt for a new session. |
 
-`/qol` and `/search` arguments support autocomplete.
+Arguments support autocomplete.
 
 ## Settings
 
-Settings are exposed through `pi-extension-manager` under **QOL**.
+All settings live in the extension manager under **QOL**. Names below match the labels shown there.
 
-### Statusline and prompt
+### Statusline
 
-- `replaceFooter`: hide Pi's default footer while QOL's compact statusline is active; default on.
-- `compactPrompt`: use the compact `π` prompt editor; default on.
-- `showSessionNameTitle`: show the named session above the prompt, or in tmux's pane title/border; default on.
-- `showSessionNameWindow`: also rename the current tmux window to `π <session>` so it appears in the tmux status line. Disables `automatic-rename` for the window while active and restores it on shutdown. Requires `showSessionNameTitle`; default on.
-- `inputBottomPaddingLines`: blank lines below the compact prompt; default `0`.
-- Git display knobs: `gitRefreshTimeoutMs`, `showDirtyMarker`.
-- If `pi-caveman` is loaded, QOL reads its bridge to show a Caveman icon in the statusline and to make `Alt+C` cycle Caveman modes. The Caveman package's `showStatusBadge` setting also controls this QOL badge.
-- If `pi-agents-tmux` is loaded inside a child pane, QOL reads its bridge/env metadata to show a trailing subagent-name badge after the context percent. The badge uses the agent `color:` frontmatter (`red`, `green`, `yellow`, `blue`, `magenta`, `cyan`; aliases `orange`, `purple`/`violet`, `teal`) or falls back to automatic color cycling.
+| Setting | What it does |
+| --- | --- |
+| Replace built-in footer | Hide Pi's default footer while the QOL statusline is active. |
+| Use π prompt editor | Use the compact prompt editor. |
+| Show session name title | Show the session name above the prompt and in the tmux pane title. |
+| Sync session name to tmux window name | Rename the tmux window to `π <session>`. |
+| Input bottom padding | Blank lines below the prompt. |
+| Show dirty marker | Append `*` to the branch when the worktree is dirty. |
 
 ### Input
 
-- `newlineOnShiftEnter`: intercept distinguishable `Shift+Enter` / `Shift+Return` and insert a newline; default on.
-- `newlineFallbackKey`: alternate newline key for terminals that cannot distinguish shifted enter; default `ctrl+j`, or `none` to disable.
-- `pendingQueue.asciiGreen`: style Pi's built-in steering/follow-up pending queue preview with an ANSI green heavy left bar while keeping the Alt+Up restore hint in the theme hint color with a two-space indent; default on.
+| Setting | What it does |
+| --- | --- |
+| Shift+Enter inserts newline | Insert a newline instead of submitting on Shift+Enter. |
+| Fallback newline key | Alternate newline key for terminals that can't send Shift+Enter. |
+| Style pending queue preview | Highlight Pi's pending-queue preview with a green left bar. |
+| Style image chips | Render `[Image #N]` placeholders as distinct chips. |
+| Show attachment count | Show a status badge when the draft has image placeholders. |
 
-### Session auto-rename
+### Session naming
 
-- `sessionAutoRename.enabled`: automatically name unnamed sessions after the first prompt/agent turn; default on.
-- `sessionAutoRename.model`: naming model (`provider/model`, `current`, or `cheapest`); default `openai-codex/gpt-5.4-mini`.
-- `sessionAutoRename.fallbackModel`: fallback model; default `current`, or `none`/`off` to skip.
-- `sessionAutoRename.fallback`: deterministic fallback when model naming fails: `words`, `truncate`, or `none`.
-- Advanced knobs: `prefix`, `maxInputChars`, `maxNameChars`, `maxTokens`, `timeoutMs`, `prompt`, `notify`, and `debug`.
+| Setting | What it does |
+| --- | --- |
+| Enable /rename command | Register the `/rename` command. |
+| Auto-name new sessions | Generate a friendly session name from the first prompt. |
+| Auto-rename model | Model used for title generation. |
+| Auto-rename fallback model | Model tried when the primary fails. |
+| Deterministic fallback | Title-case words, truncated prompt, or none if all model calls fail. |
+| Auto-rename prefix | Optional static prefix on every generated name. |
+| Notify on auto-rename | Show a notification when auto-renaming. |
+
+Advanced: input cap, title length, output tokens, timeout, custom prompt template, and debug logging.
+
+### Handoff
+
+| Setting | What it does |
+| --- | --- |
+| Enable /handoff command | Register the `/handoff` command. |
+| Review handoff prompt | Open an editor to edit the generated prompt before creating the session. |
+
+### Context window
+
+| Setting | What it does |
+| --- | --- |
+| Enable /context command | Register `/context`. |
 
 ### Session search
 
-- `sessionSearch.enabled`: register `/search` and the overlay.
-- `sessionSearch.shortcutKey`: shortcut to open search; default `f2`, set `none` to disable.
-- Search ordering: empty search shows prompts by recency; typed search sorts by match quality, then prompt recency.
-- Result/layout knobs: `resultLimit`, `maxVisible`, `messageMaxVisible`, `previewSnippets`, `overlayWidth`, `cacheTtlSeconds`.
-- Summary knobs: `summaryModel`, `summaryMaxTokens`, `summaryInputMaxChars`.
+| Setting | What it does |
+| --- | --- |
+| Enable session search | Register `/search` and the overlay. |
+| Session search shortcut | Shortcut to open search. Default `f2`; set to `none` to disable. |
+| Result limit | Max matching prompts returned. |
+| Visible session rows | Rows shown before scrolling. |
+| Preview snippets | Matching snippets shown on the preview screen. |
+| Session cache TTL | Seconds before the session list refreshes; `0` keeps it until you run `/search:refresh`. |
 
-Search rows use Pi's `/resume`-style title: explicit session name, otherwise first user prompt, otherwise filename. The session cache is warmed on session start/first use and, by default, kept until `/search:refresh`; set `cacheTtlSeconds` above `0` if you want automatic time-based refreshes.
-
-### Context usage
-
-- `enableContextCommand`: register `/context`; default on. The display uses Pi's `ctx.getContextUsage()` for total tokens/context window, then estimates the category split from the current system prompt, active tool definitions, session messages, compact summaries, context files, skills, and custom agents when Pi exposes that structured data.
+Summary settings (model, max tokens, input cap) tune the summarizer when you import context from a previous session.
 
 ### Notifications
 
-- Master and trigger toggles: `notification.enabled`, `onAgentReady`, `onDirectionNeeded`, `onQuestion`, `onTaskComplete`, `onCritical`.
-- Channels: BEL, native terminal notifications, tmux client TTY writes, tmux messages, optional tmux window marking, and Pi UI notifications.
-- `notification.oscProtocol`: `auto`, `osc777`, `osc99`, or `off`; `auto` uses Kitty OSC 99 when available, otherwise OSC 777.
-- Tuning: `cooldownSeconds`, `title`, `readyMessage`, `bodyMaxChars`, `tmuxMessageDurationMs`, and tmux mark text/duration.
+Master toggle: **Enable notifications**.
 
-Use `/qol notify-test` to verify your terminal/tmux notification path.
+Triggers (notify when): ready, direction needed, question popups, all tasks complete, critical/blocked.
+
+Channels: terminal bell, native terminal notifications (OSC 777/99 or Windows toast), tmux `display-message`, tmux window marking, OSC passthrough, and an optional in-Pi UI notice.
+
+Tuning: cooldown seconds, title, ready message, body length, tmux durations.
+
+Notes:
+
+- **Terminal notification protocol** picks between OSC 99 (Kitty) and OSC 777 automatically.
+- **Bell when tmux window active** is off so you don't get bells while looking at Pi.
+- **tmux native via client TTY** sends OSC notifications to attached tmux clients so notifications still appear when the Pi window is inactive.
+
+Use `/qol notify-test` to verify your terminal/tmux setup.
 
 ### Permission gate
 
-- `permissionGate.enabled`: ask before matching `bash` tool calls; default off. When enabled, non-interactive matches are blocked.
-- `permissionGate.commands`: comma-separated literal fragments or `/pattern/flags` regexes; default `rm -Rf`.
-- `permissionGate.previewLines` / `permissionGate.previewChars`: cap the approval prompt preview; long commands show a compact head/tail preview while the full command still runs only if approved.
+| Setting | What it does |
+| --- | --- |
+| Prompt before risky bash commands | Ask before bash commands matching the command list. |
+| Commands to prompt for | Comma-separated literal fragments or `/regex/flags`. |
+| Approval preview lines | Cap the approval-prompt preview height. |
+| Approval preview characters | Cap the approval-prompt preview width. |
+
+Off by default. When enabled, non-interactive matches are blocked.
 
 ### Compaction
 
-- `compaction.customEnabled`: use QOL custom summaries for Pi compaction events; default off.
-- `compaction.model`: summarizer model; default `google/gemini-2.5-flash`.
-- `compaction.profile`: `concise`, `balanced`, or `exhaustive`.
-- `compaction.remoteEnabled` / `compaction.remoteEndpoint`: call a remote summarizer with `{ systemPrompt, prompt, maxTokens }` and expect `{ summary }`.
-- `compaction.branchSummaryEnabled`: use the same summarizer for requested `/tree` branch summaries.
-- `compaction.idleEnabled` and related thresholds: extension-managed idle compaction trigger.
+| Setting | What it does |
+| --- | --- |
+| Custom compaction summaries | Use QOL summaries instead of Pi's default. |
+| Compaction model | Summarizer model. |
+| Compaction detail profile | `concise`, `balanced`, or `exhaustive`. |
+| Include previous summary | Pass the previous summary for iterative continuity. |
+| Fallback to Pi default compaction | Run Pi's default compaction if QOL's fails. |
+| Show compaction notifications | Notify on compaction start/fail/complete. |
+| Custom branch summaries | Use the QOL summarizer for `/tree` branch summaries. |
+| Remote compaction endpoint | Call a remote HTTP summarizer instead of a model. |
+| Idle compaction trigger | Auto-compact after the session sits idle above a token threshold. |
 
-### Thinking timer
+Idle thresholds (token threshold, idle delay, fixed token limit, percent limit) tune when idle compaction fires.
 
-- `thinkingTimer.enabled`: show elapsed time next to collapsed `Thinking...` labels when the model emits thinking blocks.
-- `workingIndicator.mode`: control Pi's built-in streaming spinner. The default `animated` spinner ticks every 80ms; when total rendered content overflows the terminal (chat scrolled past the top, `/tree` open with a tall tree, etc.) each tick can trip pi-tui's full-screen redraw path and produce a visible flash. Set to `static` for a single non-animating dot that keeps the working row visible without the 80ms timer.
+### Thinking
 
-## Notes
-
-Pi owns native pending image attachment state and does not expose it to extensions. QOL can attach image paths it collapses itself; native Pi paste/drag attachments remain Pi-owned.
+| Setting | What it does |
+| --- | --- |
+| Hidden thinking label | Label shown when thinking blocks are hidden. |
+| Show thinking timer | Show elapsed time next to collapsed `Thinking...` labels. |
+| Working indicator mode | `animated` ticks every 80ms; switch to `static` if you see flashes when the chat overflows. |

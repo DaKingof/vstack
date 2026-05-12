@@ -3,7 +3,16 @@
 ![Expanded task panel with phase grouping](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-task-panel/assets/panel-expanded.png)
 ![Tasks manager overlay](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-task-panel/assets/manager.png)
 
-Persistent structured task panel above the Pi status line/editor.
+Persistent task panel above the Pi status line. Tasks are managed by the agent through the `tasks_write` tool or by you through `/tasks`.
+
+## Highlights
+
+- Compact panel above the editor shows active and pending tasks at a glance.
+- Expanded mode groups by phase and shows notes for the active task.
+- Auto-advance moves to the next pending task when the active one is completed or dropped.
+- Auto-hide when all tasks are done; reappears when pending work is added.
+- Bulk-edit, import, and export tasks as plain markdown.
+- Workflow reminders nudge the agent to keep the panel in sync.
 
 ## Install
 
@@ -27,7 +36,7 @@ Restart Pi after installation.
 | Command | Action |
 | --- | --- |
 | `/tasks` or `/tasks:manage` | Open the interactive manager. |
-| `/tasks:add <task>` | Add one task; use `Phase :: task` to assign a phase. |
+| `/tasks:add <task>` | Add a task. Use `Phase :: task` to assign a phase. |
 | `/tasks:edit` | Bulk-edit tasks as plain text. |
 | `/tasks:start <task>` | Set a task active. |
 | `/tasks:done <task>` | Mark a task completed. |
@@ -40,30 +49,58 @@ Restart Pi after installation.
 | `/tasks:export <path>` | Write tasks to a markdown file. |
 | `/tasks:import <path>` | Load tasks from a markdown file. |
 
-Arguments support autocomplete, including task names for focused actions.
+Arguments support autocomplete, including task names.
 
 ## Manager keys
 
-Select with `↑/↓`. `Enter`/`s` starts, `d` marks done, `x` drops/abandons, `r` removes, `c` clears completed tasks, and `e` opens bulk edit.
+`↑/↓` selects. `Enter`/`s` starts, `d` marks done, `x` drops, `r` removes, `c` clears completed, `e` opens bulk edit.
 
-`/tasks:edit` uses plain text (`- task name`) with optional status suffixes: `(active)`, `(done)`, or `(dropped)`.
+Bulk edit format:
 
-## Agent tool
+```
+- Phase A :: First task (active)
+- Phase A :: Second task (done)
+- Phase B :: Third task
+```
 
-The model updates tasks with `tasks_write`. Tool results render as compact inline status rows by default; set `compactToolOutput=false` to use Pi's normal padded tool box.
-
-Panel behavior:
-
-- Ships `instructions.md` so vstack/npm install adds `tasks_write` usage rules to the scope's `APPEND_SYSTEM.md`, removed on uninstall or disable.
-- Keeps one active task highlighted.
-- Automatically advances to the next pending task when the active task is completed/dropped.
-- Hides when all tasks are complete and reappears when pending work is added.
-- Groups tasks by `phase` in expanded mode.
-- `tasks_write` runs sequentially so multiple transitions in one assistant response cannot race.
-- When tasks remain, `showWorkflowReminder` adds hidden task context plus a model-facing reconciliation reminder.
-
-State stores snapshots in `tasks_write` result details, with project/session custom entries as an extra restore path.
+Status suffixes: `(active)`, `(done)`, `(dropped)`.
 
 ## Shortcut
 
-Pi uses `Ctrl+T` for thinking visibility. This package always registers the alternate shortcut from settings (`Alt+T` by default), which cycles `hidden → show 4 → show all`. It registers `Ctrl+T` only when `takeoverCtrlT` is enabled in the extension manager and Pi is reloaded. The task manager popup opens with `managerShortcut` (`Alt+Shift+T` by default) and the additional `F4` shortcut.
+Pi uses `Ctrl+T` for thinking visibility. The default panel shortcut is `Alt+T`, which cycles `hidden → show 4 → show all`. Enable **Use Ctrl+T for tasks** in settings to take over `Ctrl+T`.
+
+The manager popup opens with `Alt+Shift+T` (or `F4`).
+
+## Settings
+
+All settings live in the extension manager under **Task Panel**.
+
+### Panel
+
+| Setting | What it does |
+| --- | --- |
+| Default panel state | `hidden`, `compact`, or `expanded` when tasks first appear. |
+| Compact task count | Max tasks shown in compact mode. |
+| Show active notes | Show notes for the active task in expanded mode. |
+| Auto-show on first task | Reveal the panel automatically when the first task is added. |
+
+### Keyboard
+
+| Setting | What it does |
+| --- | --- |
+| Use Ctrl+T for tasks | Take over `Ctrl+T` (overrides Pi's thinking-visibility binding). |
+| Alternate shortcut | Always-available shortcut. Default `alt+t`. |
+| Manager popup shortcut | Default `alt+shift+t`. |
+
+### Tool output
+
+| Setting | What it does |
+| --- | --- |
+| Compact tasks_write output | Render `tasks_write` results as a single inline status row. |
+
+### Reminders
+
+| Setting | What it does |
+| --- | --- |
+| Task workflow reminders | Inject hidden task context so the agent reconciles state before replying. |
+| Incomplete-task reminders | Subtle reminder when a turn ends with incomplete tasks. |

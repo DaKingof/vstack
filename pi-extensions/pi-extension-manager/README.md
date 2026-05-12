@@ -2,7 +2,14 @@
 
 ![Extension Manager browser and settings editor](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-extension-manager/assets/extension-manager.gif)
 
-Pi package manager and separate settings editor for vstack-installed Pi packages.
+Package manager and settings editor for vstack-installed Pi packages.
+
+## Highlights
+
+- Browse, enable, disable, update, and uninstall packages from one popup.
+- Separate settings editor with one tab per package that exposes vstack settings.
+- Diagnostics view shows status, source, install method, versions, and update state.
+- Optional notification at session start when newer versions are available.
 
 ## Install
 
@@ -25,22 +32,29 @@ Restart Pi after installation.
 
 | Command | Action |
 | --- | --- |
-| `/extensions` | Open the package manager: browse packages, enable/disable, inspect install source, uninstall, and run available updates. |
-| `/extensions:settings` | Open the settings editor for packages that expose vstack settings. |
-| `/extensions:enable` | Recovery command available only when the manager is disabled; re-enable it, then run `/reload`. |
+| `/extensions` | Open the package manager. |
+| `/extensions:settings` | Open the settings editor. |
+| `/extensions:enable` | Recovery command when the manager is disabled. |
 
-## UI notes
+## Keys
 
-- `/extensions` shows installed packages only. Selecting a package shows status, source path, install source (`NPM`, `Vstack`, or `Unknown`), versions, update state, and declared extension entrypoints.
-- Active/inactive/broken status is shown with `●`/`○`/`×`; packages with a newer version show `Update Needed`.
-- `alt+x` enables/disables the selected package, `alt+u` updates a package when an update is available, `alt+d` uninstalls, and `alt+a` opens diagnostics/audit. In diagnostics, `backspace` returns to the package list.
-- `alt+shift+e` and `F11` open the extension manager popup; `alt+shift+s` and `F12` open the settings popup.
-- `/extensions:settings` starts with `All`, then one tab per package with settings. Type to filter, `Enter` to toggle/edit, and `Esc` to cancel. The popup keeps a fixed height and pads blank space under short filtered lists.
-- Inline setting editors support cursor movement: `←`/`→`, `Home`/`End`, `alt+←`/`alt+→` word movement, `Backspace`/`Delete`, and `Ctrl+U` clear.
-- For packages declaring `pi.appendSystem` in `package.json`, enabling/disabling and uninstalling syncs the corresponding block in the scope's `APPEND_SYSTEM.md` (added on enable/install, removed on disable/uninstall).
+- `alt+shift+e` or `F11` opens the package manager.
+- `alt+shift+s` or `F12` opens the settings editor.
+- In the package manager: `alt+x` enables/disables, `alt+u` updates, `alt+d` uninstalls, `alt+a` opens diagnostics. `backspace` returns to the list from diagnostics.
+- In the settings editor: type to filter, `Enter` to toggle/edit, `Esc` to cancel. Inline editors support `←`/`→`, `Home`/`End`, `alt+←`/`alt+→` word movement, `Backspace`/`Delete`, and `Ctrl+U` to clear.
 
-Settings are stored under `vstack.extensionManager` in Pi `settings.json` files so they do not collide with Pi's top-level `extensions` array.
+Status icons: `●` active, `○` inactive, `×` broken. Packages with newer versions show `Update Needed`.
 
-## Runtime limits
+## Settings
 
-Pi does not currently expose APIs to add a native tab to its built-in settings UI or unload an already-loaded extension module. Package enable/disable and package updates therefore take effect after `/reload` or restart when live unloading is not possible.
+All settings live in the extension manager under **Extension Manager**.
+
+| Setting | What it does |
+| --- | --- |
+| Enable manager UI | Expose `/extensions` and the manager UI. `/extensions:enable` is always available as recovery. |
+| Default save scope | Where setting edits are written when scope is ambiguous (`project` or `user`). |
+| Notify on extension updates | Post a one-line notification at session start listing extensions with newer versions. |
+
+## Notes
+
+Package enable/disable and updates take effect after `/reload` or restart — Pi doesn't currently support unloading already-loaded extensions.

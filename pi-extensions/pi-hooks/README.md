@@ -2,45 +2,18 @@
 
 ![pi-hooks settings panel](https://raw.githubusercontent.com/vanillagreencom/vstack/main/pi-extensions/pi-hooks/assets/hooks-settings.png)
 
-First-class Pi port of the vstack safety hooks. Same behaviors as the shell scripts in `vstack/hooks/`, implemented natively against Pi's `tool_call` / `tool_result` / `turn_end` event API so they participate in Pi's tool lifecycle without spawning a shell.
-
-Each hook is independently toggleable from the pi-extension-manager UI.
+First-class Pi port of the vstack safety hooks. Each hook is independently toggleable.
 
 ## Hooks
 
 | Hook | Pi event | Behavior |
-|---|---|---|
-| `blockBareCd` | `tool_call` (bash) | Returns `{block: true, reason}` when the command is a bare `cd /path` with no subshell or chaining. Pi short-circuits the tool call. |
-| `preCommitCheck` | `tool_call` (bash) | Detects `git commit`. Runs `cargo fmt --check` then `cargo clippy --workspace --all-targets -- -D warnings`. Blocks the commit on failure. Only fires when staged files include `.rs`. |
-| `postEditLint` | `tool_result` (edit/write of `.rs`) | Runs workspace clippy, filters lines mentioning the edited file, and appends them as an extra text content part on the tool result. Advisory only — the edit is not reverted. |
-| `taskCompletedCheck` | `turn_end` | If any `.rs` file was touched during the turn, runs workspace clippy and surfaces errors via `ctx.ui.notify`. Pi has no native equivalent of Claude Code's `TaskCompleted` block-the-done-state semantics, so this is advisory. |
+| --- | --- | --- |
+| Block bare `cd` | `tool_call` (bash) | Blocks bare `cd /path` commands with no subshell or chaining. Use `(cd /path && command)` instead. |
+| Pre-commit fmt + clippy | `tool_call` (bash) | When `git commit` is run, runs `cargo fmt --check` then `cargo clippy`. Blocks on failure. Only fires when `.rs` files are staged. |
+| Post-edit clippy | `tool_result` (edit/write of `.rs`) | Runs workspace clippy after `.rs` edits and appends issues mentioning the edited file. Advisory only — doesn't undo the edit. |
+| End-of-turn clippy | `turn_end` | If `.rs` files were touched during the turn, runs workspace clippy and surfaces errors via UI notification. Advisory only. |
 
-## Parity rule
-
-These hooks must stay behaviorally in sync with `hooks/*.sh` in this repo. The vstack rule: **any change to a hook script must land alongside the matching change in `pi-hooks`.** See [AGENTS.md](../../AGENTS.md) for the canonical rule.
-
-## Configuration
-
-Settings live in `<scope>/.pi/settings.json` under `vstack.extensionManager.config["@vanillagreen/pi-hooks"]`. The schema is declared in `package.json` and rendered by pi-extension-manager. Defaults are conservative: all four hooks are enabled.
-
-```json
-{
-  "vstack": {
-    "extensionManager": {
-      "config": {
-        "@vanillagreen/pi-hooks": {
-          "enabled": true,
-          "blockBareCd": true,
-          "preCommitCheck": true,
-          "postEditLint": true,
-          "taskCompletedCheck": true,
-          "clippyTimeoutMs": 120000
-        }
-      }
-    }
-  }
-}
-```
+These mirror the bash hooks in `vstack/hooks/`. Any change to a hook script must land alongside the matching change in `pi-hooks` — see [AGENTS.md](../../AGENTS.md).
 
 ## Install
 
@@ -49,3 +22,16 @@ vstack add --pi-extension pi-hooks
 ```
 
 Or as part of `vstack add --all`. Refresh with `vstack refresh`.
+
+## Settings
+
+All settings live in the extension manager under **Hooks**.
+
+| Setting | What it does |
+| --- | --- |
+| Enable hooks | Master toggle. Disable to make the extension inert without uninstalling. |
+| Block bare cd | Toggle the bare-cd block hook. |
+| Pre-commit fmt + clippy | Toggle the pre-commit hook. |
+| Post-edit clippy | Toggle the post-edit advisory hook. |
+| End-of-turn clippy | Toggle the end-of-turn advisory hook. |
+| Clippy timeout | Max ms per clippy invocation before the check is abandoned. |
