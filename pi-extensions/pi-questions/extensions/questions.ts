@@ -394,11 +394,53 @@ function wrapPlain(text: string, width: number, maxLines = 3): string[] {
 	return lines.length > 0 ? lines : [""];
 }
 
-function wrapStyled(label: string, text: string, width: number): string[] {
+function wrapStyled(label: string, text: string, width: number, maxLines = 4): string[] {
 	const labelWidth = visibleWidth(label);
 	const contentWidth = Math.max(12, width - labelWidth);
-	const chunks = wrapPlain(text || "—", contentWidth, 4);
+	const chunks = wrapPlain(text || "—", contentWidth, maxLines);
 	return chunks.map((chunk, index) => `${index === 0 ? label : " ".repeat(labelWidth)}${chunk}`);
+}
+
+function formatAnswers(answers: string[] | undefined): string {
+	return answers && answers.length > 0 ? answers.join(", ") : "—";
+}
+
+function renderCompactAnswerLines(request: QuestionRequest | undefined, answers: string[][], width: number, theme: Theme): string[] {
+	const count = Math.max(answers.length, request?.questions.length ?? 0);
+	const lines: string[] = [];
+	for (let index = 0; index < count; index += 1) {
+		const tab = request?.questions[index];
+		const labelText = tab?.header ?? `Q${index + 1}`;
+		const answerText = formatAnswers(answers[index]);
+		const label = `  ${theme.fg("muted", "•")} ${theme.fg("accent", `${labelText}: `)}`;
+		lines.push(...wrapStyled(label, theme.fg("text", answerText), width));
+	}
+	return lines;
+}
+
+function answerBranch(theme: Theme, last: boolean): string {
+	return theme.fg("muted", last ? "  └─ " : "  ├─ ");
+}
+
+function answerStem(theme: Theme, last: boolean): string {
+	return theme.fg("muted", last ? "     " : "  │  ");
+}
+
+function renderExpandedAnswerLines(request: QuestionRequest | undefined, answers: string[][], width: number, theme: Theme): string[] {
+	const count = Math.max(answers.length, request?.questions.length ?? 0);
+	const lines: string[] = [];
+	for (let index = 0; index < count; index += 1) {
+		const tab = request?.questions[index];
+		const last = index === count - 1;
+		const category = tab?.header ?? `Question ${index + 1}`;
+		const stem = answerStem(theme, last);
+		lines.push(`${answerBranch(theme, last)}${theme.fg("accent", theme.bold(category))}`);
+		if (tab?.question) {
+			lines.push(...wrapStyled(`${stem}${theme.fg("muted", "Question: ")}`, theme.fg("text", tab.question), width, 10));
+		}
+		lines.push(...wrapStyled(`${stem}${theme.fg("muted", "Answer: ")}`, theme.fg("success", formatAnswers(answers[index])), width, 10));
+	}
+	return lines;
 }
 
 function makeRequestId(): string {
@@ -984,7 +1026,7 @@ export default function questions(pi: ExtensionAPI): void {
 		renderCall() {
 			return compactLines(() => []);
 		},
-		renderResult(result, _options, theme, context) {
+		renderResult(result, options, theme, context) {
 			const details = result.details as QuestionResult | undefined;
 			return compactLines((width: number) => {
 				const request = (() => {
@@ -994,17 +1036,14 @@ export default function questions(pi: ExtensionAPI): void {
 				const title = request?.header ?? "Question";
 				const prefix = details && "answers" in details ? theme.fg("success", "● ") : theme.fg("warning", "● ");
 				const state = details && "answers" in details ? theme.fg("success", "answered") : theme.fg("warning", "cancelled");
-				const head = `${prefix}${theme.fg("toolTitle", theme.bold("Question"))} ${state}${title ? ` ${theme.fg("muted", "—")} ${theme.fg("text", title)}` : ""}`;
+				const expandHint = details && "answers" in details && !options?.expanded ? theme.fg("dim", " · ctrl+o to expand") : "";
+				const head = `${prefix}${theme.fg("toolTitle", theme.bold("Question"))} ${state}${title ? ` ${theme.fg("muted", "—")} ${theme.fg("text", title)}` : ""}${expandHint}`;
 				if (!details || !("answers" in details)) return [head];
 
 				const lines = [head];
-				for (const [index, answers] of details.answers.entries()) {
-					const tab = request?.questions[index];
-					const labelText = tab?.header ?? `Q${index + 1}`;
-					const answerText = answers.length > 0 ? answers.join(", ") : "—";
-					const label = `  ${theme.fg("muted", "•")} ${theme.fg("accent", `${labelText}: `)}`;
-					lines.push(...wrapStyled(label, theme.fg("text", answerText), width));
-				}
+				lines.push(...(options?.expanded
+					? renderExpandedAnswerLines(request, details.answers, width, theme)
+					: renderCompactAnswerLines(request, details.answers, width, theme)));
 				const fullOutputPath = (details as QuestionToolDetails).fullOutputPath;
 				if (fullOutputPath) lines.push(theme.fg("dim", `  Full output: ${fullOutputPath}`));
 				return lines;

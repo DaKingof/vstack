@@ -8,6 +8,7 @@ Structured inline questions for Pi. Multi-tab categories, free-form answers, and
 
 - `question` tool for multiple-choice question tabs with optional free-form answers.
 - Editor-area UI by default; optional floating overlay.
+- Compact answered tool output lists every category answer; `Ctrl+O` expands to show each question with its answer.
 - Wrapped option labels stay readable in narrow panes.
 - `pi-session-bridge` integration lets external clients list, answer, and reject pending questions.
 - `pi-qol` notification hook fires before prompts open.
