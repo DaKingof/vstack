@@ -54,3 +54,6 @@ Thumbs.db
 .pi/extensions/
 .pi/packages/
 .pi/prompts/
+
+# Local vstack install state (per-checkout absolute paths; do not commit)
+.vstack-lock.json
