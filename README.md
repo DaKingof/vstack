@@ -96,6 +96,8 @@ rust = { color = "orange", model = "openai-codex/gpt-5.5:xhigh", deny-tools = ["
 
 Prefer `deny-tools` for maintenance: Claude Code writes it as native `disallowedTools`, OpenCode writes it as `permission: <tool>: deny`, and Pi agents use it through the `pi-agents-tmux` extension while inheriting active tools by default. Claude Code also supports `effort`, `background`, `isolation`, and `memory` in generated subagent frontmatter; vstack seeds Claude `background` from Pi `pane` on first install (`pane = true` → `background = false`, `pane = false` → `background = true`) and omits `isolation` and `memory` unless configured. Subsequent edits to `background` in `[agent-frontmatter.claude]` are preserved on refresh. Each canonical agent declares its own `effort:` and harnesses write it verbatim — no cross-harness translation. OpenCode defaults every generated agent to `mode: subagent`; set `[agent-frontmatter.opencode].<agent>.mode = "primary"` only when you want an OpenCode primary agent. OpenCode writes `color` as hex and maps reasoning effort to `options.reasoningEffort` plus `reasoningSummary: auto` and `textVerbosity: medium`. Cursor/Codex do not have the same per-agent tool-deny frontmatter. For Pi agents installed through vstack, frontmatter edits belong in harness-specific `[agent-frontmatter.<harness>]` tables in `vstack.toml`, not in `.pi/agents/<name>.md`; generated agent files are overwritten by `vstack refresh`. The Pi `/agents` popup writes model/deny-tools/color changes to the Pi-specific table.
 
+Migration notes for v3: legacy shared `[agent-frontmatter]` entries are no longer read or regenerated. Move them into the harness-specific table you want, such as `[agent-frontmatter.claude]` or `[agent-frontmatter.pi]`. Legacy `tools` allowlists are also ignored by generated agents; use `deny-tools` instead so each harness can inherit its normal tools and block only the risky ones.
+
 Custom safety hooks (`[[custom-hooks]]`) follow the same pattern. Direct edits to generated agent or skill files are also picked up automatically where possible, but `vstack.toml` is the stable home for generated frontmatter overrides and reusable project guidance.
 
 ## Supported Tools
@@ -105,7 +107,7 @@ Custom safety hooks (`[[custom-hooks]]`) follow the same pattern. Direct edits t
 | Claude Code | Richest native hook support. Works per project or globally. |
 | Cursor | Project scope only; safety rules surface as `.cursor/rules`. |
 | OpenCode | Config-dir aware. |
-| Codex | Safety guidance lives inside agent instructions. |
+| Codex | Native hooks for supported events; events without a Codex equivalent fall back to safety guidance inside agent instructions. |
 | Pi | Adds Pi extension installation alongside agents and skills. |
 
 Windows: CLI runs natively; symlink mode falls back to copy.
