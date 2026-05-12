@@ -170,7 +170,7 @@ function compactPath(input: string): string {
 
 function classifyDaemonLogLine(line: string): "info" | "warn" | "error" | "wake" | "classify" | "heartbeat" {
 	if (/\] (wake|adapter-wake)/i.test(line)) return "wake";
-	if (/\] heartbeat /i.test(line)) return "heartbeat";
+	if (/\[heartbeat\]|\] heartbeat /i.test(line)) return "heartbeat";
 	if (/\] (warn|error|fail|stale|gone)/i.test(line)) return "warn";
 	if (/\] classify /i.test(line)) return "classify";
 	return "info";
@@ -638,6 +638,17 @@ function foldHeartbeats(events: LiveEvent[]): LiveEvent[] {
 	return out;
 }
 
+function daemonLogEvents(lines: string[]): LiveEvent[] {
+	return lines.map((line) => {
+		const isoTs = line.match(/^[^ ]+/)?.[0] ?? "";
+		return { kind: "daemon", line, ts: isoTs.slice(11, 19), isoTs };
+	});
+}
+
+function foldedDaemonLogEvents(lines: string[]): LiveEvent[] {
+	return foldHeartbeats(daemonLogEvents(lines));
+}
+
 function conversationSearchHaystack(pane: string, issue: IssueRecord | undefined, turns: ConversationTurn[]): string {
 	return `${pane} ${issue?.issue ?? ""} ${issue?.state ?? ""} ${issue?.harness ?? ""} ${turns.map((t) => `${t.harness ?? ""} ${t.tag ?? ""} ${t.excerpt}`).join(" ")}`.toLowerCase();
 }
@@ -913,6 +924,11 @@ function issueForPane(snapshot: FlightdeckSnapshot, paneId: string): IssueRecord
 function renderDaemonTab(snapshot: FlightdeckSnapshot, ui: PopupUiState, width: number, theme: Theme, viewportRows: number): string[] {
 	const lines: string[] = [];
 	const d = snapshot.daemon;
+	const query = ui.search.trim().toLowerCase();
+	if (query) {
+		lines.push(searchRow(theme, ui.search, width));
+		lines.push("");
+	}
 	lines.push(`${theme.fg("customMessageLabel", theme.bold("Daemon"))} ${dotIndicator(theme, d.pidAlive)} ${theme.fg("dim", `pid=${d.pid ?? "—"}`)}`);
 	lines.push(`${label(theme, "state dir:")} ${theme.fg("text", compactPath(d.stateDir))}`);
 	lines.push(`${label(theme, "session:")}   ${theme.fg("text", snapshot.tmux.sessionName)} ${theme.fg("dim", `(${snapshot.tmux.sessionId})`)}`);
@@ -948,16 +964,27 @@ function renderDaemonTab(snapshot: FlightdeckSnapshot, ui: PopupUiState, width: 
 	if (snapshot.masterStatePath) lines.push(`${label(theme, "master state:")} ${theme.fg("text", compactPath(snapshot.masterStatePath))}`);
 	if (snapshot.masterError) lines.push(theme.fg("error", `master read error: ${snapshot.masterError}`));
 	lines.push("");
-	lines.push(`${theme.fg("customMessageLabel", theme.bold("Daemon log"))} ${theme.fg("dim", `(tail ${(d.logTail ?? []).length} lines)`)}`);
-	const logRows = Math.max(4, viewportRows - lines.length);
-	const tail = (d.logTail ?? []).slice(-logRows);
-	for (const line of tail) lines.push(truncateToWidth(colorizeDaemonLogLine(line, theme), width, ""));
-	if (ui.search.trim()) {
-		// Search highlight not implemented; treat search as filter for the daemon
-		// log only on this tab.
-		const q = ui.search.trim().toLowerCase();
-		return [searchRow(theme, ui.search, width), "", ...lines.filter((l) => l.toLowerCase().includes(q))];
+	const rawLog = d.logTail ?? [];
+	const folded = foldedDaemonLogEvents(rawLog);
+	const filtered = query ? folded.filter((ev) => ev.line.toLowerCase().includes(query)) : folded;
+	const foldedSuffix = folded.length < rawLog.length ? ` → ${folded.length} row${folded.length === 1 ? "" : "s"}, heartbeats folded` : "";
+	lines.push(`${theme.fg("customMessageLabel", theme.bold("Daemon log"))} ${theme.fg("dim", `(tail ${rawLog.length} line${rawLog.length === 1 ? "" : "s"}${foldedSuffix})`)}`);
+	const logRows = Math.max(1, viewportRows - lines.length - 2);
+	if (filtered.length === 0) {
+		lines.push(theme.fg("dim", rawLog.length === 0 ? "No daemon log lines." : "No daemon log lines match current search."));
+		return lines;
 	}
+	clampSelection(ui, filtered.length, logRows);
+	const start = Math.max(0, Math.min(ui.scroll, Math.max(0, filtered.length - logRows)));
+	const end = Math.min(filtered.length, start + logRows);
+	if (start > 0) lines.push(theme.fg("dim", `↑ ${start} earlier`));
+	for (const [vi, ev] of filtered.slice(start, end).entries()) {
+		const idx = start + vi;
+		const row = truncateToWidth(colorizeLiveEvent(ev, theme), width, "");
+		lines.push(idx === ui.selected ? selectedRow(theme, row, width) : row);
+	}
+	const tail = Math.max(0, filtered.length - end);
+	if (tail > 0) lines.push(theme.fg("dim", `↓ ${tail} more`));
 	return lines;
 }
 
@@ -1341,7 +1368,8 @@ export default function flightdeck(pi: ExtensionAPI): void {
 	function renderPopupFooter(theme: Theme, _width: number, ui: PopupUiState): string {
 		const tabHint = `${ansiYellow("tab")} ${theme.fg("dim", "next tab · ")}${ansiYellow("shift+tab")} ${theme.fg("dim", "prev")}`;
 		const viewHint = ui.tab === TAB_DECISIONS ? `${theme.fg("dim", " · ")}${ansiYellow("enter")} ${theme.fg("dim", "view")}` : "";
-		const navHint = `${ansiYellow("↑/↓")} ${theme.fg("dim", "select · ")}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("home/end")} ${theme.fg("dim", "ends")}${viewHint}`;
+		const navVerb = ui.tab === TAB_DAEMON ? "scroll" : "select";
+		const navHint = `${ansiYellow("↑/↓")} ${theme.fg("dim", `${navVerb} · `)}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("home/end")} ${theme.fg("dim", "ends")}${viewHint}`;
 		const searchHint = ui.search ? `${ansiYellow("ctrl+u")} ${theme.fg("dim", "clear search")}` : `${theme.fg("dim", "type to filter")}`;
 		const closeHint = `${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
 		return `${tabHint}  ${theme.fg("dim", "·")}  ${navHint}  ${theme.fg("dim", "·")}  ${searchHint}  ${theme.fg("dim", "·")}  ${closeHint}`;
