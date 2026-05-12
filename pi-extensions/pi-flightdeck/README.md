@@ -37,7 +37,7 @@ Restart Pi after installation.
 | Command | Action |
 | --- | --- |
 | `/flightdeck` | Open the mission-control popup (also F6). |
-| `/flightdeck watch [args]` | Dispatch the `flightdeck watch` workflow. Used by the daemon's pi-master wake. |
+| `/flightdeck watch [args]` | Legacy bridge workaround that dispatches the `flightdeck watch` workflow. The daemon now sends `/skill:flightdeck watch --from-daemon` through pi-session-bridge directly. |
 | `/flightdeck:toggle` | Cycle the persistent dashboard widget (also Alt+M). |
 
 ## Settings

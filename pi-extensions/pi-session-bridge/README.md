@@ -6,7 +6,7 @@ Control a running Pi session from outside the TUI. The interactive Pi terminal s
 
 ## Highlights
 
-- External clients send prompts, steering, follow-ups, and aborts without tmux key injection.
+- External clients send prompts, steering, follow-ups, and aborts over a structured socket; plain text and expanded skills avoid tmux key injection, while extension/TUI slash commands use a guarded own-pane tmux route.
 - Subscribe to live Pi events (messages, tool calls, agent end) without scraping panes.
 - Discover active Pi sessions through registry files; target by pid, cwd, session, or name.
 - `pi-bridge` CLI handles common operations; raw JSONL protocol is documented for any language.
@@ -82,13 +82,13 @@ Clients receive events by default. Send `{"type":"subscribe","enabled":false}` t
 
 ## Slash command notes
 
-`pi-bridge send` does **not** expand slash commands the way Pi's editor does. Effects:
+`pi-bridge send` uses a hybrid slash dispatch path:
 
-- Bare extension commands (e.g. `/flightdeck`, `/bridge:ping`) work.
-- Skill commands (`/skill:foo`) arrive as raw text to the LLM — the skill body isn't auto-loaded.
-- Prompt templates (`/<name>` from `.pi/prompts/*`) arrive as raw text.
-
-Workaround: send the bare extension command form, or have the extension re-dispatch via `ctx.ui.pasteToEditor("/skill:foo\n")`.
+- Plain text keeps the normal `sendUserMessage` path.
+- `/skill:<name> ...` expands client-side from the loaded skill's `sourceInfo.path`, inlining the same `<skill ...>` block Pi's editor would produce. Large user-message bodies are expected and match interactive `/skill:<name>` behavior.
+- Prompt templates (`/<name> ...` from loaded prompt paths) expand client-side with Pi-compatible `$1`, `$@`, `$ARGUMENTS`, and `${@:N[:L]}` substitution.
+- Extension/TUI commands (for example `/bridge:ping`, `/tasks:add`, `/flightdeck`) are pasted into Pi's own tmux pane with `send-keys -l` + Enter after resolving the pane by walking parent processes from `process.pid`. This briefly shows text in the editor and always delivers immediately (`deliverAs` does not apply to this route).
+- If tmux pane resolution or paste fails, the bridge falls back to the old raw `sendUserMessage` behavior instead of failing the request.
 
 ## Settings
 

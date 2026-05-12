@@ -24,11 +24,13 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "scripts": {
-    "check": "node --check bin/pi-bridge.js"
+    "test": "bun test tests/*.test.ts",
+    "check": "node --check bin/pi-bridge.js && bun test tests/*.test.ts"
   },
   "files": [
     "bin/",
     "extensions/",
+    "tests/",
     "assets/",
     "instructions.md",
     "README.md",

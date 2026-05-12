@@ -1220,7 +1220,7 @@ export default function flightdeck(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("flightdeck", {
-		description: "Open the flightdeck mission-control popup. With 'watch [args...]', dispatch the flightdeck watch workflow (used by the daemon wake; routes through pasteToEditor for skill expansion).",
+		description: "Open the flightdeck mission-control popup. With 'watch [args...]', dispatch the legacy flightdeck watch bridge workaround.",
 		handler: async (args, ctx) => {
 			const trimmed = (args ?? "").trim();
 			if (!trimmed) {
@@ -1231,13 +1231,10 @@ export default function flightdeck(pi: ExtensionAPI): void {
 			const verb = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
 			const rest = firstSpace === -1 ? "" : trimmed.slice(firstSpace + 1).trim();
 			if (verb === "watch") {
-				// Issue #9 + #10 workaround: pi-bridge's sendUserMessage
-				// bypasses _expandSkillCommand, so /skill:flightdeck arrives
-				// as raw text. The flightdeck daemon's wake_payload sends
-				// '/flightdeck watch --from-daemon' instead, which lands
-				// here (pi.on("input") branch fires even when prompt
-				// expansion is off). Re-dispatch through the interactive
-				// editor's full slash resolver so the skill is loaded.
+				// Legacy workaround kept for callers that still send the bare
+				// /flightdeck watch form. The daemon now sends
+				// /skill:flightdeck directly through pi-session-bridge, which
+				// expands skills client-side (vstack#13).
 				const skillCmd = rest ? `/skill:flightdeck watch ${rest}\n` : "/skill:flightdeck watch\n";
 				ctx.ui.pasteToEditor(skillCmd);
 				return;

@@ -4,8 +4,9 @@
 # Replaces harness-specific scheduler primitives (e.g. Claude Code's
 # ScheduleWakeup) with a long-lived bash poller spawned at flightdeck-start
 # time. Polls every tracked inner tmux pane on FD_POLL_SEC cadence; wakes
-# the master agent via tmux paste-buffer when any pane needs attention.
-# Harness-independent — works for claude / codex / opencode / omp.
+# the master agent via the per-harness delivery channel when any pane needs
+# attention.
+# Harness-independent — works for claude / codex / opencode / pi.
 #
 # Architecture:
 #   - Bell flag → wake immediately (orchestrator bells signal real input).
@@ -587,16 +588,14 @@ clear_stale_wake_pending() {
 # (cross-harness review finding #1). Default keeps the legacy slash form
 # for unspecified harnesses so existing claude/opencode behavior is
 # unchanged.
-# Pi uses the bare /flightdeck extension command (issue #9 workaround
-# for #10): pi-bridge bypasses pi's _expandSkillCommand, so
-# /skill:flightdeck arrives as raw text. The bare /flightdeck routes
-# via pi.on('input') → _tryExecuteExtensionCommand which pi-bridge
-# does call. The pi-flightdeck extension handler parses 'watch ...'
-# args and re-dispatches into the skill via pasteToEditor.
+# Pi uses /skill:flightdeck now that pi-session-bridge expands skill
+# commands client-side before sendUserMessage (vstack#13). If the bridge
+# is unavailable, the pi fallback uses tmux send-keys -l rather than
+# paste-buffer so the slash text enters Pi's editor input path.
 wake_payload_for_harness() {
   case "${1:-}" in
     codex) printf '%s' '$flightdeck watch --from-daemon' ;;
-    pi)    printf '%s' '/flightdeck watch --from-daemon' ;;
+    pi)    printf '%s' '/skill:flightdeck watch --from-daemon' ;;
     *)     printf '%s' '/flightdeck watch --from-daemon' ;;
   esac
 }
@@ -758,9 +757,10 @@ wake_master() {
   # daemon's append paths during tmux IO. If delivery fails, we re-take the
   # lock to clean up wake-pending atomically.
 
-  # Pi master: bypass tmux paste entirely — pi's alt-screen input loop
-  # doesn't read pasted scrollback, so the wake message would be invisible
-  # to the agent (#4 finding 1). pi-bridge `send` is the canonical channel.
+  # Pi master: use pi-bridge first so /skill:flightdeck expands inline via
+  # session-bridge (vstack#13). If the bridge is unavailable, fall back to
+  # send-keys -l + Enter so tmux writes into Pi's editor input path instead
+  # of paste-buffer scrollback.
   local wake_payload
   wake_payload=$(wake_payload_for_harness "$MASTER_HARNESS")
 
@@ -776,10 +776,23 @@ wake_master() {
         log wake "master=$master_id harness=pi via=pi-bridge pid=$master_pid reasons=$combined"
         return 0
       fi
-      log wake-fail "pi-bridge send failed pid=$master_pid; falling back to tmux paste"
+      log wake-fail "pi-bridge send failed pid=$master_pid; falling back to tmux send-keys"
     else
-      log wake-fail "pi master bridge unresolved (bin=${bridge_bin:-missing} pid=${master_pid:-unknown}); falling back to tmux paste"
+      log wake-fail "pi master bridge unresolved (bin=${bridge_bin:-missing} pid=${master_pid:-unknown}); falling back to tmux send-keys"
     fi
+
+    if ! tmux send-keys -t "$target" -l "$wake_payload" 2>/dev/null; then
+      log wake-fail "send-keys -l failed"
+      locked_rm_wake_pending
+      return 1
+    fi
+    if ! tmux send-keys -t "$target" Enter 2>/dev/null; then
+      log wake-fail "send-keys Enter failed"
+      locked_rm_wake_pending
+      return 1
+    fi
+    log wake "master=$master_id harness=pi via=tmux-send-keys reasons=$combined"
+    return 0
   fi
 
   local buffer_name="fd-wake-${SESSION_KEY}"
@@ -1790,7 +1803,7 @@ run_loop() {
   # Auto-detect master harness when caller didn't pass --master-harness.
   # `pi-bridge list` is authoritative for pi masters: if there's a bridge
   # entry whose cwd matches the master pane's cwd, the master is a pi
-  # session and wake delivery must route through pi-bridge (#4 finding 1).
+  # session and wake delivery must route through pi-bridge first (#4 finding 1).
   # Other harnesses fall through to the tmux paste-buffer path.
   if [[ -z "$MASTER_HARNESS" ]]; then
     if [[ -n "$(resolve_pi_master_pid "$master_id" 2>/dev/null || echo "")" ]]; then

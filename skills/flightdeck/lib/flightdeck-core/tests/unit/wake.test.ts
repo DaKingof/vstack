@@ -3,7 +3,7 @@
 // via the live-wake.sh integration test. Here we cover the unit-level
 // branches: lockedRmWakePending, the busy/skip paths.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,46 @@ describe("lockedRmWakePending", () => {
 
 	test("missing file → no-op", () => {
 		expect(() => lockedRmWakePending(path("lock"), path("nope"))).not.toThrow();
+	});
+});
+
+describe("wakeMaster pi fallback", () => {
+	test("uses tmux send-keys -l when pi-bridge send fails", () => {
+		const bridge = path("pi-bridge");
+		writeFileSync(bridge, "#!/usr/bin/env bash\nexit 1\n");
+		chmodSync(bridge, 0o755);
+
+		const oldBridge = process.env.PI_BRIDGE_BIN;
+		process.env.PI_BRIDGE_BIN = bridge;
+		try {
+			const logs: string[] = [];
+			const calls: Array<[string, string[]]> = [];
+			const r = wakeMaster({
+				masterId: "%7", masterHarness: "pi", sessionKey: "sPi",
+				sessionLock: path("pi.lock"), wakePending: path("pi.wp"), busyFile: path("bf"),
+				masterTurnTtl: 3600, daemonPid: process.pid, combined: "x",
+				inFlightJson: "[]",
+				log: (t, m) => logs.push(`${t}:${m}`),
+				isMasterBusy: () => false,
+				paneTargetFor: () => "%7",
+				resolvePiMasterPidOverride: () => 12345,
+				spawnSyncOverride: (command, args) => {
+					calls.push([command, args.map(String)]);
+					return { status: command === "tmux" ? 0 : 1, stdout: "", stderr: "", signal: null, output: [] } as never;
+				},
+			});
+			expect(r).toBe(true);
+			expect(calls).toEqual([
+				[bridge, ["send", "--pid", "12345", "/skill:flightdeck watch --from-daemon"]],
+				["tmux", ["send-keys", "-t", "%7", "-l", "/skill:flightdeck watch --from-daemon"]],
+				["tmux", ["send-keys", "-t", "%7", "Enter"]],
+			]);
+			expect(logs.some((l) => l.includes("falling back to tmux send-keys"))).toBe(true);
+			expect(logs.some((l) => l.includes("via=tmux-send-keys"))).toBe(true);
+		} finally {
+			if (oldBridge === undefined) delete process.env.PI_BRIDGE_BIN;
+			else process.env.PI_BRIDGE_BIN = oldBridge;
+		}
 	});
 });
 

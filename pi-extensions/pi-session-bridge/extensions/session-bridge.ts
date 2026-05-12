@@ -30,6 +30,24 @@ type JsonObject = Record<string, unknown>;
 type VstackConfig = Record<string, unknown>;
 type Delivery = "auto" | "steer" | "followUp" | "now";
 
+export interface SlashCommandInfoLike {
+	name: string;
+	source?: "extension" | "prompt" | "skill" | string;
+	description?: string;
+	sourceInfo?: { path?: string; baseDir?: string };
+}
+
+export interface SlashExpansion {
+	expanded: boolean;
+	kind?: "skill" | "prompt";
+	command?: string;
+	text?: string;
+	error?: string;
+}
+
+interface ExecResultLike { stdout?: string; stderr?: string; code?: number | null; killed?: boolean }
+export type ExecLike = (command: string, args: string[], options?: { timeout?: number }) => Promise<ExecResultLike>;
+
 interface BridgeClient {
 	socket: net.Socket;
 	buffer: string;
@@ -437,16 +455,52 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		const idle = currentCtx?.isIdle?.() ?? true;
 		const deliverAs = requested === "auto" ? (idle ? undefined : "steer") : requested === "now" ? undefined : requested;
 		const options = deliverAs ? { deliverAs } : undefined;
-		// vstack#10: pi.sendUserMessage hardcodes expandPromptTemplates:
-		// false in @earendil-works/pi-coding-agent. That skips
-		// _expandSkillCommand and prompt-template expansion. Bare
-		// extension commands like /flightdeck and /bridge:ping STILL
-		// dispatch because pi.on('input') fires upstream of the gate.
-		// Skill commands (/skill:foo) and prompt templates (/clear-ai
-		// etc.) arrive as raw user text — callers should send the bare
-		// extension command form when one exists. Fix requires an
-		// upstream change to pi-coding-agent accepting an
-		// expandPromptTemplates option.
+
+		// vstack#13: pi.sendUserMessage hardcodes expandPromptTemplates:
+		// false, so bridge delivery recreates the slash resolver in two
+		// safe pieces. Skills/prompt templates can be expanded from public
+		// command metadata and still preserve steer/followUp. Extension/TUI
+		// commands have no public handler API, so they go through this Pi
+		// process's own tmux pane after resolving pane_id from process
+		// ancestry. Never use `tmux display-message -p '#{pane_id}'` here:
+		// it returns the active client pane and can misroute to another tab.
+		if (typeof content === "string" && content.startsWith("/")) {
+			const expanded = expandLoadedSlashContent(content, pi.getCommands() as SlashCommandInfoLike[]);
+			if (expanded.expanded) {
+				pi.sendUserMessage(expanded.text as never, options as never);
+				sendResponse(client, id, commandName, true, {
+					deliveredAs: deliverAs ?? "now",
+					idleBeforeSend: idle,
+					expandedAs: expanded.kind,
+					expandedCommand: expanded.command,
+				});
+				return;
+			}
+
+			try {
+				const exec = pi.exec.bind(pi) as ExecLike;
+				const paneId = await resolveOwnTmuxPaneByParentChain(exec);
+				await pasteAndSubmitToPane(exec, paneId, content);
+				sendResponse(client, id, commandName, true, {
+					deliveredAs: "tmuxPane",
+					idleBeforeSend: idle,
+					paneId,
+				});
+				return;
+			} catch (error) {
+				// Non-tmux / stale-pane / paste failure: preserve the old
+				// behavior rather than fail the bridge request.
+				pi.sendUserMessage(content as never, options as never);
+				sendResponse(client, id, commandName, true, {
+					deliveredAs: deliverAs ?? "now",
+					idleBeforeSend: idle,
+					slashDispatchFallback: "sendUserMessage",
+					slashDispatchError: stringifyError(error),
+				});
+				return;
+			}
+		}
+
 		pi.sendUserMessage(content as never, options as never);
 		sendResponse(client, id, commandName, true, { deliveredAs: deliverAs ?? "now", idleBeforeSend: idle });
 	}
@@ -527,6 +581,153 @@ export default function sessionBridge(pi: ExtensionAPI) {
 			publish(eventName, event);
 		});
 	}
+}
+
+export function expandLoadedSlashContent(
+	text: string,
+	commands: SlashCommandInfoLike[],
+	readFile: (filePath: string, encoding: BufferEncoding) => string = fs.readFileSync,
+): SlashExpansion {
+	const parsed = parseSlashCommand(text);
+	if (!parsed) return { expanded: false };
+
+	const matches = commands.filter((entry) => entry.name === parsed.commandName);
+	// Pi's prompt() checks extension commands before skill/template
+	// expansion. Preserve that precedence when names collide.
+	if (matches.some((entry) => entry.source === "extension")) return { expanded: false };
+
+	if (parsed.commandName.startsWith("skill:")) {
+		const skill = matches.find((entry) => entry.source === "skill");
+		const sourcePath = skill?.sourceInfo?.path;
+		if (!skill || typeof sourcePath !== "string" || sourcePath.length === 0) return { expanded: false };
+		try {
+			const body = stripFrontmatter(readFile(sourcePath, "utf8")).trim();
+			const skillName = parsed.commandName.slice("skill:".length);
+			const baseDir = skill.sourceInfo?.baseDir || path.dirname(sourcePath);
+			const block = `<skill name="${skillName}" location="${sourcePath}">\nReferences are relative to ${baseDir}.\n\n${body}\n</skill>`;
+			return {
+				expanded: true,
+				kind: "skill",
+				command: parsed.commandName,
+				text: parsed.argsString.trim() ? `${block}\n\n${parsed.argsString.trim()}` : block,
+			};
+		} catch (error) {
+			return { expanded: false, error: stringifyError(error) };
+		}
+	}
+
+	const prompt = matches.find((entry) => entry.source === "prompt");
+	const sourcePath = prompt?.sourceInfo?.path;
+	if (!prompt || typeof sourcePath !== "string" || sourcePath.length === 0) return { expanded: false };
+	try {
+		const body = stripFrontmatter(readFile(sourcePath, "utf8"));
+		return {
+			expanded: true,
+			kind: "prompt",
+			command: parsed.commandName,
+			text: substitutePromptArgs(body, parseCommandArgs(parsed.argsString)),
+		};
+	} catch (error) {
+		return { expanded: false, error: stringifyError(error) };
+	}
+}
+
+function parseSlashCommand(text: string): { commandName: string; argsString: string } | null {
+	if (!text.startsWith("/")) return null;
+	const spaceIndex = text.indexOf(" ");
+	const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+	if (!commandName) return null;
+	return { commandName, argsString: spaceIndex === -1 ? "" : text.slice(spaceIndex + 1) };
+}
+
+export function stripFrontmatter(content: string): string {
+	const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	if (!normalized.startsWith("---")) return normalized;
+	const endIndex = normalized.indexOf("\n---", 3);
+	if (endIndex === -1) return normalized;
+	return normalized.slice(endIndex + 4).trim();
+}
+
+export function parseCommandArgs(argsString: string): string[] {
+	const args: string[] = [];
+	let current = "";
+	let inQuote: string | null = null;
+	for (let i = 0; i < argsString.length; i++) {
+		const char = argsString[i]!;
+		if (inQuote) {
+			if (char === inQuote) inQuote = null;
+			else current += char;
+		} else if (char === '"' || char === "'") {
+			inQuote = char;
+		} else if (char === " " || char === "\t") {
+			if (current) {
+				args.push(current);
+				current = "";
+			}
+		} else {
+			current += char;
+		}
+	}
+	if (current) args.push(current);
+	return args;
+}
+
+export function substitutePromptArgs(content: string, args: string[]): string {
+	let result = content;
+	result = result.replace(/\$(\d+)/g, (_match, num: string) => args[Number.parseInt(num, 10) - 1] ?? "");
+	result = result.replace(/\$\{@:(\d+)(?::(\d+))?\}/g, (_match, startStr: string, lengthStr?: string) => {
+		let start = Number.parseInt(startStr, 10) - 1;
+		if (start < 0) start = 0;
+		if (lengthStr) return args.slice(start, start + Number.parseInt(lengthStr, 10)).join(" ");
+		return args.slice(start).join(" ");
+	});
+	const allArgs = args.join(" ");
+	result = result.replace(/\$ARGUMENTS/g, allArgs);
+	result = result.replace(/\$@/g, allArgs);
+	return result;
+}
+
+export async function resolveOwnTmuxPaneByParentChain(
+	exec: ExecLike,
+	startPid = process.pid,
+	maxDepth = 40,
+): Promise<string> {
+	if (!process.env.TMUX) throw new Error("not in tmux");
+	const listed = await exec("tmux", ["list-panes", "-a", "-F", "#{pane_pid} #{pane_id}"], { timeout: 1000 });
+	if (!execSucceeded(listed)) throw new Error(`tmux list-panes failed: ${listed.stderr || listed.stdout || "non-zero exit"}`);
+
+	const ancestors = new Map<string, number>();
+	let pid = String(startPid);
+	for (let depth = 0; depth < maxDepth && pid && pid !== "1"; depth++) {
+		if (!ancestors.has(pid)) ancestors.set(pid, depth);
+		const ps = await exec("ps", ["-o", "ppid=", "-p", pid], { timeout: 1000 });
+		if (!execSucceeded(ps)) break;
+		const next = (ps.stdout ?? "").trim().split(/\s+/)[0] ?? "";
+		if (!next || next === pid) break;
+		pid = next;
+	}
+
+	let best: { paneId: string; depth: number } | undefined;
+	for (const line of (listed.stdout ?? "").split(/\r?\n/)) {
+		const [panePid, paneId] = line.trim().split(/\s+/);
+		if (!panePid || !paneId || !/^%\d+$/.test(paneId)) continue;
+		const depth = ancestors.get(panePid);
+		if (depth === undefined) continue;
+		if (!best || depth < best.depth) best = { paneId, depth };
+	}
+	if (best) return best.paneId;
+	throw new Error("Unable to resolve own tmux pane");
+}
+
+export async function pasteAndSubmitToPane(exec: ExecLike, paneId: string, text: string): Promise<void> {
+	const paste = await exec("tmux", ["send-keys", "-t", paneId, "-l", text], { timeout: 1000 });
+	if (!execSucceeded(paste)) throw new Error(`tmux send-keys -l failed: ${paste.stderr || paste.stdout || "non-zero exit"}`);
+	const enter = await exec("tmux", ["send-keys", "-t", paneId, "Enter"], { timeout: 1000 });
+	if (!execSucceeded(enter)) throw new Error(`tmux send-keys Enter failed: ${enter.stderr || enter.stdout || "non-zero exit"}`);
+}
+
+function execSucceeded(result: ExecResultLike): boolean {
+	return !result.killed && (result.code ?? 0) === 0;
 }
 
 function sendResponse(client: BridgeClient, id: unknown, command: string, success: boolean, data?: unknown, error?: string) {

@@ -3,9 +3,9 @@
 //
 // Wake delivery contract (bash daemon comment):
 //   - All WAKE_PENDING mutations under SESSION_LOCK.
-//   - Pi master: bypass tmux paste-buffer entirely — pi's alt-screen
-//     input loop ignores pasted scrollback. Route through pi-bridge
-//     send --pid <master_pid>.
+//   - Pi master: route through pi-bridge send --pid <master_pid> first
+//     so /skill:flightdeck expands inline in pi-session-bridge. If the
+//     bridge is unavailable, fall back to tmux send-keys -l + Enter.
 //   - Other harnesses: tmux load-buffer + paste-buffer + send-keys
 //     Enter to deliver the wake.
 //   - On any delivery failure, re-take SESSION_LOCK and remove
@@ -16,6 +16,12 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { piResolveBridgeBin } from "../paths/pi.ts";
 import { withInprocFlock } from "../shared/inproc-flock.ts";
 import { wakePayloadForHarness } from "./wake-payload.ts";
+
+type SpawnSyncLike = (
+	command: string,
+	args: string[],
+	options?: { encoding?: BufferEncoding | "buffer"; timeout?: number; input?: string },
+) => { status: number | null; stdout?: unknown; stderr?: unknown; signal?: NodeJS.Signals | null; output?: unknown[] | null };
 
 // Walk pgrep -P recursively. Used to map a pane's shell pid to the
 // pi process descendants for pi-bridge candidate matching (bash
@@ -168,6 +174,8 @@ interface WakeMasterOpts {
 	// so resolvePiMasterPid (multiple subprocesses + bridge list) only
 	// runs once per daemon lifetime.
 	resolvePiMasterPidOverride?: () => number | null;
+	// Test seam for wake delivery subprocesses.
+	spawnSyncOverride?: SpawnSyncLike;
 }
 
 // Returns true on successful wake delivery, false on skip or failure.
@@ -185,6 +193,7 @@ interface WakeMasterOpts {
 export function wakeMaster(opts: WakeMasterOpts): boolean {
 	const { masterId, masterHarness, sessionKey, sessionLock, wakePending, busyFile,
 		daemonPid, combined, inFlightJson, log, isMasterBusy, paneTargetFor } = opts;
+	const run: SpawnSyncLike = opts.spawnSyncOverride ?? ((command, args, options) => spawnSync(command, args, options));
 	void busyFile;
 
 	// Resolve master pane target outside the lock — paneTargetFor reads
@@ -256,31 +265,46 @@ export function wakeMaster(opts: WakeMasterOpts): boolean {
 			? opts.resolvePiMasterPidOverride()
 			: resolvePiMasterPid(masterId);
 		if (bin && masterPid) {
-			const r = spawnSync(bin, ["send", "--pid", String(masterPid), payload], { encoding: "utf8", timeout: 10_000 });
+			const r = run(bin, ["send", "--pid", String(masterPid), payload], { encoding: "utf8", timeout: 10_000 });
 			if (r.status === 0) {
 				log("wake", `master=${masterId} harness=pi via=pi-bridge pid=${masterPid} reasons=${combined}`);
 				return true;
 			}
-			log("wake-fail", `pi-bridge send failed pid=${masterPid}; falling back to tmux paste`);
+			log("wake-fail", `pi-bridge send failed pid=${masterPid}; falling back to tmux send-keys`);
 		} else {
-			log("wake-fail", `pi master bridge unresolved (bin=${bin ?? "missing"} pid=${masterPid ?? "unknown"}); falling back to tmux paste`);
+			log("wake-fail", `pi master bridge unresolved (bin=${bin ?? "missing"} pid=${masterPid ?? "unknown"}); falling back to tmux send-keys`);
 		}
+
+		const literal = run("tmux", ["send-keys", "-t", target, "-l", payload], { encoding: "utf8" });
+		if (literal.status !== 0) {
+			log("wake-fail", "send-keys -l failed");
+			lockedRmWakePending(sessionLock, wakePending);
+			return false;
+		}
+		const enter = run("tmux", ["send-keys", "-t", target, "Enter"], { encoding: "utf8" });
+		if (enter.status !== 0) {
+			log("wake-fail", "send-keys Enter failed");
+			lockedRmWakePending(sessionLock, wakePending);
+			return false;
+		}
+		log("wake", `master=${masterId} harness=pi via=tmux-send-keys reasons=${combined}`);
+		return true;
 	}
 
 	const bufferName = `fd-wake-${sessionKey}`;
-	const lb = spawnSync("tmux", ["load-buffer", "-b", bufferName, "-"], { input: payload, encoding: "utf8" });
+	const lb = run("tmux", ["load-buffer", "-b", bufferName, "-"], { input: payload, encoding: "utf8" });
 	if (lb.status !== 0) {
 		log("wake-fail", "load-buffer failed");
 		lockedRmWakePending(sessionLock, wakePending);
 		return false;
 	}
-	const pb = spawnSync("tmux", ["paste-buffer", "-p", "-t", target, "-b", bufferName, "-d"], { encoding: "utf8" });
+	const pb = run("tmux", ["paste-buffer", "-p", "-t", target, "-b", bufferName, "-d"], { encoding: "utf8" });
 	if (pb.status !== 0) {
 		log("wake-fail", "paste-buffer failed");
 		lockedRmWakePending(sessionLock, wakePending);
 		return false;
 	}
-	const sk = spawnSync("tmux", ["send-keys", "-t", target, "Enter"], { encoding: "utf8" });
+	const sk = run("tmux", ["send-keys", "-t", target, "Enter"], { encoding: "utf8" });
 	if (sk.status !== 0) {
 		log("wake-fail", "send-keys Enter failed");
 		lockedRmWakePending(sessionLock, wakePending);

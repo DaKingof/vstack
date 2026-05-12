@@ -70,5 +70,5 @@ pane-respond <pane> --harness pi --question que_... --reject
 
 - Pi only expands `/skill:<name>` (via `_expandSkillCommand`) and explicitly `pi.registerCommand`-registered names. Bare `/<skill-name>` is **not** auto-aliased and falls through to the LLM as raw text.
 - `pi.sendUserMessage()` deliberately sets `expandPromptTemplates: false`, bypassing slash-command and skill expansion.
-- `pi-bridge send` (and therefore `pane-respond --harness pi --payload "/..."`) routes through `sendUserMessage`, so mid-session bridge messages do **not** expand slash commands.
-- The only paths that expand slash commands: the interactive editor (user typing + Enter) and the `pi` CLI's initial-prompt argument. Spawn commands must therefore use `pi '/skill:<name> ...'` (see `open-terminal`); flightdeck doesn't send slash commands mid-session by design.
+- `pi-bridge send` compensates mid-session with hybrid dispatch: `/skill:<name>` and prompt templates expand client-side before `sendUserMessage`; extension/TUI commands paste into the target Pi pane with `tmux send-keys -l` + Enter; plain text stays on raw `sendUserMessage`.
+- Spawn commands can still use `pi '/skill:<name> ...'` (see `open-terminal`) because Pi's CLI initial prompt goes through the native expansion path. Mid-session flightdeck daemon wakes for Pi now use `pi-bridge send "/skill:flightdeck watch --from-daemon"`.

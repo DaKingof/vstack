@@ -243,8 +243,8 @@ Worktree/feature branch dev: test via local project Pi settings for that checkou
 
 ### Pi slash-command expansion
 
-- `sendUserMessage` and `pi-bridge send` skip slash/skill expansion (`expandPromptTemplates: false`). Only the interactive editor and the `pi` CLI initial-prompt arg expand `/skill:foo`.
-- From an extension, use `ctx.ui.pasteToEditor("/skill:foo\n")` (user submits). No public API auto-submits.
+- `sendUserMessage` still skips slash/skill expansion (`expandPromptTemplates: false`). `pi-bridge send` compensates with hybrid dispatch: client-side expansion for `/skill:<name>` and prompt templates, own-pane `tmux send-keys -l` for extension/TUI commands, raw `sendUserMessage` for plain text/fallback.
+- From an extension, `ctx.ui.pasteToEditor("/skill:foo\n")` pastes text; newline is bracketed-paste content, not a guaranteed submit. Prefer `pi-bridge send "/skill:foo ..."` when controlling another session.
 
 ## Build & Test
 
