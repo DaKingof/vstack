@@ -89,8 +89,8 @@ Arguments support autocomplete, including known agent names.
 ## Browser keys
 
 - Type to search by name, description, source, path, model, denied tools, or pane status.
-- `Tab` / `Shift+Tab` switches scope tabs.
-- `↑/↓`, `-/=`, `Home/End` navigate. `←/→` switches list/inspector focus.
+- `Tab` / `Shift+Tab` switches between **Agents** and **History**.
+- `↑/↓`, `-/=`, `Home/End` navigate. `←/→` switches list/inspector focus and cycles right-pane subtabs.
 - `Enter` inserts `Use agent <name> to: ` into the editor.
 - `Alt+M` edits the selected agent's frontmatter.
 - For pane agents: `Ctrl+P` starts/reuses, `Ctrl+O` attaches, `Ctrl+X` stops.
@@ -102,9 +102,11 @@ Status legend: ` ` live pane, ` ` startable, ` ` stale, `·` background. Dashboa
 
 Alt+A cycles the widget hidden → compact → expanded. Alt+Shift+A or F3 opens the full `/agents` popup.
 
-Each row shows agent name, kind (`pane` or `bg`), turn count, input/output tokens, and cost. Compact mode aggregates totals on a single line; expanded adds a `Total` row at the bottom.
+Each row shows agent name, kind (`pane` or `bg`), turn count, input/output tokens, cost, and for working agents a one-line live activity tail from the transcript (latest tool/message), truncated to the card width.
 
 Rows are bucketed for stability: queued/running/waiting agents stay above attention states, and all of those stay above completed agents. Within each bucket, rows keep start-time order so token/usage updates do not reshuffle the list. The header always shows completed and working counts, even when either count is zero. Missing pane artifacts render as `stale` attention rows; stale bg-only records are dropped because bg agents do not use pane handoff files.
+
+The popup has two top-level tabs: **Agents** (unified project/user/active list, sorted by current status, with Live/Inspector subtabs on the right) and **History** (completed task traces). Running agents use an animated spinner in both mini-dashboard and popup views.
 
 When the dashboard is on, inline tool output stays quiet — pane calls render as launch breadcrumbs, bg/one-shot calls show a result preview.
 

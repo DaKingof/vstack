@@ -391,12 +391,23 @@ export default function (pi: ExtensionAPI) {
 			setMiniDashboardWidget(ctx, SUBAGENT_WIDGET_KEY, MINI_DASHBOARD_RANK.AGENTS, undefined);
 			return;
 		}
-		setMiniDashboardWidget(ctx, SUBAGENT_WIDGET_KEY, MINI_DASHBOARD_RANK.AGENTS, (tui, theme) => ({
-			invalidate() {},
-			render(width: number): string[] {
-				return clampAboveEditorWidget(renderDashboardWidgetLines(dashboardState, theme, ctx.cwd, width), tui.terminal.rows, theme);
-			},
-		}), { placement: "aboveEditor" });
+		setMiniDashboardWidget(ctx, SUBAGENT_WIDGET_KEY, MINI_DASHBOARD_RANK.AGENTS, (tui, theme) => {
+			const animationTimer = (() => {
+				if (!Object.values(dashboardState.items).some((item) => isDashboardWorkingStatus(item.status))) return undefined;
+				const timer = setInterval(() => tui.requestRender(), 120);
+				timer.unref?.();
+				return timer;
+			})();
+			return {
+				dispose() {
+					if (animationTimer) clearInterval(animationTimer);
+				},
+				invalidate() {},
+				render(width: number): string[] {
+					return clampAboveEditorWidget(renderDashboardWidgetLines(dashboardState, theme, ctx.cwd, width), tui.terminal.rows, theme);
+				},
+			};
+		}, { placement: "aboveEditor" });
 	};
 
 	const dashboardItemKey = (item: Pick<SubagentDashboardItem, "agent" | "kind" | "taskId">) => (item.kind === "pane" ? `pane:${item.agent}` : item.taskId);

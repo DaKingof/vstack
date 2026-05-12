@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { type Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -64,12 +65,18 @@ export function sortDashboardItems(items: SubagentDashboardItem[]): SubagentDash
 	});
 }
 
+const WORKING_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function workingSpinnerFrame(): string {
+	return WORKING_SPINNER_FRAMES[Math.floor(Date.now() / 120) % WORKING_SPINNER_FRAMES.length] ?? "•";
+}
+
 export function dashboardStatusIcon(status: SubagentDashboardItem["status"], theme: Theme): string {
 	if (status === "completed") return theme.fg("success", ICONS.check);
 	if (status === "failed") return theme.fg("error", ICONS.times);
 	if (status === "blocked") return theme.fg("error", ICONS.times);
 	if (status === "needs_completion") return theme.fg("warning", ICONS.warning);
-	if (status === "running") return theme.fg("warning", ICONS.cog);
+	if (status === "running") return theme.fg("warning", workingSpinnerFrame());
 	if (status === "waiting") return theme.fg("warning", ICONS.clock);
 	if (status === "queued") return theme.fg("warning", ICONS.clock);
 	if (status === "unknown") return theme.fg("warning", ICONS.warning);
@@ -86,6 +93,79 @@ export function dashboardStatusText(item: SubagentDashboardItem, theme: Theme): 
 	if (item.status === "queued") return theme.fg("warning", "queued");
 	if (item.status === "unknown") return theme.fg("warning", "stale");
 	return theme.fg("accent", item.status);
+}
+
+function recentTranscriptLines(filePath: string | undefined, maxBytes = 96 * 1024): string[] {
+	if (!filePath) return [];
+	let fd: number | undefined;
+	try {
+		const stat = fs.statSync(filePath);
+		if (!stat.isFile() || stat.size <= 0) return [];
+		const readBytes = Math.min(maxBytes, stat.size);
+		const offset = Math.max(0, stat.size - readBytes);
+		const buffer = Buffer.alloc(readBytes);
+		fd = fs.openSync(filePath, "r");
+		fs.readSync(fd, buffer, 0, readBytes, offset);
+		const lines = buffer.toString("utf-8").split(/\r?\n/).filter((line) => line.trim());
+		if (offset > 0 && lines.length > 0) lines.shift();
+		return lines;
+	} catch {
+		return [];
+	} finally {
+		if (fd !== undefined) {
+			try { fs.closeSync(fd); } catch { /* ignore */ }
+		}
+	}
+}
+
+function compactActivityText(text: string, maxChars = 180): string {
+	const compact = text.replace(/\s+/g, " ").trim();
+	return compact.length > maxChars ? `${compact.slice(0, maxChars - 1)}…` : compact;
+}
+
+function textFromMessageContent(content: unknown): string | undefined {
+	if (typeof content === "string") return compactActivityText(content);
+	if (!Array.isArray(content)) return undefined;
+	const tool = content.find((part: any) => part?.type === "toolCall");
+	if (tool) return `tool ${tool.name ?? "call"}`;
+	const text = content.find((part: any) => part?.type === "text" && typeof part.text === "string");
+	if (text?.text) return compactActivityText(String(text.text));
+	return undefined;
+}
+
+function activityFromParsedEvent(parsed: any): string | undefined {
+	if (!parsed || typeof parsed !== "object") return undefined;
+	if (typeof parsed.text === "string" && parsed.stream === "stderr") return `stderr: ${compactActivityText(parsed.text)}`;
+	if (parsed.type === "exit" && typeof parsed.code !== "undefined") return `exit ${parsed.code}`;
+	const event = parsed.event && typeof parsed.event === "object" ? parsed.event : parsed;
+	const inner = event?.event && typeof event.event === "object" ? event.event : event;
+	const type = typeof inner?.type === "string" ? inner.type : undefined;
+	const toolName = typeof inner?.toolName === "string" ? inner.toolName : undefined;
+	if (type === "tool_execution_start" && toolName) return `tool ${toolName}`;
+	if ((type === "tool_execution_end" || type === "tool_result_end") && toolName) return `tool ${toolName} done`;
+	if (type === "tool_result_end") return "tool result";
+	const msg = inner?.message && typeof inner.message === "object" ? inner.message : undefined;
+	if (msg) {
+		const rendered = textFromMessageContent(msg.content);
+		if (rendered) return `${msg.role === "assistant" ? "said" : String(msg.role ?? "msg")}: ${rendered}`;
+	}
+	if (type === "message_end") return "message complete";
+	return undefined;
+}
+
+export function latestDashboardActivity(item: SubagentDashboardItem): string | undefined {
+	for (const line of recentTranscriptLines(item.transcriptPath).reverse()) {
+		try {
+			const activity = activityFromParsedEvent(JSON.parse(line));
+			if (activity) return activity;
+		} catch {
+			const compact = compactActivityText(line);
+			if (compact) return compact;
+		}
+	}
+	if (item.status === "queued") return item.task ? `queued: ${compactActivityText(item.task)}` : "queued";
+	if (isDashboardWorkingStatus(item.status)) return item.message ? compactActivityText(item.message) : item.task ? compactActivityText(item.task) : undefined;
+	return undefined;
 }
 
 function dashboardFrame(lines: string[], width: number, theme: Theme): string[] {
@@ -228,6 +308,10 @@ export function renderDashboardWidgetLines(state: SubagentDashboardState, theme:
 			for (const part of formatUsageStatsForDashboard(item.usage)) {
 				rowParts.push(theme.fg("dim", part));
 			}
+		}
+		if (isDashboardWorkingStatus(item.status)) {
+			const activity = latestDashboardActivity(item);
+			if (activity) rowParts.push(theme.fg("toolOutput", activity));
 		}
 		lines.push(`${branch}${dashboardStatusIcon(item.status, theme)} ${name}${dotSep}${rowParts.join(dotSep)}`);
 		if (state.mode === "expanded" && !state.collapsed && item.message) {

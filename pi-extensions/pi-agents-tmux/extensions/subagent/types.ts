@@ -80,8 +80,9 @@ export const AGENTS_POPUP_PADDING_Y = 1;
 export const AGENTS_POPUP_FRAME_ROWS = 2 + AGENTS_POPUP_PADDING_Y * 2;
 export const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 
-export type AgentBrowserTabId = "active" | "history" | AgentScope;
+export type AgentBrowserTabId = "agents" | "active" | "history" | AgentScope;
 export type AgentBrowserTabDef = { id: AgentBrowserTabId; label: string };
+export const AGENTS_BROWSER_TAB: AgentBrowserTabDef = { id: "agents", label: "Agents" };
 export const ACTIVE_BROWSER_TAB: AgentBrowserTabDef = { id: "active", label: "Active" };
 export const HISTORY_BROWSER_TAB: AgentBrowserTabDef = { id: "history", label: "History" };
 export const AGENT_SCOPE_TABS: Array<{ id: AgentScope; label: string }> = [
@@ -110,6 +111,7 @@ export interface AgentBrowserUiState {
 	search: string;
 	selected: number;
 	scroll: number;
+	agentSubtab: number;
 	activeSelected: number;
 	activeScroll: number;
 	historySelected: number;
