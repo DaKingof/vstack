@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,12 +21,23 @@ function makeRepo(): string {
 	return dir;
 }
 
-function run(useTs: boolean, cwd: string, args: string[]): { stdout: string; stderr: string; status: number | null } {
+function run(useTs: boolean, cwd: string, args: string[], extraEnv: Record<string, string | undefined> = {}): { stdout: string; stderr: string; status: number | null } {
 	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
 	env.FLIGHTDECK_STATE_DIR = "tmp";
 	if (useTs) env.FLIGHTDECK_USE_TS_FLIGHTDECK_STATE = "1";
-	else delete env.FLIGHTDECK_USE_TS_FLIGHTDECK_STATE;
+	else env.FLIGHTDECK_USE_TS_FLIGHTDECK_STATE = "0";
 	delete env.FLIGHTDECK_USE_TS;
+	env.FLIGHTDECK_OWNER_HARNESS = "pi";
+	env.FLIGHTDECK_OWNER_PANE_ID = "%42";
+	env.FLIGHTDECK_OWNER_PANE_TARGET = "PARITY:7.0";
+	env.FLIGHTDECK_OWNER_CWD = "/tmp/flightdeck-owner-parity";
+	env.FLIGHTDECK_OWNER_PID = "4242";
+	env.FLIGHTDECK_OWNER_PI_SESSION_ID = "pi-session-parity";
+	env.FLIGHTDECK_OWNER_PI_BRIDGE_SOCKET = "/tmp/pi-session-bridge/parity.sock";
+	for (const [key, value] of Object.entries(extraEnv)) {
+		if (value === undefined) delete env[key];
+		else env[key] = value;
+	}
 	// Bash parses <action> first, then --session — preserve that order.
 	const [action, ...rest] = args;
 	const full = action ? [action, "--session", SESSION, ...rest] : ["--session", SESSION];
@@ -37,6 +48,29 @@ function run(useTs: boolean, cwd: string, args: string[]): { stdout: string; std
 function readState(repoRoot: string): unknown {
 	const path = join(repoRoot, "tmp", `flightdeck-state-${SESSION}.json`);
 	return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function readOwnerViaJq(repoRoot: string, sortKeys = false): string {
+	const path = join(repoRoot, "tmp", `flightdeck-state-${SESSION}.json`);
+	const args = sortKeys ? ["-S", ".owner", path] : [".owner", path];
+	const r = spawnSync("jq", args, { encoding: "utf8" });
+	expect(r.status).toBe(0);
+	return r.stdout;
+}
+
+function writeState(repoRoot: string, state: unknown): void {
+	const dir = join(repoRoot, "tmp");
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, `flightdeck-state-${SESSION}.json`), JSON.stringify(state), "utf8");
+}
+
+function writePiBridgeStub(repoRoot: string, body: string): string {
+	const dir = join(repoRoot, "stub-bin");
+	mkdirSync(dir, { recursive: true });
+	const bin = join(dir, "pi-bridge");
+	writeFileSync(bin, `#!/usr/bin/env bash\n${body}\n`, "utf8");
+	chmodSync(bin, 0o755);
+	return dir;
 }
 
 function normalize(state: unknown): unknown {
@@ -68,6 +102,113 @@ describe("flightdeck-state parity", () => {
 		expect(a.status).toBe(0);
 		expect(b.status).toBe(0);
 		expect(normalize(readState(bashRepo))).toEqual(normalize(readState(tsRepo)));
+	});
+
+	test("init records owner metadata identically", () => {
+		run(false, bashRepo, ["init"]);
+		run(true, tsRepo, ["init"]);
+		const expectedOwner = {
+			cwd: "/tmp/flightdeck-owner-parity",
+			harness: "pi",
+			pane_id: "%42",
+			pane_target: "PARITY:7.0",
+			pid: 4242,
+			pi_session_id: "pi-session-parity",
+			pi_bridge_socket: "/tmp/pi-session-bridge/parity.sock",
+			discovery_error: null,
+		};
+		expect((readState(bashRepo) as { owner?: unknown }).owner).toEqual(expectedOwner);
+		expect((readState(tsRepo) as { owner?: unknown }).owner).toEqual(expectedOwner);
+		expect(readOwnerViaJq(tsRepo)).toBe(readOwnerViaJq(bashRepo));
+		expect(readOwnerViaJq(tsRepo, true)).toBe(readOwnerViaJq(bashRepo, true));
+	});
+
+	test("init backfills owner metadata on legacy state without clobbering fields", () => {
+		const legacy = {
+			conflict_graph: { computed_at: null, edges: [] },
+			issues: { "CC-LEGACY": { state: "waiting" } },
+			merge_queue: ["CC-LEGACY"],
+			paused_for_user: null,
+			session_id: SESSION,
+			started_at: "2026-05-13T00:00:00Z",
+			terminated: false,
+		};
+		writeState(bashRepo, legacy);
+		writeState(tsRepo, legacy);
+		run(false, bashRepo, ["init"]);
+		run(true, tsRepo, ["init"]);
+		expect(normalize(readState(bashRepo))).toEqual(normalize(readState(tsRepo)));
+		const state = readState(tsRepo) as { issues?: Record<string, unknown>; merge_queue?: string[]; owner?: { pane_id?: string } };
+		expect(Object.keys(state.issues ?? {})).toEqual(["CC-LEGACY"]);
+		expect(state.merge_queue).toEqual(["CC-LEGACY"]);
+		expect(state.owner?.pane_id).toBe("%42");
+	});
+
+	test("pi owner discovery failure warns and persists discovery_error identically", () => {
+		const overrides: Record<string, string | undefined> = {
+			FLIGHTDECK_OWNER_HARNESS: "pi",
+			FLIGHTDECK_OWNER_PI_BRIDGE_SOCKET: undefined,
+			FLIGHTDECK_OWNER_PI_SESSION_ID: undefined,
+			PI_BRIDGE_SOCKET_PATH: undefined,
+			PI_SESSION_ID: undefined,
+			PATH: "/usr/bin:/bin",
+		};
+		const a = run(false, bashRepo, ["init"], overrides);
+		const b = run(true, tsRepo, ["init"], overrides);
+		expect(a.status).toBe(0);
+		expect(b.status).toBe(0);
+		expect(a.stderr).toContain("Warning: pi-bridge metadata discovery failed (pi_bridge_not_found); proceeding with null pi_session_id/pi_bridge_socket.");
+		expect(b.stderr).toContain("Warning: pi-bridge metadata discovery failed (pi_bridge_not_found); proceeding with null pi_session_id/pi_bridge_socket.");
+		expect(normalize(readState(bashRepo))).toEqual(normalize(readState(tsRepo)));
+		expect(readOwnerViaJq(tsRepo)).toBe(readOwnerViaJq(bashRepo));
+	});
+
+	test("pi owner discovery timeout warns and persists discovery_error identically", () => {
+		const stub = writePiBridgeStub(bashRepo, "sleep 10");
+		const overrides: Record<string, string | undefined> = {
+			FLIGHTDECK_OWNER_HARNESS: "pi",
+			FLIGHTDECK_OWNER_PI_BRIDGE_SOCKET: undefined,
+			FLIGHTDECK_OWNER_PI_SESSION_ID: undefined,
+			FLIGHTDECK_PI_BRIDGE_DISCOVERY_TIMEOUT_MS: "1000",
+			FLIGHTDECK_PI_BRIDGE_DISCOVERY_TIMEOUT_SEC: "1",
+			PI_BRIDGE_SOCKET_PATH: undefined,
+			PI_SESSION_ID: undefined,
+			PATH: `${stub}:/usr/bin:/bin`,
+		};
+		const start = Date.now();
+		const a = run(false, bashRepo, ["init"], overrides);
+		const b = run(true, tsRepo, ["init"], overrides);
+		expect(Date.now() - start).toBeLessThan(3500);
+		expect(a.status).toBe(0);
+		expect(b.status).toBe(0);
+		expect(a.stderr).toContain("Warning: pi-bridge metadata discovery failed (pi_bridge_timeout); proceeding with null pi_session_id/pi_bridge_socket.");
+		expect(b.stderr).toContain("Warning: pi-bridge metadata discovery failed (pi_bridge_timeout); proceeding with null pi_session_id/pi_bridge_socket.");
+		expect((readState(tsRepo) as { owner?: { discovery_error?: string } }).owner?.discovery_error).toBe("pi_bridge_timeout");
+		expect(readOwnerViaJq(tsRepo)).toBe(readOwnerViaJq(bashRepo));
+	});
+
+	test("pi owner partial bridge metadata warns and persists discovery_error identically", () => {
+		const stub = writePiBridgeStub(bashRepo, "printf '%s\\n' '[{\"pid\":4242,\"sessionId\":\"pi-session-only\"}]'");
+		const overrides: Record<string, string | undefined> = {
+			FLIGHTDECK_OWNER_HARNESS: "pi",
+			FLIGHTDECK_OWNER_PI_BRIDGE_SOCKET: undefined,
+			FLIGHTDECK_OWNER_PI_SESSION_ID: undefined,
+			PI_BRIDGE_SOCKET_PATH: undefined,
+			PI_SESSION_ID: undefined,
+			PATH: `${stub}:/usr/bin:/bin`,
+		};
+		const a = run(false, bashRepo, ["init"], overrides);
+		const b = run(true, tsRepo, ["init"], overrides);
+		expect(a.status).toBe(0);
+		expect(b.status).toBe(0);
+		expect(a.stderr).toContain("Warning: pi-bridge metadata discovery failed (pi_bridge_partial_metadata); proceeding with null pi_session_id/pi_bridge_socket.");
+		expect(b.stderr).toContain("Warning: pi-bridge metadata discovery failed (pi_bridge_partial_metadata); proceeding with null pi_session_id/pi_bridge_socket.");
+		expect((readState(tsRepo) as { owner?: { discovery_error?: string; pi_session_id?: string; pi_bridge_socket?: string | null } }).owner).toMatchObject({
+			discovery_error: "pi_bridge_partial_metadata",
+			pi_bridge_socket: null,
+			pi_session_id: "pi-session-only",
+		});
+		expect(readOwnerViaJq(tsRepo)).toBe(readOwnerViaJq(bashRepo));
 	});
 
 	test("init is idempotent", () => {

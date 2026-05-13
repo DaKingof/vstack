@@ -11,7 +11,7 @@ import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, s
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { findNewestTerminatedArchive, listTerminatedArchives } from "./state-archive.js";
-import { normalizeConflictGraph, normalizeDecisionsLog } from "./state-normalizers.js";
+import { normalizeConflictGraph, normalizeDecisionsLog, normalizeOwner } from "./state-normalizers.js";
 
 export { findNewestTerminatedArchive, listTerminatedArchives } from "./state-archive.js";
 
@@ -54,6 +54,18 @@ export interface PausedForUser {
 	[key: string]: unknown;
 }
 
+export interface MasterOwner {
+	harness?: string;
+	pane_id?: string | null;
+	pane_target?: string | null;
+	cwd?: string;
+	pid?: number;
+	pi_session_id?: string | null;
+	pi_bridge_socket?: string | null;
+	discovery_error?: string | null;
+	[key: string]: unknown;
+}
+
 export interface MasterState {
 	session_id?: string;
 	started_at?: string;
@@ -63,6 +75,7 @@ export interface MasterState {
 	// session summary markdown. Used by the dashboard to point users at the
 	// post-mortem file without re-reading the disk.
 	summary_path?: string;
+	owner?: MasterOwner;
 	issues: Record<string, IssueRecord>;
 	merge_queue: string[];
 	conflict_graph?: { edges?: Array<[string, string]>; computed_at?: string | null };
@@ -334,6 +347,7 @@ export function readMasterState(path: string): { state?: MasterState; error?: st
 				conflict_graph: normalizeConflictGraph(raw.conflict_graph),
 				issues,
 				merge_queue: Array.isArray(raw.merge_queue) ? raw.merge_queue.filter((v): v is string => typeof v === "string") : [],
+				owner: normalizeOwner(raw.owner),
 				paused_for_user: raw.paused_for_user ?? null,
 				session_id: raw.session_id,
 				started_at: raw.started_at,
@@ -581,6 +595,23 @@ export interface BuildSnapshotInputs {
 	projectRoot: string;
 	stateDir: string;
 	tmux: TmuxContext;
+}
+
+export interface OwnerVisibilityProbe {
+	tmux: TmuxContext;
+	ownerPaneId?: string | null;
+}
+
+// Cheap preflight for non-owner widget suppression. Reads only tmux context
+// + the live master state's owner pane before `buildSnapshot` tails daemon
+// logs, wake events, subscribers, and terminated archives.
+export function readOwnerVisibilityProbe(cwd: string, settings: SettingsLike): OwnerVisibilityProbe | undefined {
+	const tmux = resolveTmuxContext();
+	if (!tmux) return undefined;
+	const projectRoot = resolveProjectRoot(cwd);
+	const path = masterStatePath(projectRoot, settings, tmux.sessionName);
+	const { state } = readMasterState(path);
+	return { ownerPaneId: state?.owner?.pane_id, tmux };
 }
 
 export function buildSnapshotFromInputs(inputs: BuildSnapshotInputs, settings: SettingsLike, options?: { logTailLines?: number; wakeEventsLines?: number }): FlightdeckSnapshot {

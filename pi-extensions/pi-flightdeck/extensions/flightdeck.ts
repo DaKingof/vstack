@@ -2,13 +2,7 @@
  * pi-flightdeck — read-only mission control for the flightdeck skill.
  *
  * Reads on-disk artifacts produced by skills/flightdeck/scripts/* — never
- * mutates them. Renders three surfaces:
- *   1. A persistent dashboard widget above the editor with one row per
- *      tracked issue.
- *   2. A high-contrast pause banner above the editor whenever master
- *      sets paused_for_user. This is the primary attention surface.
- *   3. A /flightdeck popup with six tabs (Overview / Live feed /
- *      Conversations / Conflicts & merges / Decisions / Daemon).
+ * mutates them. Renders persistent dashboard, pause banner, and /flightdeck popup.
  *
  * Pi extension only — the underlying flightdeck skill works without this
  * extension via the same on-disk files.
@@ -32,9 +26,11 @@ import {
 	foldWakeEventsIntoConversations,
 	formatAge,
 	mostRecentPollMs,
+	readOwnerVisibilityProbe,
 	readTrackedEntries,
 	type SettingsLike,
 } from "./state.js";
+import { dashboardVisibleForSnapshot, dashboardVisibleInPane, isInFlightdeckChildPane, normalizeDashboardVisibility, renderObserverHeader, type DashboardVisibility } from "./dashboard-visibility.js";
 import {
 	buildPaneTargetToIdMap,
 	formatUsageCompact,
@@ -67,7 +63,6 @@ import {
 } from "./render.js";
 import { headerChipForSnapshot, renderArchiveErrorBanner, renderIssueMergeCommitLine, renderTerminatedConflictsSection, renderTerminatedOverviewBanner } from "./render-terminated.js";
 import { MINI_DASHBOARD_RANK, setMiniDashboardWidget } from "./stacked-widget.js";
-
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-flightdeck.installed");
 const CONFIG_ID = "@vanillagreen/pi-flightdeck";
 const SETTINGS_EVENT = "vstack:extension-settings-changed";
@@ -75,11 +70,8 @@ const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 const WIDGET_KEY = "vstack-flightdeck-widget";
 const POPUP_WIDTH_PERCENT = "92%";
 const POPUP_MAX_HEIGHT = "85%";
-
 export type DashboardState = "hidden" | "compact" | "expanded";
-
 interface VstackModalLock { depth: number }
-
 function expandHome(input: string): string {
 	if (!input) return input;
 	if (input === "~") return homedir();
@@ -232,15 +224,11 @@ function usageForIssue(issue: IssueRecord, paneMap: Map<string, string>, bridge:
 	return bridge.getByPaneId(paneId);
 }
 
-function defaultDashboardState(cwd?: string): DashboardState {
-	const value = settingString("dashboardDefaultState", "compact", cwd);
-	return value === "hidden" || value === "expanded" ? value : "compact";
-}
+function defaultDashboardState(cwd?: string): DashboardState { const value = settingString("dashboardDefaultState", "compact", cwd); return value === "hidden" || value === "expanded" ? value : "compact"; }
 
-function pollIntervalMs(cwd?: string): number {
-	const raw = Math.floor(settingNumber("pollIntervalMs", 1500, cwd));
-	return Math.max(500, raw);
-}
+function dashboardVisibility(cwd?: string): DashboardVisibility { return normalizeDashboardVisibility(settingString("dashboardVisibility", "owner", cwd)); }
+
+function pollIntervalMs(cwd?: string): number { return Math.max(500, Math.floor(settingNumber("pollIntervalMs", 1500, cwd))); }
 
 // ============================================================================
 // Widget render — pause banner + persistent dashboard
@@ -1323,6 +1311,8 @@ export default function flightdeck(pi: ExtensionAPI): void {
 		if (cache.pauseSeenIssue === issueId) return;
 		cache.pauseSeenIssue = issueId;
 		cache.pauseSeenAt = Date.now();
+		const paneAllowed = dashboardVisibleForSnapshot(snapshot, dashboardVisibility(ctx.cwd));
+		if (!paneAllowed) return;
 		if (settingBoolean("pauseBeep", true, ctx.cwd)) process.stdout.write(ANSI_BELL);
 		if (settingBoolean("autoOpenOnPause", false, ctx.cwd)) {
 			openPopup(pi, ctx).catch(() => undefined);
@@ -1337,18 +1327,10 @@ export default function flightdeck(pi: ExtensionAPI): void {
 			return;
 		}
 		const snapshot = cache.lastSnapshot;
-		// Child panes (spawned via pi-agents-tmux as subagents OR via
-		// flightdeck's open-terminal as orchestrated workers) read the
-		// same project state as the master coordinator pane, so the
-		// dashboard would otherwise render inside every child. Suppress
-		// it there; keep the pause banner since a parent pause is still
-		// actionable context. (issue #8)
-		const inChildPane = Boolean(
-			process.env.PI_SUBAGENT_CHILD_AGENT ||
-			process.env.FLIGHTDECK_CHILD_PANE,
-		);
-		const showBanner = settingBoolean("pauseBanner", true, ctx.cwd) && Boolean(snapshot?.master?.paused_for_user);
-		const dashboardEnabled = !inChildPane && settingBoolean("dashboard", true, ctx.cwd) && cache.state !== "hidden";
+		const visibility = dashboardVisibility(ctx.cwd);
+		const dashboardPaneAllowed = dashboardVisibleForSnapshot(snapshot, visibility);
+		const showBanner = dashboardPaneAllowed && settingBoolean("pauseBanner", true, ctx.cwd) && Boolean(snapshot?.master?.paused_for_user);
+		const dashboardEnabled = dashboardPaneAllowed && settingBoolean("dashboard", true, ctx.cwd) && cache.state !== "hidden";
 		const staleAfterMin = Math.max(0, Math.floor(settingNumber("dashboardStaleAfterMin", 5, ctx.cwd)));
 		const status = flightdeckSessionStatus(snapshot, { staleAfterMin });
 		if (status === "inactive" && !showBanner) {
@@ -1368,6 +1350,8 @@ export default function flightdeck(pi: ExtensionAPI): void {
 			state: cache.state,
 			showBanner,
 			dashboardEnabled,
+			dashboardVisibility: visibility,
+			currentPaneId: snapshot?.tmux.paneId ?? null,
 			status,
 			master: snapshot?.master ?? null,
 			daemonAlive: snapshot?.daemon?.pidAlive ?? null,
@@ -1398,7 +1382,18 @@ export default function flightdeck(pi: ExtensionAPI): void {
 		}), { placement: "aboveEditor" });
 	};
 
+	const shouldSkipOwnerWidgetSnapshot = (ctx: ExtensionContext): boolean => {
+		const visibility = dashboardVisibility(ctx.cwd); if (popupTui || visibility !== "owner") return false;
+		const probe = readOwnerVisibilityProbe(ctx.cwd, settingsLike(ctx.cwd));
+		if (!probe) return false; const inChildPane = isInFlightdeckChildPane(); if (inChildPane) return true; if (!probe.ownerPaneId) return false;
+		return !dashboardVisibleInPane({ currentPaneId: probe.tmux.paneId, inChildPane, ownerPaneId: probe.ownerPaneId, visibility });
+	};
+
 	const tick = (ctx: ExtensionContext) => {
+		if (shouldSkipOwnerWidgetSnapshot(ctx)) {
+			cache.lastSnapshot = undefined; cache.paneTargetToId = new Map(); syncWidget(ctx);
+			return;
+		}
 		const snapshot = refreshSnapshot(ctx.cwd);
 		handlePauseTransition(ctx, snapshot);
 		syncWidget(ctx);
@@ -1706,6 +1701,11 @@ export default function flightdeck(pi: ExtensionAPI): void {
 						}
 						lines.push(renderTabBar(ui.tab, innerWidth, theme));
 						lines.push("");
+						const observerHeader = renderObserverHeader(snapshot, theme, innerWidth);
+						if (observerHeader) {
+							lines.push(observerHeader);
+							lines.push(divider(innerWidth, theme));
+						}
 						const headerSummary = renderPopupHeader(snapshot, theme, innerWidth);
 						lines.push(headerSummary);
 						lines.push(divider(innerWidth, theme));
