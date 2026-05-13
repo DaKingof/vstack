@@ -13,6 +13,8 @@
 #   flightdeck-state set [--session <name>] <field> <value>  # value is JSON
 #   flightdeck-state append [--session <name>] <field> <value>
 #   flightdeck-state increment [--session <name>] <field>
+#   flightdeck-state tracked-entries [--session <name>]       # normalized .entries or legacy .issues projection
+#   flightdeck-state write-entry [--session <name>] <id> <json-entry>
 #   flightdeck-state archive [--session <name>]              # rotate live file to <file>-<ts>.archive
 #   flightdeck-state path [--session <name>]                 # print state file path
 #   flightdeck-state phase <ISSUE_ID>                        # derive orchestration phase from workflow-state-<ID>.json
@@ -49,6 +51,7 @@ fi
 
 STATE_DIR="${FLIGHTDECK_STATE_DIR:-tmp}"
 STATE_BASE="$PROJECT_ROOT/$STATE_DIR"
+FLIGHTDECK_SCHEMA_VERSION="1.1"
 mkdir -p "$STATE_BASE"
 
 # Resolve session id
@@ -240,6 +243,166 @@ resolve_owner_harness() {
   echo "unknown"
 }
 
+tracked_entries_filter() {
+  cat <<'JQ'
+def obj: if type == "object" then . else {} end;
+def trim: gsub("^\\s+|\\s+$"; "");
+def valid_id($v): (($v | type) == "string") and (($v | trim) | test("^[A-Za-z0-9._-]+$"));
+def s($v): if ($v | type) == "string" then $v else null end;
+def n($v): if ($v | type) == "number" then $v else null end;
+def b($v): if ($v | type) == "boolean" then $v else null end;
+def arr($v): if ($v | type) == "array" then $v else [] end;
+def normalized_entry($id; $e):
+  $e + {
+    id: (if valid_id($e.id) then ($e.id | trim) else $id end),
+    kind: (if (($e.kind | type) == "string" and ($e.kind | length) > 0) then $e.kind else "issue" end)
+  };
+def legacy_entry($id; $i): {
+  adapter: {
+    cc_port: n($i.cc_port),
+    cc_session_uuid: s($i.cc_session_uuid),
+    cc_transcript: s($i.cc_transcript),
+    cc_url: s($i.cc_url),
+    cx_thread_id: s($i.cx_thread_id),
+    cx_ws: s($i.cx_ws),
+    oc_port: n($i.oc_port),
+    oc_session_id: s($i.oc_session_id),
+    oc_url: s($i.oc_url),
+    pi_bridge_pid: n($i.pi_bridge_pid),
+    pi_bridge_socket: s($i.pi_bridge_socket),
+    pi_session_id: s($i.pi_session_id)
+  },
+  cwd: (s($i.cwd) // s($i.worktree)),
+  decisions_log: arr($i.decisions_log),
+  domain: {issue: {
+    id: $id,
+    merge_commit: s($i.merge_commit),
+    orchestration_started: b($i.orchestration_started),
+    pr_number: n($i.pr_number),
+    scope_files_actual: n($i.scope_files_actual),
+    scope_files_declared: n($i.scope_files_declared),
+    worktree: s($i.worktree)
+  }},
+  harness: s($i.harness),
+  id: $id,
+  kind: "issue",
+  last_capture_hash: s($i.last_capture_hash),
+  last_polled_at: s($i.last_polled_at),
+  last_response_at: s($i.last_response_at),
+  launch: (if ($i.launch | type) == "object" then $i.launch else null end),
+  merge_commit: s($i.merge_commit),
+  pane_id: s($i.pane_id),
+  pane_target: s($i.pane_target),
+  spawned_at: s($i.spawned_at),
+  state: s($i.state),
+  substate: s($i.substate),
+  title: (if (($i.title | type) == "string" and ($i.title | length) > 0) then $i.title else $id end),
+  unknown_since: s($i.unknown_since),
+  window: s($i.window)
+};
+(.issues // {} | obj | to_entries | map(select(.value | type == "object") | {key: .key, value: legacy_entry(.key; .value)}) | from_entries) as $issues
+| (.entries // {} | obj | to_entries | map(select(.value | type == "object") | {key: .key, value: normalized_entry(.key; .value)}) | from_entries) as $entries
+| $issues + $entries
+JQ
+}
+
+unknown_schema_value() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  local value
+  value=$(jq -r 'if type == "object" and has("schema_version") and .schema_version != null then (.schema_version | tostring) else "" end' "$file" 2>/dev/null || true)
+  if [[ -n "$value" && "$value" != "$FLIGHTDECK_SCHEMA_VERSION" ]]; then
+    printf '%s' "$value"
+  fi
+}
+
+warn_unknown_schema() {
+  local value="$1"
+  [[ -z "$value" ]] && return 0
+  printf 'Warning: unknown schema_version "%s", treating as 1.1 (read-only safe).\n' "$value" >&2
+}
+
+warn_unknown_schema_from_file() {
+  local value
+  value=$(unknown_schema_value "$FILE")
+  warn_unknown_schema "$value"
+}
+
+assert_writable_schema() {
+  local value
+  value=$(unknown_schema_value "$FILE")
+  [[ -z "$value" ]] && return 0
+  if [[ "${FLIGHTDECK_ALLOW_FUTURE_SCHEMA:-}" == "1" ]]; then
+    warn_unknown_schema "$value"
+    return 0
+  fi
+  printf 'Error: unknown schema_version "%s"; refusing write (set FLIGHTDECK_ALLOW_FUTURE_SCHEMA=1 to override)\n' "$value" >&2
+  exit 2
+}
+
+warn_malformed_entries() {
+  [[ -f "$FILE" ]] || return 0
+  local ids
+  ids=$(jq -r 'if (.entries // null | type) == "object" then [.entries | to_entries[] | select(.value | type != "object") | (.key | @json)] | join(", ") else "" end' "$FILE" 2>/dev/null || true)
+  if [[ -n "$ids" ]]; then
+    printf 'Warning: invalid .entries value(s) for %s; skipping.\n' "$ids" >&2
+  fi
+}
+
+warn_invalid_entry_ids() {
+  [[ -f "$FILE" ]] || return 0
+  local warnings
+  warnings=$(jq -r 'def trim: gsub("^\\s+|\\s+$"; ""); def valid_id($v): (($v | type) == "string") and (($v | trim) | test("^[A-Za-z0-9._-]+$")); if (.entries // null | type) == "object" then .entries | to_entries[] | select((.value | type) == "object" and (.value | has("id")) and (valid_id(.value.id) | not)) | "Warning: invalid .entries[\(.key | @json)].id \(.value.id | @json); using entry key." else empty end' "$FILE" 2>/dev/null || true)
+  [[ -n "$warnings" ]] && printf '%s\n' "$warnings" >&2
+  return 0
+}
+
+validate_entry_id() {
+  local raw="$1" label="$2"
+  local trimmed
+  trimmed=$(printf '%s' "$raw" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+  if [[ ! "$trimmed" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    printf 'Error: invalid %s: must be non-empty and match ^[A-Za-z0-9._-]+$\n' "$label" >&2
+    exit 2
+  fi
+  ENTRY_ID_RESULT="$trimmed"
+}
+
+validate_json_entry_id() {
+  local json="$1"
+  local kind raw
+  kind=$(jq -r '.id | type' <<< "$json")
+  if [[ "$kind" != "string" ]]; then
+    echo 'Error: invalid entry.id: must be a string' >&2
+    exit 2
+  fi
+  raw=$(jq -r '.id' <<< "$json")
+  validate_entry_id "$raw" "entry.id"
+}
+
+validate_domain_issue_id() {
+  local json="$1"
+  local has_id kind raw
+  has_id=$(jq -r '(.domain.issue? | type) == "object" and (.domain.issue | has("id"))' <<< "$json")
+  [[ "$has_id" == "true" ]] || { DOMAIN_ISSUE_ID_RESULT=""; return 0; }
+  kind=$(jq -r '.domain.issue.id | type' <<< "$json")
+  if [[ "$kind" != "string" ]]; then
+    echo 'Error: invalid domain.issue.id: must be a string' >&2
+    exit 2
+  fi
+  raw=$(jq -r '.domain.issue.id' <<< "$json")
+  validate_entry_id "$raw" "domain.issue.id"
+  DOMAIN_ISSUE_ID_RESULT="$ENTRY_ID_RESULT"
+}
+
+write_tracked_entry_filter() {
+  local id_json="$1"
+  local entry_json="$2"
+  # NOTE: projection jq is intentionally duplicated with the TS sibling for parity;
+  # next size increase here should move it to a shared jq fixture/heredoc.
+  printf '%s' "($id_json) as \$id | ($entry_json) as \$entry | def s(\$v): if (\$v | type) == \"string\" then \$v else null end; def n(\$v): if (\$v | type) == \"number\" then \$v else null end; def b(\$v): if (\$v | type) == \"boolean\" then \$v else null end; def arr(\$v): if (\$v | type) == \"array\" then \$v else [] end; .entries = ((.entries // {}) + {(\$id): \$entry}) | ((\$entry.domain.issue.id // (if \$entry.kind == \"issue\" then \$entry.id else null end)) as \$issue_id | if \$issue_id == null then . else .issues = ((.issues // {}) + {(\$issue_id): ((.issues[\$issue_id] // {}) + {window: s(\$entry.window), pane_target: s(\$entry.pane_target), pane_id: s(\$entry.pane_id), harness: s(\$entry.harness), launch: (if (\$entry.launch | type) == \"object\" then \$entry.launch else null end), worktree: (s(\$entry.domain.issue.worktree) // s(\$entry.cwd)), pr_number: n(\$entry.domain.issue.pr_number), oc_url: s(\$entry.adapter.oc_url), oc_session_id: s(\$entry.adapter.oc_session_id), oc_port: n(\$entry.adapter.oc_port), cc_url: s(\$entry.adapter.cc_url), cc_session_uuid: s(\$entry.adapter.cc_session_uuid), cc_port: n(\$entry.adapter.cc_port), cc_transcript: s(\$entry.adapter.cc_transcript), pi_bridge_pid: n(\$entry.adapter.pi_bridge_pid), pi_bridge_socket: s(\$entry.adapter.pi_bridge_socket), pi_session_id: s(\$entry.adapter.pi_session_id), cx_ws: s(\$entry.adapter.cx_ws), cx_thread_id: s(\$entry.adapter.cx_thread_id), state: s(\$entry.state), substate: s(\$entry.substate), unknown_since: s(\$entry.unknown_since), last_capture_hash: s(\$entry.last_capture_hash), last_response_at: s(\$entry.last_response_at), spawned_at: s(\$entry.spawned_at), last_polled_at: s(\$entry.last_polled_at), orchestration_started: b(\$entry.domain.issue.orchestration_started), scope_files_declared: n(\$entry.domain.issue.scope_files_declared), scope_files_actual: n(\$entry.domain.issue.scope_files_actual), decisions_log: arr(\$entry.decisions_log), merge_commit: (s(\$entry.merge_commit) // s(\$entry.domain.issue.merge_commit))})}) end)"
+}
+
 # --- Argument parsing -----------------------------------------------------
 
 ACTION="${1:-}"
@@ -266,6 +429,7 @@ case "$ACTION" in
 
   init)
     gc_tmp_orphans "$FILE"
+    assert_writable_schema
     owner_pid=$(resolve_owner_pid)
     owner_pane_id=$(resolve_owner_pane_id)
     owner_pane_target=$(resolve_owner_pane_target)
@@ -295,8 +459,9 @@ case "$ACTION" in
       # but backfill the additive owner block on pre-owner live state files.
       # Stale `terminated: true` files are rotated by `terminate.md § 5` via
       # the `archive` action, so a present file here is always a live session.
-      if jq -e '.owner? == null' "$FILE" >/dev/null 2>&1; then
+      if jq -e '(.owner? == null) or (.schema_version? == null) or (.entries? == null)' "$FILE" >/dev/null 2>&1; then
         jq \
+          --argjson schema_version "$FLIGHTDECK_SCHEMA_VERSION" \
           --arg owner_harness "$owner_harness" \
           --arg owner_pane_id "$owner_pane_id" \
           --arg owner_pane_target "$owner_pane_target" \
@@ -315,7 +480,9 @@ case "$ACTION" in
              pi_bridge_socket: ($owner_pi_bridge_socket | if . == "" then null else . end),
              discovery_error: ($owner_discovery_error | if . == "" then null else . end)
            };
-           . + {owner: owner}' "$FILE" > "$init_tmp"
+           (if .owner? == null then . + {owner: owner} else . end)
+           | (if .schema_version? == null then . + {schema_version: $schema_version} else . end)
+           | (if .entries? == null then . + {entries: {}} else . end)' "$FILE" > "$init_tmp"
         mv "$init_tmp" "$FILE"
       fi
       exec 9>&-
@@ -325,6 +492,7 @@ case "$ACTION" in
     jq -n \
       --arg session_id "$SESSION" \
       --arg started_at "$started_at" \
+      --argjson schema_version "$FLIGHTDECK_SCHEMA_VERSION" \
       --arg owner_harness "$owner_harness" \
       --arg owner_pane_id "$owner_pane_id" \
       --arg owner_pane_target "$owner_pane_target" \
@@ -334,6 +502,7 @@ case "$ACTION" in
       --arg owner_pi_bridge_socket "$owner_pi_bridge_socket" \
       --arg owner_discovery_error "$owner_discovery_error" \
       '{
+        schema_version: $schema_version,
         session_id: $session_id,
         started_at: $started_at,
         terminated: false,
@@ -347,6 +516,7 @@ case "$ACTION" in
           pi_bridge_socket: ($owner_pi_bridge_socket | if . == "" then null else . end),
           discovery_error: ($owner_discovery_error | if . == "" then null else . end)
         },
+        entries: {},
         issues: {},
         merge_queue: [],
         conflict_graph: {edges: [], computed_at: null},
@@ -359,11 +529,13 @@ case "$ACTION" in
   get)
     [[ ${#ARGS[@]} -lt 1 ]] && { echo "Usage: get <jq-path>" >&2; exit 2; }
     [[ ! -f "$FILE" ]] && exit 1
+    warn_unknown_schema_from_file
     jq -r "${ARGS[0]}" "$FILE"
     ;;
 
   set)
     [[ ${#ARGS[@]} -lt 2 ]] && { echo "Usage: set <field> <json-value>" >&2; exit 2; }
+    assert_writable_schema
     field=$(normalize_path "${ARGS[0]}")
     value="${ARGS[1]}"
     update_state "$FILE" "$field = ($value)"
@@ -371,6 +543,7 @@ case "$ACTION" in
 
   append)
     [[ ${#ARGS[@]} -lt 2 ]] && { echo "Usage: append <field> <json-value>" >&2; exit 2; }
+    assert_writable_schema
     field=$(normalize_path "${ARGS[0]}")
     value="${ARGS[1]}"
     update_state "$FILE" "$field += [($value)]"
@@ -378,8 +551,38 @@ case "$ACTION" in
 
   increment)
     [[ ${#ARGS[@]} -lt 1 ]] && { echo "Usage: increment <field>" >&2; exit 2; }
+    assert_writable_schema
     field=$(normalize_path "${ARGS[0]}")
     update_state "$FILE" "$field = (($field // 0) + 1)"
+    ;;
+
+  tracked-entries)
+    [[ ! -f "$FILE" ]] && exit 1
+    warn_unknown_schema_from_file
+    warn_malformed_entries
+    warn_invalid_entry_ids
+    jq -c "$(tracked_entries_filter)" "$FILE"
+    ;;
+
+  write-entry)
+    [[ ${#ARGS[@]} -lt 2 ]] && { echo "Usage: write-entry <ENTRY_ID> <json-entry>" >&2; exit 2; }
+    assert_writable_schema
+    validate_entry_id "${ARGS[0]}" "entry id"
+    entry_id="$ENTRY_ID_RESULT"
+    entry_json=$(jq -c . <<< "${ARGS[1]}") || { echo "Error: invalid json-entry" >&2; exit 2; }
+    validate_json_entry_id "$entry_json"
+    json_entry_id="$ENTRY_ID_RESULT"
+    if [[ "$json_entry_id" != "$entry_id" ]]; then
+      printf 'Error: invalid entry.id: must match entry id %s\n' "$entry_id" >&2
+      exit 2
+    fi
+    entry_json=$(jq -c --arg entry_id "$entry_id" '.id = $entry_id' <<< "$entry_json")
+    validate_domain_issue_id "$entry_json"
+    if [[ -n "$DOMAIN_ISSUE_ID_RESULT" ]]; then
+      entry_json=$(jq -c --arg issue_id "$DOMAIN_ISSUE_ID_RESULT" '.domain.issue.id = $issue_id' <<< "$entry_json")
+    fi
+    entry_id_json=$(jq -Rn --arg v "$entry_id" '$v')
+    update_state "$FILE" "$(write_tracked_entry_filter "$entry_id_json" "$entry_json")"
     ;;
 
   phase)
@@ -411,6 +614,7 @@ case "$ACTION" in
     else
       # No orchestration state — use flightdeck's own view.
       if [[ -f "$FILE" ]]; then
+        warn_unknown_schema_from_file
         fd_state=$(jq -r ".issues[\"$issue\"].state // empty" "$FILE" 2>/dev/null)
         if [[ -n "$fd_state" ]]; then
           echo "fd:$fd_state"
@@ -424,6 +628,7 @@ case "$ACTION" in
     ;;
 
   archive)
+    assert_writable_schema
     [[ ! -f "$FILE" ]] && exit 0
     ts=$(jq -r '.terminated_at // empty' "$FILE" 2>/dev/null)
     [[ -z "$ts" ]] && ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -525,7 +730,7 @@ case "$ACTION" in
 
   *)
     echo "Unknown action: $ACTION" >&2
-    echo "Actions: init | get | set | append | increment | archive | master-busy | path" >&2
+    echo "Actions: init | get | set | append | increment | tracked-entries | write-entry | archive | master-busy | path" >&2
     exit 2
     ;;
 esac
