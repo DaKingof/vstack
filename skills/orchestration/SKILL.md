@@ -164,6 +164,7 @@ When executing a command's workflow, follow ALL [Workflow Execution](#workflow-e
 | `bot-review-wait` | Block until bot review posts on a PR — invoked by per-issue agents inside their submit-pr flow |
 | `ci-wait` | Block until CI completes on a PR — same |
 | `session-init` | Initialize session state for a new worktree (called by `initialize.md`) |
+| `flightdeck-mode` | Detect Flightdeck-managed mode + report scoped issue/worktree/branch. Used by `merge-pr.md` § 5 to suppress cross-branch sweeps when running under Flightdeck. |
 
 `bot-review-wait --json` returns `status: "error"` and exits non-zero on GitHub auth/API failures instead of polling until timeout with empty output.
 
@@ -213,6 +214,18 @@ The `audit-issues-input` and `roadmap-plan-input` schemas live in `project-manag
 - `jq`
 - `bash` 4+
 - `flock` (util-linux) for atomic state updates
+
+## Tests
+
+Run the full orchestration regression suite:
+
+```bash
+bash skills/orchestration/tests/run-all.sh
+# Optional filter:
+bash skills/orchestration/tests/run-all.sh flightdeck_mode
+```
+
+Each `tests/*.sh` file is self-contained (builds its own sandbox, prints `pass: N fail: M`, exits non-zero on failure). The runner discovers them at execution time, so adding a new test file requires no central registration.
 
 ## Skill Rules
 
