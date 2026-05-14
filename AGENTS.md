@@ -192,6 +192,7 @@ Each canonical agent declares its own `effort:` in frontmatter. Harnesses write 
 - **Worktree scratch goes in `<worktree>/tmp/`, not at worktree root or `/tmp/`.** Agent task briefs, intermediate result JSONs, review hand-offs, and similar ephemeral artifacts belong in the worktree's gitignored `tmp/` dir (auto-created when listed in `WORKTREE_MKDIRS`). Worktree root is for tracked content only.
 - **READMEs are user-facing only.** Describe what the thing is, how to use it, features, settings/options, and install/setup. Technical/development detail goes in `DEVELOPMENT.md`; agent skill instructions live in the matching `SKILL.md`.
 - **Pi hook parity.** Pi gets its hooks via the `pi-extensions/pi-hooks` extension (native TS port of `hooks/*.sh` against Pi's `tool_call`/`tool_result`/`turn_end` events). Any change to a hook script must land in the same commit as the matching change in `pi-extensions/pi-hooks/extensions/hooks.ts` so all five harnesses stay behaviorally aligned.
+- **Pi upstream lifecycle fix.** When touching pi-agents-tmux completion, Flightdeck Pi session handling, or print/json lifecycle workarounds, recheck `earendil-works/pi#2023` for upstream true-idle / scheduled-continuation fixes.
 
 ## Updating Pi Extensions
 
