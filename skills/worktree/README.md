@@ -13,7 +13,7 @@ skills/worktree/
 
 ## Setup
 
-Run from the main checkout of a git repo with an `origin` remote. Optionally add `.env.local` settings.
+Run from the main checkout of a git repo with an `origin` remote. Optionally add `.env` or `.env.local` settings.
 
 ```bash
 ./scripts/worktree create PROJ-123
@@ -21,16 +21,17 @@ Run from the main checkout of a git repo with an `origin` remote. Optionally add
 ./scripts/worktree remove PROJ-123
 ```
 
-Defaults: detects branch from `origin/HEAD` (fallback: `main`), creates worktrees under sibling `trees/`, then applies configured symlinks and copies.
+Defaults: detects branch from `origin/HEAD` (fallback: `main`), creates worktrees under sibling `trees/`, then applies configured symlinks and copies. Set `WORKTREE_BASE_DIR` to use another parent directory; relative paths resolve from the main checkout, absolute paths are used as-is.
 
 `remove` deletes the worktree first, then tries `git branch -d` for the associated local branch. If Git refuses the safe branch delete (for example, the branch is not merged into the current main checkout), the command exits non-zero and prints a diagnostic naming the remaining branch plus the manual `git branch -D` recovery command.
 
 ## Configuration
 
-Set in `.env.local` — all optional:
+Set in `.env` or `.env.local` — all optional. When both files exist, `.env.local` wins.
 
 | Variable | Purpose |
 |----------|---------|
+| `WORKTREE_BASE_DIR` | Parent directory for created worktrees (default: `../trees`) |
 | `WORKTREE_DEFAULT_BRANCH` | Override default branch detection |
 | `WORKTREE_SYMLINKS` | Space-separated paths to symlink into worktrees |
 | `WORKTREE_RELATIVE_SYMLINKS` | Space-separated `path=target` symlinks created inside each worktree |
@@ -46,6 +47,7 @@ Example for sharing local env plus generated Claude assets while keeping `.claud
 pointed at each worktree's own `AGENTS.md`:
 
 ```bash
+WORKTREE_BASE_DIR="../trees"
 WORKTREE_SYMLINKS=".env.local .claude/agents .claude/hooks .claude/skills"
 WORKTREE_RELATIVE_SYMLINKS=".claude/CLAUDE.md=../AGENTS.md"
 WORKTREE_MKDIRS="tmp"

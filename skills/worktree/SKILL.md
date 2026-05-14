@@ -11,9 +11,9 @@ metadata:
 
 # Worktree Management
 
-Portable git worktree manager. Layout: `project/main` (repo) + `project/trees/{id}` (worktrees).
+Portable git worktree manager. Layout defaults to `project/main` (repo) + `project/trees/{id}` (worktrees); projects can override the worktree parent directory.
 
-Resolves project root via `git rev-parse`, detects default branch automatically, and reads all project-specific config from `.env.local`.
+Resolves project root via `git rev-parse`, detects default branch automatically, and reads project-specific config from `.env` then `.env.local` (`.env.local` wins).
 
 ```bash
 .agents/skills/worktree/scripts/worktree <command> [options]
@@ -44,10 +44,11 @@ Resolves project root via `git rev-parse`, detects default branch automatically,
 
 ## Configuration
 
-Set in `.env.local`:
+Set in `.env` or `.env.local`:
 
 | Variable | Effect |
 |----------|--------|
+| `WORKTREE_BASE_DIR` | Parent directory for created worktrees. Relative paths resolve from the main checkout; absolute paths are used as-is. Default: `../trees` |
 | `WORKTREE_SYMLINKS` | Space-separated paths symlinked from main checkout into each worktree; include `.env.local` if worktrees should share local env/config |
 | `WORKTREE_RELATIVE_SYMLINKS` | Space-separated `path=target` symlinks created inside each worktree, with relative targets resolving from the link location |
 | `WORKTREE_COPIES` | Space-separated files copied from main checkout into each worktree |
@@ -56,6 +57,7 @@ Set in `.env.local`:
 Example: share local env plus generated Claude assets, but keep `.claude/CLAUDE.md` pointed at each worktree's own `AGENTS.md`:
 
 ```bash
+WORKTREE_BASE_DIR="../trees"
 WORKTREE_SYMLINKS=".env.local .claude/agents .claude/hooks .claude/skills"
 WORKTREE_RELATIVE_SYMLINKS=".claude/CLAUDE.md=../AGENTS.md"
 WORKTREE_MKDIRS="tmp"

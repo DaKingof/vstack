@@ -6,10 +6,11 @@
 #     --from REF      Create a new branch starting from REF (branch, tag, or commit)
 #     --pr NUMBER     Look up the branch from a PR number (implies --base)
 #
-# Layout: project/main (repo) + project/trees/{id} (worktrees)
-# Config: reads .env.local for optional settings (see below)
+# Layout: project/main (repo) + project/trees/{id} (worktrees by default)
+# Config: reads .env then .env.local for optional settings (see below)
 #
-# .env.local config vars:
+# .env/.env.local config vars:
+#   WORKTREE_BASE_DIR        - parent directory for worktrees (relative to main checkout or absolute; default: ../trees)
 #   WORKTREE_DEFAULT_BRANCH  - default branch name (auto-detected if unset, fallback: main)
 #   WORKTREE_SYMLINKS        - space-separated paths to symlink from main into worktrees
 #   WORKTREE_RELATIVE_SYMLINKS - space-separated path=target symlinks created inside worktrees
@@ -36,12 +37,59 @@ if [[ "$_git_common_dir" != ".git" && -n "$_git_common_dir" ]]; then
   PROJECT_ROOT="$(cd "$PROJECT_ROOT" && cd "$(dirname "$_git_common_dir")" && pwd)"
 fi
 
-# Load config from .env.local (optional — API keys, bot identity, symlink config)
-ENV_FILE="$PROJECT_ROOT/.env.local"
-[[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
+# Load config from .env and .env.local (optional — .env.local wins when both exist)
+for ENV_FILE in "$PROJECT_ROOT/.env" "$PROJECT_ROOT/.env.local"; do
+  if [[ -f "$ENV_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$ENV_FILE"
+  fi
+done
+unset ENV_FILE
 
-# Layout: project/main (repo) + project/trees (worktrees)
-TREES_DIR="$(dirname "$PROJECT_ROOT")/trees"
+strip_trailing_slashes() {
+  local path="$1"
+  while [[ "$path" != "/" && "$path" == */ ]]; do
+    path="${path%/}"
+  done
+  printf '%s\n' "$path"
+}
+
+resolve_worktree_base_dir() {
+  local raw="${WORKTREE_BASE_DIR:-}"
+  if [[ -z "$raw" ]]; then
+    printf '%s\n' "$(dirname "$PROJECT_ROOT")/trees"
+    return
+  fi
+
+  if [[ "$raw" == "~" ]]; then
+    raw="${HOME:?WORKTREE_BASE_DIR uses ~ but HOME is not set}"
+  elif [[ "$raw" == "~/"* ]]; then
+    raw="${HOME:?WORKTREE_BASE_DIR uses ~ but HOME is not set}/${raw#~/}"
+  fi
+
+  raw="$(strip_trailing_slashes "$raw")"
+
+  local path
+  if [[ "$raw" == /* ]]; then
+    path="$raw"
+  else
+    path="$PROJECT_ROOT/$raw"
+  fi
+
+  [[ "$path" == "/" ]] && { printf '/\n'; return; }
+
+  local parent name
+  parent="$(dirname "$path")"
+  name="$(basename "$path")"
+  if [[ -d "$parent" ]]; then
+    printf '%s/%s\n' "$(cd "$parent" && pwd -P)" "$name"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+# Layout: project/main (repo) + configured parent dir (worktrees)
+TREES_DIR="$(resolve_worktree_base_dir)"
 
 # Detect default branch (configurable, auto-detected, fallback: main)
 detect_default_branch() {
@@ -206,6 +254,7 @@ case "${1:-}" in
       esac
     done
     WT_PATH="$(worktree_path "$ISSUE")"
+    mkdir -p "$TREES_DIR"
 
     # 1. If worktree already exists at path, reuse it after updating
     if [[ -d "$WT_PATH" ]] && git -C "$WT_PATH" rev-parse --git-dir &>/dev/null; then
@@ -311,7 +360,6 @@ case "${1:-}" in
     fi
 
     # Set up symlinks, copies, and bot config
-    mkdir -p "$TREES_DIR"
     setup_worktree_links "$WT_PATH"
 
     # Add bot remote for agent pushes (if configured)

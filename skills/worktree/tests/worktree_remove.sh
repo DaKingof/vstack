@@ -43,6 +43,17 @@ assert_path_absent() {
   fi
 }
 
+assert_git_worktree() {
+  local path="$1" name="$2"
+  if git -C "$path" rev-parse --git-dir >/dev/null 2>&1; then
+    PASS=$((PASS + 1))
+    printf '  ok    %s\n' "$name"
+  else
+    FAIL=$((FAIL + 1))
+    printf '  FAIL  %s\n        not a git worktree: %s\n' "$name" "$path"
+  fi
+}
+
 assert_symlink_target() {
   local path="$1" want="$2" name="$3"
   if [[ -L "$path" && "$(readlink "$path")" == "$want" ]]; then
@@ -148,6 +159,32 @@ git -C "$NOENV_ROOT/main" worktree add -q -b issue-noenv "$NOENV_ROOT/trees/issu
 noenv_out=$(cd "$NOENV_ROOT/main" && "$WORKTREE_SCRIPT" fix-links "$NOENV_ROOT/trees/issue-noenv")
 assert_eq "$noenv_out" "Restored symlinks in $NOENV_ROOT/trees/issue-noenv" "fix-links works without .env.local symlink"
 assert_path_absent "$NOENV_ROOT/trees/issue-noenv/.env.local" ".env.local not linked unless configured"
+
+# WORKTREE_BASE_DIR can be set in .env or .env.local. Relative values resolve
+# from the main checkout; .env.local overrides .env and trailing slashes are
+# ignored.
+CONFIG_ROOT="$TMP_ROOT/config"
+make_repo "$CONFIG_ROOT/main"
+cat > "$CONFIG_ROOT/main/.env" <<'ENV'
+WORKTREE_BASE_DIR="../from-env"
+ENV
+config_path=$(cd "$CONFIG_ROOT/main" && "$WORKTREE_SCRIPT" path ISSUE-CONFIG)
+assert_eq "$config_path" "$CONFIG_ROOT/from-env/issue-config" ".env WORKTREE_BASE_DIR controls path"
+cat > "$CONFIG_ROOT/main/.env.local" <<ENV
+WORKTREE_BASE_DIR="$CONFIG_ROOT/from-local/"
+ENV
+config_local_path=$(cd "$CONFIG_ROOT/main" && "$WORKTREE_SCRIPT" path ISSUE-CONFIG)
+assert_eq "$config_local_path" "$CONFIG_ROOT/from-local/issue-config" ".env.local WORKTREE_BASE_DIR overrides .env"
+
+# create uses the configured worktree parent directory, not only the path helper.
+CREATE_ROOT="$TMP_ROOT/create-custom"
+make_repo "$CREATE_ROOT/main"
+cat > "$CREATE_ROOT/main/.env" <<'ENV'
+WORKTREE_BASE_DIR="../custom-trees"
+ENV
+custom_create_out=$(cd "$CREATE_ROOT/main" && "$WORKTREE_SCRIPT" create ISSUE-CUSTOM --from main)
+assert_eq "$custom_create_out" "$CREATE_ROOT/custom-trees/issue-custom" "create reports configured WORKTREE_BASE_DIR path"
+assert_git_worktree "$CREATE_ROOT/custom-trees/issue-custom" "create writes worktree under configured WORKTREE_BASE_DIR"
 
 echo
 printf 'pass: %d   fail: %d\n' "$PASS" "$FAIL"
