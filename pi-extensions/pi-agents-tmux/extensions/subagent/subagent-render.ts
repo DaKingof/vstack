@@ -100,14 +100,15 @@ export const subagentToolRenderers = {
 				const header = queuedPaneLine(r, dashboard);
 				const task = r.task.replace(/\s+/g, " ").trim() || "queued task";
 				const firstPrefix = subagentBranch(theme, "└", cwd);
-				const nextPrefix = " ".repeat(Math.max(0, visibleWidth(firstPrefix)));
-				const textWidth = Math.max(20, width - Math.max(visibleWidth(firstPrefix), visibleWidth(nextPrefix)));
+				const labelPrefix = `${firstPrefix}${theme.fg("dim", "Task: ")}`;
+				const nextPrefix = " ".repeat(Math.max(0, visibleWidth(labelPrefix)));
+				const textWidth = Math.max(20, width - Math.max(visibleWidth(labelPrefix), visibleWidth(nextPrefix)));
 				const wrapped = wrapTextWithAnsi(task, textWidth);
 				const shown = wrapped.slice(0, 2);
 				if (wrapped.length > shown.length && shown.length > 0) shown[shown.length - 1] = truncateToWidth(`${shown[shown.length - 1]}…`, textWidth, "…");
 				return [
 					header,
-					`${firstPrefix}${theme.fg("dim", shown[0] ?? "queued task")}`,
+					`${labelPrefix}${theme.fg("dim", shown[0] ?? "queued task")}`,
 					...(shown[1] ? [`${nextPrefix}${theme.fg("dim", shown[1])}`] : []),
 				];
 			},
@@ -135,7 +136,19 @@ export const subagentToolRenderers = {
 				container.addChild(wrappedText(finalResponseSuppressedLine(theme)));
 				return;
 			}
-			container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
+			const trimmed = finalOutput.trim();
+			// JSON-shape responses (verdict/findings reports, structured tool
+			// results) get per-line semantic highlighting instead of Markdown
+			// rendering, which would otherwise drop the JSON keys + status
+			// verdicts into plain prose. Heuristic is intentionally narrow: only
+			// the most common review-shape outputs (object or array at root).
+			if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+				for (const line of trimmed.split(/\r?\n/)) {
+					container.addChild(wrappedText(highlightInlinePreview(line, theme)));
+				}
+				return;
+			}
+			container.addChild(new Markdown(trimmed, 0, 0, mdTheme));
 		};
 
 		const renderDisplayItems = (items: DisplayItem[], limit?: number) => {
@@ -223,8 +236,19 @@ export const subagentToolRenderers = {
 					: r.task
 						? oneLinePreview(r.task, 140)
 						: "completed";
-				let text = `${theme.fg("toolTitle", theme.bold("Result from"))} ${ansiMagenta(theme.bold(r.agent))}${theme.fg("dim", " · bg · ctrl+o expand")}${truncationBadge(r)}`;
-				if (preview) text += `\n${subagentBranch(theme, "└", cwd)}${highlightInlinePreview(preview, theme)}`;
+				// `previewIsTask` true when we fell back to r.task because the
+				// final output was empty or classified as a tool-echo. Label the
+				// body line with `Task:` so the row is unambiguous (otherwise the
+				// reader can't tell whether the body is what was asked or what
+				// came back).
+				const previewIsTask = !(finalOutput && !finalOutputLooksLikeToolEcho(finalOutput, toolCalls));
+				let text = `${agentStatusLine(theme, r.agent, "completed", "success", theme.fg("dim", " · bg · ctrl+o expand"))}${truncationBadge(r)}`;
+				if (preview) {
+					const body = previewIsTask
+						? `${theme.fg("dim", "Task: ")}${theme.fg("toolOutput", preview)}`
+						: highlightInlinePreview(preview, theme);
+					text += `\n${subagentBranch(theme, "└", cwd)}${body}`;
+				}
 				const outputPath = fullOutputLine(r);
 				if (outputPath) text += `\n${outputPath}`;
 				return wrappedText(text);
@@ -236,12 +260,12 @@ export const subagentToolRenderers = {
 			if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 			if (needsCompletion && r.needsCompletionReason) text += ` ${theme.fg("warning", `[${r.needsCompletionReason}]`)}`;
 			text += truncationBadge(r);
-			if (queued) text += `\n${subagentBranch(theme, "└", cwd)}${theme.fg("dim", r.task ? oneLinePreview(r.task, 120) : "queued task")}`;
+			if (queued) text += `\n${subagentBranch(theme, "└", cwd)}${theme.fg("dim", r.task ? `Task: ${oneLinePreview(r.task, 120)}` : "queued task")}`;
 			else if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 			else if (needsCompletion && r.errorMessage) text += `\n${subagentBranch(theme, "└", cwd)}${theme.fg("warning", r.errorMessage)}`;
-			else if (displayItems.length === 0) text += `\n${subagentBranch(theme, "└", cwd)}${theme.fg("dim", r.task ? oneLinePreview(r.task, 120) : "(no output)")}`;
+			else if (displayItems.length === 0) text += `\n${subagentBranch(theme, "└", cwd)}${theme.fg("dim", r.task ? `Task: ${oneLinePreview(r.task, 120)}` : "(no output)")}`;
 			else {
-				if (r.task) text += `\n${subagentBranch(theme, "├", cwd)}${theme.fg("dim", oneLinePreview(r.task, 120))}`;
+				if (r.task) text += `\n${subagentBranch(theme, "├", cwd)}${theme.fg("dim", `Task: ${oneLinePreview(r.task, 120)}`)}`;
 				text += `\n${renderDisplayItems(displayItems, collapsedItemCount)}`;
 				if (displayItems.length > collapsedItemCount) text += `\n${theme.fg("muted", "… more in ctrl+o expand")}`;
 			}
