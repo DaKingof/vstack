@@ -35,6 +35,7 @@ Set in `.env.local` — all optional:
 | `WORKTREE_SYMLINKS` | Space-separated paths to symlink into worktrees |
 | `WORKTREE_RELATIVE_SYMLINKS` | Space-separated `path=target` symlinks created inside each worktree |
 | `WORKTREE_COPIES` | Space-separated files to copy into worktrees |
+| `WORKTREE_MKDIRS` | Space-separated directories to create inside each worktree with `mkdir -p`; use for gitignored scratch dirs such as `tmp` |
 | `BOT_NAME` / `BOT_EMAIL` | Git identity for worktree commits |
 | `BOT_SIGNING_KEY` | SSH signing key for commits |
 | `BOT_REMOTE_NAME` / `BOT_REMOTE_URL` | Remote for bot pushes |
@@ -47,4 +48,5 @@ pointed at each worktree's own `AGENTS.md`:
 ```bash
 WORKTREE_SYMLINKS=".env.local .claude/agents .claude/hooks .claude/skills"
 WORKTREE_RELATIVE_SYMLINKS=".claude/CLAUDE.md=../AGENTS.md"
+WORKTREE_MKDIRS="tmp"
 ```

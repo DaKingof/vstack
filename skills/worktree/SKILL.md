@@ -51,10 +51,12 @@ Set in `.env.local`:
 | `WORKTREE_SYMLINKS` | Space-separated paths symlinked from main checkout into each worktree; include `.env.local` if worktrees should share local env/config |
 | `WORKTREE_RELATIVE_SYMLINKS` | Space-separated `path=target` symlinks created inside each worktree, with relative targets resolving from the link location |
 | `WORKTREE_COPIES` | Space-separated files copied from main checkout into each worktree |
+| `WORKTREE_MKDIRS` | Space-separated directories created inside each worktree with `mkdir -p`; use for gitignored scratch dirs such as `tmp` |
 
 Example: share local env plus generated Claude assets, but keep `.claude/CLAUDE.md` pointed at each worktree's own `AGENTS.md`:
 
 ```bash
 WORKTREE_SYMLINKS=".env.local .claude/agents .claude/hooks .claude/skills"
 WORKTREE_RELATIVE_SYMLINKS=".claude/CLAUDE.md=../AGENTS.md"
+WORKTREE_MKDIRS="tmp"
 ```

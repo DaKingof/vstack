@@ -36,6 +36,12 @@ cargo install --git https://github.com/vanillagreencom/vstack.git vstack
 vstack add vanillagreencom/vstack
 ```
 
+Nix users can also run the CLI from the flake:
+
+```bash
+nix run github:vanillagreencom/vstack -- add vanillagreencom/vstack
+```
+
 That opens an interactive installer where you pick which agents, skills, hooks, and Pi extensions to bring in, and which tools to install them into.
 
 ## How It Works
