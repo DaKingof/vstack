@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
@@ -38,9 +38,10 @@ import {
 	summarizeAttempt,
 	type BgSessionSelection,
 } from "./sessions.js";
-import { createTaskId, emitSubagentEvent } from "./tasks.js";
+import { createTaskId, emitSubagentEvent, tryEmitSubagentEvent } from "./tasks.js";
 import {
 	DETAIL_STRING_MAX_CHARS,
+	type CwdSnapshot,
 	type PreparedSingleResult,
 	type ResultLimits,
 	type SingleResult,
@@ -50,10 +51,149 @@ import {
 export type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
 type SpawnProcess = typeof spawn;
+type ExecFileProcess = typeof execFile;
 let spawnProcess: SpawnProcess = spawn;
+let execFileProcess: ExecFileProcess = execFile;
+const GIT_SNAPSHOT_TIMEOUT_MS = 5_000;
+const GIT_SNAPSHOT_MAX_BUFFER = 256 * 1024;
+const MAX_RESULT_DIAGNOSTICS = 12;
 
 export function setSingleAgentSpawnForTests(spawner?: SpawnProcess): void {
 	spawnProcess = spawner ?? spawn;
+}
+
+export function setGitExecFileForTests(execFileOverride?: ExecFileProcess): void {
+	execFileProcess = execFileOverride ?? execFile;
+}
+
+function appendResultDiagnostic(result: Pick<SingleResult, "diagnostics">, diagnostic: string): void {
+	const compact = diagnostic.replace(/\s+/g, " ").trim();
+	if (!compact) return;
+	const diagnostics = [...(result.diagnostics ?? [])];
+	if (!diagnostics.includes(compact)) diagnostics.push(compact);
+	result.diagnostics = diagnostics.slice(-MAX_RESULT_DIAGNOSTICS);
+}
+
+interface GitCommandResult {
+	error?: unknown;
+	stderr: string;
+	stdout: string;
+}
+
+function execGit(cwd: string, args: string[]): Promise<GitCommandResult> {
+	return new Promise((resolve, reject) => {
+		try {
+			execFileProcess(
+				"git",
+				["--no-optional-locks", "-C", cwd, ...args],
+				{
+					encoding: "utf8",
+					env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+					maxBuffer: GIT_SNAPSHOT_MAX_BUFFER,
+					timeout: GIT_SNAPSHOT_TIMEOUT_MS,
+				},
+				(error, stdout, stderr) => {
+					resolve({ error: error ?? undefined, stderr: String(stderr ?? "").trimEnd(), stdout: String(stdout ?? "").trimEnd() });
+				},
+			);
+		} catch (error) {
+			reject(error);
+		}
+	});
+}
+
+function gitFailureDiagnostic(cwd: string, args: string[], result: GitCommandResult | { error: unknown; stderr?: string }): string {
+	const stderr = result.stderr?.trim();
+	const detail = stderr || stringifyError(result.error);
+	return `cwdSnapshot git failed in ${cwd}: git --no-optional-locks ${args.join(" ")} (${detail})`;
+}
+
+async function readGit(cwd: string, args: string[], addDiagnostic: (diagnostic: string) => void): Promise<string | undefined> {
+	try {
+		const result = await execGit(cwd, args);
+		if (result.error) {
+			addDiagnostic(gitFailureDiagnostic(cwd, args, result));
+			return undefined;
+		}
+		return result.stdout;
+	} catch (error) {
+		addDiagnostic(gitFailureDiagnostic(cwd, args, { error }));
+		return undefined;
+	}
+}
+
+async function snapshotCwdGitState(cwd: string | undefined, addDiagnostic: (diagnostic: string) => void): Promise<CwdSnapshot | undefined> {
+	if (!cwd) return undefined;
+	const resolvedCwd = path.resolve(cwd);
+	const insideWorkTree = (await readGit(resolvedCwd, ["rev-parse", "--is-inside-work-tree"], addDiagnostic))?.trim();
+	if (insideWorkTree !== "true") return undefined;
+	// Snapshot commands are read-only and run with --no-optional-locks plus GIT_OPTIONAL_LOCKS=0
+	// so agent triage never creates .git/index.lock or blocks concurrent worker git operations.
+	const [rawHead, dirtyStatus, lastCommitSubject] = await Promise.all([
+		readGit(resolvedCwd, ["rev-parse", "HEAD"], addDiagnostic),
+		readGit(resolvedCwd, ["status", "--porcelain=v1"], addDiagnostic),
+		readGit(resolvedCwd, ["log", "-1", "--pretty=%s"], addDiagnostic),
+	]);
+	if (rawHead == null || dirtyStatus == null || lastCommitSubject == null) return undefined;
+	const head = rawHead.trim();
+	if (!/^[0-9a-f]{40}$/.test(head)) {
+		addDiagnostic(`cwdSnapshot git returned malformed HEAD for ${resolvedCwd}: ${JSON.stringify(rawHead)}`);
+		return undefined;
+	}
+	return {
+		cwd: resolvedCwd,
+		dirty: dirtyStatus.length > 0,
+		dirtyStatus,
+		head,
+		lastCommit: { subject: lastCommitSubject },
+		lastCommitSubject,
+		status: dirtyStatus,
+	};
+}
+
+function streamEventName(event: any): string | undefined {
+	if (typeof event?.event === "string") return event.event;
+	if (typeof event?.type === "string") return event.type;
+	return undefined;
+}
+
+function streamEventPayload(event: any): any {
+	if (event?.type === "event" && event?.data && typeof event.data === "object") return event.data;
+	return event;
+}
+
+function eventContentValue(payload: any): unknown {
+	if (payload && typeof payload === "object" && "content" in payload) return payload.content;
+	if (payload?.message && typeof payload.message === "object" && "content" in payload.message) return payload.message.content;
+	return undefined;
+}
+
+function contentHasTextPart(content: unknown): boolean {
+	if (!Array.isArray(content)) return false;
+	return content.some((part) => {
+		if (!part || typeof part !== "object") return false;
+		const candidate = part as { text?: unknown; type?: unknown };
+		return candidate.type === "text" && typeof candidate.text === "string" && candidate.text.length > 0;
+	});
+}
+
+function agentEndHasTextlessContent(payload: any): boolean {
+	const content = eventContentValue(payload);
+	if (content == null) return true;
+	return Array.isArray(content) && !contentHasTextPart(content);
+}
+
+function malformedAgentEndContentDiagnostic(payload: any): string | undefined {
+	const content = eventContentValue(payload);
+	if (content == null || Array.isArray(content)) return undefined;
+	return `compact-then-empty detector skipped malformed agent_end content: expected array/null/undefined, got ${typeof content}`;
+}
+
+function compactThenEmptySummary(cwdSnapshot?: CwdSnapshot): string {
+	const base = "Subagent compacted and exited without a final text message; inspect the worker cwd before assuming failure.";
+	if (!cwdSnapshot) return base;
+	const dirty = cwdSnapshot.dirty ? "dirty" : "clean";
+	return `${base} HEAD ${cwdSnapshot.head.slice(0, 12)} (${dirty}) ${cwdSnapshot.lastCommit.subject}`;
 }
 
 export function formatTruncationNotice(
@@ -475,6 +615,9 @@ async function runSingleAgentAttempt(
 				stdio: ["ignore", "pipe", "pipe"],
 			});
 			let buffer = "";
+			let sawSessionCompact = false;
+			let compactThenEmptyAgentEnd = false;
+			let postCompactAssistantHasText = false;
 
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
@@ -486,12 +629,27 @@ async function runSingleAgentAttempt(
 					appendTranscript({ stream: "stdout", raw: line, parseError: true });
 					return;
 				}
+				const eventName = streamEventName(event);
+				const payload = streamEventPayload(event);
 
-				if (event.type === "message_end" && event.message) {
-					const msg = event.message as Message;
+				if (eventName === "session_compact") {
+					sawSessionCompact = true;
+					compactThenEmptyAgentEnd = false;
+					postCompactAssistantHasText = false;
+				}
+
+				if (eventName === "agent_end") {
+					const malformedDiagnostic = malformedAgentEndContentDiagnostic(payload);
+					if (malformedDiagnostic) appendResultDiagnostic(currentResult, malformedDiagnostic);
+					compactThenEmptyAgentEnd = sawSessionCompact && !postCompactAssistantHasText && agentEndHasTextlessContent(payload);
+				}
+
+				if (eventName === "message_end" && payload.message) {
+					const msg = payload.message as Message;
 					currentResult.messages.push(msg);
 
 					if (msg.role === "assistant") {
+						if (sawSessionCompact && contentHasTextPart(msg.content)) postCompactAssistantHasText = true;
 						currentResult.usage.turns++;
 						const usage = msg.usage;
 						if (usage) {
@@ -509,17 +667,17 @@ async function runSingleAgentAttempt(
 					emitUpdate();
 				}
 
-				const hasContextOverflowEnvelope = isContextLengthExceededEnvelope(event) || isContextLengthExceededText(line);
-				if (event.type === "error" || hasContextOverflowEnvelope) {
+				const hasContextOverflowEnvelope = isContextLengthExceededEnvelope(event) || isContextLengthExceededEnvelope(payload) || isContextLengthExceededText(line);
+				if (eventName === "error" || hasContextOverflowEnvelope) {
 					const rawEnvelope = line;
-					const errorText = typeof event.error === "string" ? event.error : JSON.stringify(event.error ?? event);
+					const errorText = typeof payload.error === "string" ? payload.error : JSON.stringify(payload.error ?? payload ?? event);
 					currentResult.errorEnvelope = rawEnvelope;
 					currentResult.errorMessage = errorText;
 					currentResult.stderr += `${rawEnvelope}\n`;
 					emitUpdate();
 				}
 
-				if (event.type === "tool_result_end") {
+				if (eventName === "tool_result_end") {
 					emitUpdate();
 				}
 			};
@@ -539,6 +697,7 @@ async function runSingleAgentAttempt(
 
 			proc.on("close", (code) => {
 				if (buffer.trim()) processLine(buffer);
+				if (compactThenEmptyAgentEnd) currentResult.needsCompletionReason = "compact-then-empty";
 				appendTranscript({ type: "exit", code: code ?? 0, attempt });
 				Promise.allSettled(transcriptWrites).finally(() => resolve(code ?? 0));
 			});
@@ -582,6 +741,43 @@ async function runSingleAgentAttempt(
 				attempt,
 			});
 			throw new Error("Agent was aborted");
+		}
+		if (
+			currentResult.needsCompletionReason === "compact-then-empty" &&
+			!resultHasContextLengthExceeded(currentResult)
+		) {
+			currentResult.status = "needs_completion";
+			currentResult.stopReason = "needs_completion";
+			const cwdSnapshot = await snapshotCwdGitState(cwd ?? defaultCwd, (diagnostic) => appendResultDiagnostic(currentResult, diagnostic));
+			if (cwdSnapshot) currentResult.cwdSnapshot = cwdSnapshot;
+			const summary = compactThenEmptySummary(cwdSnapshot);
+			currentResult.errorMessage = summary;
+			const needsCompletionPayload = {
+				mode: "oneshot",
+				agent: agent.name,
+				taskId: oneShotTaskId,
+				task,
+				status: "needs_completion",
+				reason: "compact-then-empty",
+				summary,
+				runtimeRoot,
+				transcriptPath,
+				model: currentResult.model,
+				usage: currentResult.usage,
+				sessionKey: session.key,
+				sessionPath: session.path,
+				ephemeralSession: session.ephemeral,
+				attempt,
+				diagnostics: currentResult.diagnostics,
+				...(cwdSnapshot ? { cwdSnapshot } : {}),
+			};
+			const emitted = tryEmitSubagentEvent(pi, "subagents:needs_completion", needsCompletionPayload);
+			if (!emitted.ok) {
+				const diagnostic = `Failed to emit subagents:needs_completion for ${agent.name} (${oneShotTaskId}): ${emitted.error ?? "unknown error"}`;
+				appendResultDiagnostic(currentResult, diagnostic);
+				appendTranscript({ type: "diagnostic", diagnostic, attempt });
+			}
+			return currentResult;
 		}
 		const failed = exitCode !== 0 || currentResult.stopReason === "error" || currentResult.stopReason === "aborted";
 		emitSubagentEvent(pi, failed ? "subagents:failed" : "subagents:completed", {
