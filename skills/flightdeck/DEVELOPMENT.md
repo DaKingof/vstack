@@ -19,6 +19,37 @@ Master-state schema `1.1` is the compatibility bridge toward the v2 entries mode
 
 Use the TrackedEntry seam everywhere new code reads tracked sessions. Core helpers (`readTrackedEntries`, `writeTrackedEntry`, `entryIdForIssue`, `issueIdForEntry`) live under `lib/flightdeck-core/src/state/`; `pane-registry list --format json` and `flightdeck-state tracked-entries` expose the same normalized view to scripts. `pi-flightdeck` mirrors the seam with read-only `TrackedSession` / `TrackedState` render types, prefers schema-1.1 `.entries`, folds legacy `.issues`, and uses `owner.pane_id` for default owner-scoped rendering. Do not add fresh direct `.issues` reads outside compatibility code.
 
+## `flightdeck-session` flag reference
+
+The README points users at natural-language invocation; this is the underlying script's actual surface for contributors and AI callers. All `start` invocations use `tmux new-window` (never split panes), set `FLIGHTDECK_MANAGED=1` + `FLIGHTDECK_CHILD_PANE=1` in the launched environment, capture stable `pane_id`/`window_id`, and register through `pane-registry init-entry`.
+
+```bash
+# Managed ad-hoc Pi session.
+skills/flightdeck/scripts/flightdeck-session start \
+  --session-id scratch-pi \
+  --title "Scratch Pi" \
+  --cwd "$PWD" \
+  --harness pi \
+  --prompt "Investigate this repo and report risks" \
+  --kind adhoc
+
+# Arbitrary shell command in a tracked tmux window.
+skills/flightdeck/scripts/flightdeck-session start \
+  --session-id logs-1 \
+  --title "Log watcher" \
+  --cwd "$PWD" \
+  --harness shell \
+  --cmd "tail -f tmp/app.log"
+
+# Attach an existing pane without launching a new window.
+skills/flightdeck/scripts/flightdeck-session attach \
+  --pane %33 \
+  --harness pi \
+  --title "Manual Pi"
+```
+
+`pane-registry list --format json` returns normalized entries for both ad-hoc sessions and legacy issue rows. `session watch` uses the generic session loop; issue `watch` layers merge/PR workflow logic on top. Issue-only prompt tags on ad-hoc sessions trigger a `domain-mismatch` guard; lookups that cannot determine `kind` must pass `--entry-kind-unknown` or the legacy `--allow-missing-kind` flag.
+
 ## Tests
 
 ### Bun parity suite

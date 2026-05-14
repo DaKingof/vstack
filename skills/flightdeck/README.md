@@ -25,12 +25,7 @@ When a channel isn't available, flightdeck falls back to reading the agent's ter
 
 A small background daemon polls the agent panes a few times a second, detects when an agent has something to ask, classifies the prompt against a library of known shapes, and wakes the master agent. The master either auto-answers (most prompts have a learned default) or pauses for the human.
 
-The watch layer is split into two modes:
-
-- **Generic session mode** (`workflows/session-watch.md` + `session-handle-prompt.md`) tracks any tmux-window entry and handles only domain-neutral prompts such as structured questions, bash permission prompts, safe bounded choices, terminal completion, and Pi background-task exits.
-- **Issue mode** (`workflows/watch.md` + `handle-prompt.md`) extends the generic loop with GitHub/Linear/worktree decisions: cleanup, rebase, force-push, bot-review/CI recovery, audit relations, merge planning, scope creep, and descope actions.
-
-Issue-only prompt tags on ad-hoc sessions are guarded as `domain-mismatch`: Flightdeck logs a warning, takes no destructive action, and asks the master/user how to proceed. Missing kind now fails closed by default, and lookup misses should pass `--entry-kind-unknown`; legacy issue callers must explicitly opt in with `--allow-missing-kind` while they migrate.
+The watch layer runs in one of two modes per tracked entry. **Generic session mode** handles structured questions, bash permission prompts, safe bounded choices, and Pi background-task exits. **Issue mode** extends that with GitHub/Linear/worktree decisions: cleanup, rebase, force-push, bot-review/CI recovery, merge planning, scope creep. Mismatched prompts (issue-only tags on a generic session) pause for the user rather than acting.
 
 When tracked entries are terminal, Flightdeck writes a summary and hands control back. Generic-only sessions get a local session summary. Sessions with any issue entries keep the issue/PR/new-issue recommendation summary; mixed sessions include both.
 
@@ -42,43 +37,7 @@ When tracked entries are terminal, Flightdeck writes a summary and hands control
 
 ## Ad-hoc sessions
 
-Existing issue workflows (`start`, `start new`, `parallel-check`) are unchanged; ad-hoc sessions are additive.
-
-Use `flightdeck-session` when you need Flightdeck to track a tmux window that is not tied to an issue/worktree workflow.
-
-Launch a managed ad-hoc Pi session:
-
-```bash
-skills/flightdeck/scripts/flightdeck-session start \
-  --session-id scratch-pi \
-  --title "Scratch Pi" \
-  --cwd "$PWD" \
-  --harness pi \
-  --prompt "Investigate this repo and report risks" \
-  --kind adhoc
-```
-
-Launch any command in a new tracked tmux window:
-
-```bash
-skills/flightdeck/scripts/flightdeck-session start \
-  --session-id logs-1 \
-  --title "Log watcher" \
-  --cwd "$PWD" \
-  --harness shell \
-  --cmd "tail -f tmp/app.log"
-```
-
-Attach an existing Pi pane without launching a new window:
-
-```bash
-skills/flightdeck/scripts/flightdeck-session attach \
-  --pane %33 \
-  --harness pi \
-  --title "Manual Pi"
-```
-
-All starts use `tmux new-window` (never split panes), set `FLIGHTDECK_MANAGED=1` and `FLIGHTDECK_CHILD_PANE=1` in the launched command environment, capture stable `pane_id`/`window_id` metadata, and register through `pane-registry init-entry`. `pane-registry list --format json` returns normalized entries for both ad-hoc sessions and legacy issue rows. `session watch` uses the generic session loop; issue `watch` layers merge/PR workflow logic on top.
+Ask the agent to track an ad-hoc tmux window (a scratch Pi pane, a log tail, an extra worker) and it will call `flightdeck session start` or `flightdeck session attach` for you. Useful when you want supervision and a dashboard row but no issue/worktree wiring. See [`DEVELOPMENT.md`](./DEVELOPMENT.md) for the script flag reference.
 
 ## Issue workflows
 
@@ -175,11 +134,11 @@ The `patterns/` directory documents the decisions the master agent makes — *wh
 You don't run any of these by hand in normal use — the skill calls them.
 
 - `open-terminal` — launches issue worktree tmux windows with the chosen harness.
-- `flightdeck-session` — launches or attaches generic tracked tmux sessions without fake issue ids.
-- `flightdeck-state` — reads/writes the session's master state file, including schema `1.1` tracked-entry normalization (`tracked-entries`, `write-entry`).
+- `flightdeck-session` — launches or attaches generic tracked tmux sessions.
+- `flightdeck-state` — reads/writes the session's master state file.
 - `flightdeck-daemon` — background poller; wakes the master.
 - `pane-registry`, `pane-poll`, `pane-respond` — pane tracking and IO.
-- `prompt-classify` — pattern-matches agent output against known prompt shapes and guards issue-only tags on non-issue entries as `domain-mismatch`.
+- `prompt-classify` — pattern-matches agent output against known prompt shapes.
 - `pr-conflict-graph`, `parallel-groups` — issue-mode merge-order planning.
 - `codex-app-server-spawn` / `-stop` — Codex bridge server lifecycle.
 

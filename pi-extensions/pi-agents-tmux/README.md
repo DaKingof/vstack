@@ -14,20 +14,9 @@ Delegate work to specialized agents from a running Pi session. Agents run either
 - Grouped completion notifications batch multiple agents finishing together.
 - `taskId` retrieval, mid-run steering, and pane stop without losing memory.
 - Stop kills the tmux process but preserves the session — next launch resumes it.
-- Bg agents use fresh one-shot lanes by default; explicit `sessionKey` opts into memory reuse with a context-budget guard.
-- Large parallel calls are auto-batched internally, and pane idle waits are first-class via `wait_for_subagent_idle`.
-
-## Closes parts of issue #27
-
-This package implements the pi-agents-tmux portions of vanillagreencom/vstack#27:
-
-- #1 — fresh one-shot bg subagent sessions by default.
-- #2 — distinct ephemeral lanes for same-agent parallel and chain items.
-- #3 — one retry on `context_length_exceeded` with structured attempt details.
-- #6 — reused-session context-budget preflight guard.
-- #10 — inventory-aware launch guard for single, parallel, and chain dispatch.
-- #12 — first-class pane idle wait via `wait_for_subagent_idle` / `waitFor: "idle"`.
-- #13 — transparent auto-batching above the internal parallel cap.
+- Bg agents get fresh sessions per call by default; opt into shared memory with an explicit `sessionKey`.
+- Inventory-aware launch guard rejects unknown agent names with the available list.
+- Large parallel calls are auto-batched. Pane idle waits use `wait_for_subagent_idle`.
 
 ## Install
 
@@ -78,13 +67,9 @@ Useful options: `agentScope` (`project` default, `user`, `both`), `cwd` per task
 
 Persistent panes return a `taskId`. Keep it to retrieve or steer the task later.
 
-Bg agents start in a fresh one-shot lane by default. Pass `sessionKey: "<stable-id>"` only when you want a named memory lane reused across calls. Pane agents persist via their own session file and ignore `sessionKey`.
+Bg agents run in a fresh one-shot session by default. Pass `sessionKey: "<stable-id>"` to share a named memory lane across calls. Pane agents persist via their own session file and ignore `sessionKey`. Reused lanes get a context-budget preflight — see Settings.
 
-Parallel and chain items that omit `sessionKey` automatically receive distinct one-shot lanes, including same-agent parallel tasks. Calls above the internal batch size (default 8) are split into batches transparently.
-
-Explicit reused `sessionKey` lanes run a preflight context-budget heuristic before launch. Default policy refuses when estimated saved context exceeds 80% of the configured model limit; settings can raise/lower the threshold or warn instead.
-
-Agent names are validated against project/user inventory for the selected `agentScope` before any launch. Unknown names fail with structured details listing missing and available agents; no similar-name redirect is attempted.
+Unknown agent names fail with a structured error listing missing and available agents in the selected `agentScope`. No similar-name redirect is attempted.
 
 ## Commands
 
@@ -160,8 +145,6 @@ Everything after the frontmatter is the agent's system prompt.
 
 Pane tasks move through `queued → running → completed | blocked | failed`. If a child ends a turn without a valid completion record, the task is marked `needs_completion` and the child shows a warning.
 
-Pane registries and task records are stored in sidecar files and mirrored into session custom entries only when the snapshot changes and the session file's on-disk leaf still matches the active in-memory leaf. This keeps duplicate or orphaned Pi processes from advancing an older branch and making `/resume` land before the latest visible turns.
-
 ## Result retrieval and steering
 
 Dispatch and end your turn — the extension wakes the parent on completion. Use `get_subagent_result` only as a fallback if you suspect a missed wake event. Pass `wait: true` to block the current turn (use sparingly).
@@ -170,13 +153,13 @@ Dispatch and end your turn — the extension wakes the parent on completion. Use
 { "taskId": "iced-..." }
 ```
 
-Wait for a pane agent to become idle without shell polling:
+Wait for a pane agent to become idle without shell polling via the `wait_for_subagent_idle` tool:
 
 ```json
 { "agent": "iced", "timeoutMs": 30000 }
 ```
 
-Use the `wait_for_subagent_idle` tool for this. It reports `idle-after-busy` only after observing the pane leave idle first; if the pane never becomes busy it returns `never-busy` instead of a false completion. `get_subagent_result` also accepts `waitFor: "idle"` for compatibility with existing result lookups.
+`get_subagent_result` also accepts `waitFor: "idle"` for the same effect.
 
 Use `steer_subagent` for mid-run correction. It targets `pi-session-bridge` when available; otherwise it queues a steering note for the pane to read when idle.
 
