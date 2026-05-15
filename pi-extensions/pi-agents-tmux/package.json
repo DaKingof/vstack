@@ -103,7 +103,7 @@
         {
           "key": "dashboard",
           "label": "Show agent dashboard",
-          "description": "Render a persistent agent activity card above the editor with active/completed agents, pane ids, bridge state, summaries, and artifact hints.",
+          "description": "Render a persistent agent activity card above the editor with active/completed agents, bridge state, recent activity, and usage.",
           "type": "boolean",
           "default": true,
           "category": "Rendering",

@@ -24,6 +24,7 @@ import { renderDashboardWidgetLines } from "../extensions/subagent/dashboard.js"
 import { COMPLETION_SUMMARY_UNAVAILABLE, extractLastAssistantTextFromTranscriptContent, highlightInlinePreview, oneLinePreview } from "../extensions/subagent/format.js";
 import { oneShotTranscriptPath } from "../extensions/subagent/paths.js";
 import { formatTaskRecordResult } from "../extensions/subagent/renderers.js";
+import { animateSpinnersEnabled } from "../extensions/subagent/settings.js";
 import { subagentToolRenderers } from "../extensions/subagent/subagent-render.js";
 import {
 	backfillTaskSummaryFromTranscript,
@@ -54,6 +55,24 @@ function tempRuntime(): string {
 	return mkdtempSync(join(tmpdir(), "pi-agents-dashboard-ux-"));
 }
 
+function writeManagerConfig(cwd: string, config: Record<string, unknown>): void {
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+	writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({
+		vstack: { extensionManager: { config: { "@vanillagreen/pi-agents-tmux": config } } },
+	}));
+}
+
+function withTempPiUserDir<T>(fn: () => T): T {
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = tempRuntime();
+	try {
+		return fn();
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+	}
+}
+
 function record(agent: string, taskId: string, createdAt: string, patch: Partial<PaneTaskRecord> = {}): PaneTaskRecord {
 	return {
 		taskId,
@@ -80,7 +99,6 @@ function uiState(patch: Partial<AgentBrowserUiState> = {}): AgentBrowserUiState 
 		search: "",
 		selected: 0,
 		scroll: 0,
-		agentSubtab: 0,
 		monitorSelected: 0,
 		monitorScroll: 0,
 		monitorSubtab: 0,
@@ -146,7 +164,9 @@ test("session-mode rendering ignores corrupt mode values", async () => {
 	assert.match(renderSubagentSingle(singleResult({ sessionMode: "foo" as any })), /completed · bg · ctrl\+o expand/);
 	assert.doesNotMatch(renderSubagentSingle(singleResult({ sessionMode: "foo" as any })), / · foo/);
 
-	const dashboard = renderDashboardWidgetLines({ collapsed: false, mode: "normal", visible: true, items: { a: dashboardItem({ sessionMode: "foo" as any }) } }, theme as any, process.cwd(), 220).join("\n");
+	const cwd = tempRuntime();
+	writeManagerConfig(cwd, { dashboard: true });
+	const dashboard = renderDashboardWidgetLines({ collapsed: false, mode: "normal", visible: true, items: { a: dashboardItem({ sessionMode: "foo" as any }) } }, theme as any, cwd, 220).join("\n");
 	assert.match(dashboard, /completed · bg/);
 	assert.doesNotMatch(dashboard, / · foo/);
 
@@ -163,25 +183,24 @@ test("long sessionKey chip keeps suffix to avoid collisions", () => {
 });
 
 test("dashboard mini widget shows session-mode chips", () => {
-	const fresh = renderDashboardWidgetLines({ collapsed: false, mode: "normal", visible: true, items: { a: dashboardItem({ sessionMode: "fresh" }) } }, theme as any, process.cwd(), 220).join("\n");
+	const cwd = tempRuntime();
+	writeManagerConfig(cwd, { dashboard: true });
+	const fresh = renderDashboardWidgetLines({ collapsed: false, mode: "normal", visible: true, items: { a: dashboardItem({ sessionMode: "fresh" }) } }, theme as any, cwd, 220).join("\n");
 	assert.match(fresh, /completed · bg · fresh/);
 
-	const lane = renderDashboardWidgetLines({ collapsed: false, mode: "normal", visible: true, items: { a: dashboardItem({ sessionMode: "resumed", sessionKey: "very-long-session-key" }) } }, theme as any, process.cwd(), 220).join("\n");
+	const lane = renderDashboardWidgetLines({ collapsed: false, mode: "normal", visible: true, items: { a: dashboardItem({ sessionMode: "resumed", sessionKey: "very-long-session-key" }) } }, theme as any, cwd, 220).join("\n");
 	assert.match(lane, /completed · bg · lane:very-l…-key/);
 
-	const paneNew = renderDashboardWidgetLines({ collapsed: false, mode: "normal", visible: true, items: { a: dashboardItem({ kind: "pane", sessionMode: "new" }) } }, theme as any, process.cwd(), 220).join("\n");
+	const paneNew = renderDashboardWidgetLines({ collapsed: false, mode: "normal", visible: true, items: { a: dashboardItem({ kind: "pane", sessionMode: "new" }) } }, theme as any, cwd, 220).join("\n");
 	assert.match(paneNew, /completed · pane · new/);
 
-	const paneResumed = renderDashboardWidgetLines({ collapsed: false, mode: "normal", visible: true, items: { a: dashboardItem({ kind: "pane", sessionMode: "resumed" }) } }, theme as any, process.cwd(), 220).join("\n");
+	const paneResumed = renderDashboardWidgetLines({ collapsed: false, mode: "normal", visible: true, items: { a: dashboardItem({ kind: "pane", sessionMode: "resumed" }) } }, theme as any, cwd, 220).join("\n");
 	assert.match(paneResumed, /completed · pane · resumed/);
 });
 
 test("dashboard spinner setting replaces running animation with static gear", () => {
 	const cwd = tempRuntime();
-	mkdirSync(join(cwd, ".pi"), { recursive: true });
-	writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({
-		vstack: { extensionManager: { config: { "@vanillagreen/pi-agents-tmux": { animateSpinners: false } } } },
-	}));
+	writeManagerConfig(cwd, { dashboard: true, animateSpinners: false });
 
 	const rendered = renderDashboardWidgetLines({ collapsed: false, mode: "normal", visible: true, items: { a: dashboardItem({ status: "running" }) } }, theme as any, cwd, 220).join("\n");
 
@@ -189,9 +208,35 @@ test("dashboard spinner setting replaces running animation with static gear", ()
 	assert.doesNotMatch(rendered, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
 
 	const running = record("planner", "planner-1700000000-aaaaaaaa", "2026-05-14T05:00:00.000Z", { kind: "pane", status: "running" });
-	const tree = renderMonitorTree(monitorTreeRows(buildMonitorSessionGroups([running])), [running], new Set(), uiState({ tab: "monitor", pane: "list" }), 120, theme as any, 10, false).join("\n");
+	const animateSpinners = animateSpinnersEnabled(cwd);
+	assert.equal(animateSpinners, false);
+	const tree = renderMonitorTree(monitorTreeRows(buildMonitorSessionGroups([running])), [running], new Set(), uiState({ tab: "monitor", pane: "list" }), 120, theme as any, 10, animateSpinners).join("\n");
+	const detail = renderMonitorSessionDetail(buildMonitorSessionGroups([running])[0], taskNumberById([running]), uiState({ tab: "monitor" }), 140, 20, theme as any, animateSpinners).join("\n");
 	assert.match(tree, /\uf013/);
 	assert.doesNotMatch(tree, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+	assert.match(detail, /\uf013/);
+	assert.doesNotMatch(detail, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+});
+
+test("spinner setting defaults and project override precedence", () => {
+	withTempPiUserDir(() => {
+		const cwd = tempRuntime();
+		assert.equal(animateSpinnersEnabled(cwd), true);
+
+		writeManagerConfig(cwd, { animateSpinners: "no" });
+		assert.equal(animateSpinnersEnabled(cwd), true);
+
+		const userDir = process.env.PI_CODING_AGENT_DIR!;
+		mkdirSync(userDir, { recursive: true });
+		writeFileSync(join(userDir, "settings.json"), JSON.stringify({
+			vstack: { extensionManager: { config: { "@vanillagreen/pi-agents-tmux": { animateSpinners: false } } } },
+		}));
+		writeManagerConfig(cwd, { animateSpinners: true });
+		assert.equal(animateSpinnersEnabled(cwd), true);
+
+		writeManagerConfig(cwd, { animateSpinners: false });
+		assert.equal(animateSpinnersEnabled(cwd), false);
+	});
 });
 
 test("trace summary includes session line only when sessionMode is persisted", async () => {
@@ -386,7 +431,7 @@ test("Monitor tab line replaces History", () => {
 });
 
 test("Monitor footer omits filter and transcript toggle hints", () => {
-	const footer = monitorFooterHint(uiState({ tab: "monitor", pane: "inspector" }), theme as any, true).replace(/\x1b\[[0-9;]*m/g, "");
+	const footer = monitorFooterHint(theme as any).replace(/\x1b\[[0-9;]*m/g, "");
 
 	assert.match(footer, /enter open\/toggle/);
 	assert.doesNotMatch(footer, /filter|x expand|x compact/);

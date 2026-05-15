@@ -46,6 +46,10 @@ export function isDashboardWorkingStatus(status: SubagentDashboardItem["status"]
 	return status === "running" || status === "queued" || status === "waiting";
 }
 
+export function isDashboardAnimatingStatus(status: SubagentDashboardItem["status"]): boolean {
+	return status === "running";
+}
+
 export function isDashboardAttentionStatus(status: SubagentDashboardItem["status"]): boolean {
 	return status === "failed" || status === "blocked" || status === "needs_completion" || status === "unknown";
 }

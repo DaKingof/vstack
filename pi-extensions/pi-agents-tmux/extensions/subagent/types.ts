@@ -106,7 +106,6 @@ export interface AgentBrowserUiState {
 	search: string;
 	selected: number;
 	scroll: number;
-	agentSubtab: number;
 	monitorSelected: number;
 	monitorScroll: number;
 	monitorSubtab: number;

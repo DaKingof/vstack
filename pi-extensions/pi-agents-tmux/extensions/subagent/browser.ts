@@ -23,7 +23,7 @@ import {
 } from "./agents.js";
 import {
 	dashboardStatusIcon,
-	isDashboardWorkingStatus,
+	isDashboardAnimatingStatus,
 	sortDashboardItems,
 } from "./dashboard.js";
 import {
@@ -744,8 +744,10 @@ function monitorStatusIcon(status: PaneTaskStatus, theme: Theme, animateSpinners
 	if (status === "completed") return theme.fg("success", ICONS.check);
 	if (status === "failed") return theme.fg("error", ICONS.times);
 	if (status === "blocked") return theme.fg("warning", ICONS.times);
+	if (status === "needs_completion") return theme.fg("warning", ICONS.warning);
 	if (status === "running") return dashboardStatusIcon("running", theme, { animateSpinners });
 	if (status === "queued") return theme.fg("warning", ICONS.clock);
+	if (status === "unknown") return theme.fg("warning", ICONS.warning);
 	return theme.fg("muted", "·");
 }
 
@@ -1093,7 +1095,7 @@ function monitorTaskTitle(record: PaneTaskRecord, taskNumber: number | undefined
 	return `${agentPaneTitle(theme, "Detail", active)} ${ansiMagenta(theme.bold(`${record.agent}${taskNumberText}`))}${theme.fg("dim", " · ")}${monitorStatusText(record.status, theme)}${theme.fg("dim", " · ")}${theme.fg("muted", kind)}${sessionPart}${modelPart}`;
 }
 
-export function monitorFooterHint(_ui: AgentBrowserUiState, theme: Theme, _taskDetailFocused = false): string {
+export function monitorFooterHint(theme: Theme): string {
 	return `${ansiYellow("tab")} ${theme.fg("dim", "switch · ")}${ansiYellow("↑/↓ -/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "tree↔detail · ")}${ansiYellow("enter")} ${theme.fg("dim", "open/toggle")}${theme.fg("dim", " · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
 }
 
@@ -1275,7 +1277,7 @@ export function renderMonitorSessionDetail(group: MonitorSessionGroup | undefine
 		"",
 		"Task list",
 		"---------",
-		...group.records.map((record) => `${monitorStatusIcon(record.status, theme, animateSpinners)} Task ${monitorTaskRowLabel(record, taskNumbers)} · ${record.status}`),
+		...group.records.map((record) => `${monitorStatusIcon(record.status, theme, animateSpinners)} Task ${monitorTaskRowLabel(record, taskNumbers)} · ${monitorStatusText(record.status, theme)}`),
 		"",
 		"Select a task row in the Monitor tree to open task detail.",
 	].filter(Boolean);
@@ -1325,7 +1327,6 @@ function renderUnifiedAgentDetail(
 	rows: number,
 	theme: Theme,
 ): string[] {
-	ui.agentSubtab = 0;
 	return renderAgentInspector(row?.agent, statuses, ui, width, rows, theme);
 }
 
@@ -1350,7 +1351,8 @@ function renderAgentsBody(
 	const right = renderUnifiedAgentDetail(selectedRow, statuses, ui, rightWidth, bodyRows, theme);
 	const rows = bodyRows;
 	const searchLine = theme.bg("toolPendingBg", agentPad(` > ${ui.search}${theme.inverse(" ")}`, width));
-	const filterLine = `${theme.fg("muted", "all scopes")}: ${rowsForList.length} rows · ${discovery.agents.length} agents · ${paneCount} pane · ${liveCount} live`;
+	const scopeLabel = ui.scope === "both" ? "all scopes" : `${ui.scope} scope`;
+	const filterLine = `${theme.fg("muted", scopeLabel)}: ${rowsForList.length} rows · ${discovery.agents.length} agents · ${paneCount} pane · ${liveCount} live`;
 	const filterLines = wrapTextWithAnsi(filterLine, width);
 	const lines = [searchLine, ...filterLines, agentDivider(width, theme)];
 	for (let i = 0; i < rows; i += 1) {
@@ -1376,8 +1378,8 @@ function createAgentsBrowserComponent(
 	let closed = false;
 	let resizeTimer: ReturnType<typeof setTimeout> | undefined;
 	const spinnersAnimated = () => animateSpinnersEnabled(cwd);
-	const animationTimer = spinnersAnimated() ? setInterval(() => {
-		if (!closed && spinnersAnimated() && getActiveItems().some((item) => isDashboardWorkingStatus(item.status))) requestRender();
+	const animationTimer = getActiveItems().some((item) => isDashboardAnimatingStatus(item.status)) ? setInterval(() => {
+		if (!closed && spinnersAnimated() && getActiveItems().some((item) => isDashboardAnimatingStatus(item.status))) requestRender();
 	}, 120) : undefined;
 	animationTimer?.unref?.();
 	const scheduleResizeRender = () => {
@@ -1461,7 +1463,6 @@ function createAgentsBrowserComponent(
 		ui.tab = "agents";
 		ui.selected = 0;
 		ui.scroll = 0;
-		ui.agentSubtab = 0;
 		ui.inspectorScroll = 0;
 		ui.pane = "list";
 		requestRender();
@@ -1496,7 +1497,6 @@ function createAgentsBrowserComponent(
 		if (matchesKey(data, "shift+tab")) return switchTab(-1);
 		if (matchesKey(data, "left")) {
 			if (ui.tab === "agents" && ui.pane === "inspector") {
-				ui.agentSubtab = 0;
 				ui.pane = "list";
 				requestRender();
 				return;
@@ -1522,7 +1522,6 @@ function createAgentsBrowserComponent(
 					requestRender();
 					return;
 				}
-				ui.agentSubtab = 0;
 				return;
 			}
 			if (ui.tab === "monitor" && ui.pane === "inspector") {
@@ -1663,8 +1662,7 @@ function createAgentsBrowserComponent(
 			clampMonitor();
 			loadMonitorSelection();
 			const rows = currentMonitorRows();
-			const selected = selectedMonitorRow(rows, ui);
-			const footer = monitorFooterHint(ui, theme, ui.pane === "inspector" && selected?.kind === "task");
+			const footer = monitorFooterHint(theme);
 			const lines = [tabLine, "", ...renderMonitorTabBody(monitorRecords, rows, monitorCollapsedSessions, monitorCache, discovery, ui, bodyWidth, theme, layout, spinnersAnimated()), agentDivider(bodyWidth, theme), ...wrapTextWithAnsi(footer, bodyWidth)];
 			return agentFrame(lines, safeWidth, theme, layout.innerRows, "Monitor");
 		}
@@ -1705,13 +1703,12 @@ export async function openAgentsBrowser(
 		search: "",
 		selected: 0,
 		scroll: 0,
-		agentSubtab: 0,
 		monitorSelected: 0,
 		monitorScroll: 0,
 		monitorSubtab: 0,
 	};
 	while (true) {
-		const discovery = discoverAgents(ctx.cwd, "both");
+		const discovery = discoverAgents(ctx.cwd, ui.scope);
 		const statuses = await loadAgentPaneStatuses(runtimeRoot);
 		if (initialAgentName) {
 			const selected = sortAgentsForUnifiedView(discovery.agents, statuses).findIndex((agent) => agent.name === initialAgentName);
