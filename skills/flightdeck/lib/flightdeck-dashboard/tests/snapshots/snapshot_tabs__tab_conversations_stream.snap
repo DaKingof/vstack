@@ -2,8 +2,8 @@
 source: tests/snapshot_tabs.rs
 expression: rendered
 ---
-"┌ flightdeck-dashboard ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
-"│ Flightdeck  session demo-conversations  owner pi · no-pane · /repo/demo  daemon: unknown  elapsed 1h40m  AH:1 ISS:1 WF:0  prompting:1 waiting:1   fresh                                              │"
+"┌ Flightdeck ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
+"│ Flightdeck  session demo-conversations  owner pi · no-pane · /repo/demo  daemon: file-mode  elapsed 1h40m  AH:1 ISS:1 WF:0  P:1 W:1   fresh                                                          │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
 "┌ tabs ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│ Overview │ Live feed │ Conversations │ Conflicts & merges (issue mode) │ Decisions │ Daemon                                                                                                          │"
@@ -60,5 +60,5 @@ expression: rendered
 "│                                                                                                                                                                                                      │"
 "│                                                                                                                                                                                                      │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" Tab/Shift+Tab tabs  j/k select  r reload  Ctrl+N noisy:on  / filter:off  Alt+M compact  ? help  q quit                                                                                                 "
+" Tab/Shift+Tab tabs  j/k select  r reload  Ctrl+N noise: hidden  / filter:off  Alt+M compact  ? help  q quit                                                                                            "
 "                                                                                                                                                                                                        "

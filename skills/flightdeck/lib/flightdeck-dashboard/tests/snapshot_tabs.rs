@@ -28,6 +28,34 @@ fn live_feed_with_events() {
 }
 
 #[test]
+fn live_feed_folds_heartbeats_when_noise_hidden() {
+    let mut model = common::model_for_tab(Tab::LiveFeed);
+    model.push_event(Event::new(
+        common::fixed_now() - chrono::Duration::seconds(30),
+        ActivitySource::Daemon,
+        EventImportance::Low,
+        "daemon heartbeat #1",
+    ));
+    model.push_event(Event::new(
+        common::fixed_now() - chrono::Duration::seconds(20),
+        ActivitySource::Daemon,
+        EventImportance::Low,
+        "daemon heartbeat #2",
+    ));
+    model.push_event(Event::new(
+        common::fixed_now() - chrono::Duration::seconds(10),
+        ActivitySource::Wake,
+        EventImportance::Medium,
+        "wake delivered to master",
+    ));
+    let rendered = common::render_model(&model);
+    assert!(rendered.contains("2 heartbeat events folded"));
+    assert!(!rendered.contains("daemon heartbeat #1"));
+    assert!(rendered.contains("noise hidden"));
+    insta::assert_snapshot!("tab_live_feed_folds_heartbeats", rendered);
+}
+
+#[test]
 fn live_feed_row_enter_motion_start_and_settled() {
     let mut model = common::model_for_fixture("mixed", MotionLevel::Full);
     model.current_tab = Tab::LiveFeed;
@@ -107,6 +135,9 @@ fn decisions_detail_popup() {
 #[test]
 fn mixed_daemon_tab() {
     let mut model = common::model_for_tab(Tab::Daemon);
+    model.snapshot_source = flightdeck_dashboard::app::command::SnapshotSource::Socket(
+        std::path::PathBuf::from("/tmp/dashboard-demo.sock"),
+    );
     model.snapshot.daemon = flightdeck_dashboard::state::snapshot::DaemonStatus {
         label: "daemon: rust pid=4242".to_owned(),
         healthy: Some(true),
@@ -115,6 +146,18 @@ fn mixed_daemon_tab() {
     };
     seed_events(&mut model);
     insta::assert_snapshot!("tab_daemon", common::render_model(&model));
+}
+
+#[test]
+fn daemon_tab_file_mode_message() {
+    let mut model = common::model_for_tab(Tab::Daemon);
+    model.snapshot.master_state_path =
+        std::path::PathBuf::from("/mnt/Tertiary/dev/vstack/main/tmp/flightdeck-state-VS.json");
+    let rendered = common::render_model(&model);
+    assert!(rendered.contains("Read mode"));
+    assert!(rendered.contains("file-watcher (no daemon socket)"));
+    assert!(rendered.contains("daemon: file-mode"));
+    insta::assert_snapshot!("tab_daemon_file_mode", rendered);
 }
 
 fn seed_events(model: &mut flightdeck_dashboard::app::model::Model) {
@@ -167,4 +210,15 @@ fn help_overlay() {
     model.show_help = true;
     model.modal = ModalState::Help;
     insta::assert_snapshot!("help_overlay", common::render_model(&model));
+}
+
+#[test]
+fn help_overlay_clears_background() {
+    let mut model = common::model_for_tab(Tab::Overview);
+    model.show_help = true;
+    model.modal = ModalState::Help;
+    let rendered = common::render_model(&model);
+    assert!(rendered.contains("Flightdeck dashboard help"));
+    assert!(!rendered.contains("settled"));
+    insta::assert_snapshot!("help_overlay_clears_background", rendered);
 }

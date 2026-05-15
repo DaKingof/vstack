@@ -34,7 +34,11 @@ pub fn model_for_tab(tab: Tab) -> Model {
 }
 
 pub fn render_model(model: &Model) -> String {
-    let backend = TestBackend::new(SNAPSHOT_WIDTH, SNAPSHOT_HEIGHT);
+    render_model_with_size(model, SNAPSHOT_WIDTH, SNAPSHOT_HEIGHT)
+}
+
+pub fn render_model_with_size(model: &Model, width: u16, height: u16) -> String {
+    let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("test backend creates terminal");
     terminal
         .draw(|frame| view::render(frame, model))

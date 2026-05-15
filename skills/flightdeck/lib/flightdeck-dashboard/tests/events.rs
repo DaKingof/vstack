@@ -36,6 +36,20 @@ not-json
 }
 
 #[test]
+fn daemon_text_heartbeat_is_low_importance() {
+    let source = "2026-05-15T00:06:41-07:00 [heartbeat] alive session_key=s3\n";
+    let mut warnings = Vec::new();
+    let mut warn = |message: &str| warnings.push(message.to_owned());
+
+    let events = parse_daemon_text_log_str(source, &mut warn);
+
+    assert!(warnings.is_empty());
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].importance, EventImportance::Low);
+    assert_eq!(events[0].message, "[heartbeat] alive session_key=s3");
+}
+
+#[test]
 fn daemon_text_log_parses_known_lines() {
     let source = "2026-05-15T00:06:41-07:00 [start] pid=31853 session_id=$3 session_key=s3\n2026-05-15T00:06:42-07:00 [wake] delivered prompt to master\n";
     let mut warnings = Vec::new();

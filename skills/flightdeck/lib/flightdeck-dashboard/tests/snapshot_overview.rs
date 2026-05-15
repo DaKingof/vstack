@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use flightdeck_dashboard::app::command::SnapshotSource;
 use flightdeck_dashboard::app::model::{Model, ReadSourceState, Tab};
 use flightdeck_dashboard::app::motion::{self, MotionLevel};
-use flightdeck_dashboard::state::snapshot::DashboardSnapshot;
+use flightdeck_dashboard::state::snapshot::{DashboardSnapshot, PauseInfo, SessionState};
 use flightdeck_dashboard::state::tracked_entries::{
     self, PRE_PURGE_BANNER, PRE_PURGE_STATE_MESSAGE,
 };
@@ -46,12 +46,111 @@ fn paused_fixture_overview() {
 }
 
 #[test]
+fn pause_banner_at_top_and_right_rail_only_on_paused_row() {
+    let mut model = common::model_for_fixture("mixed", MotionLevel::Off);
+    model.snapshot.paused_for_user = Some(PauseInfo {
+        entry_id: Some("VST-101".to_owned()),
+        issue_id: Some("VST-101".to_owned()),
+        reason: "scope_creep_detected".to_owned(),
+        prompt_text: Some("scope_files_actual=23 > 2x declared=8".to_owned()),
+    });
+    let paused_index = model
+        .snapshot
+        .sessions
+        .iter()
+        .position(|session| session.id == "VST-101")
+        .expect("paused fixture row exists");
+    model.set_selected_index(paused_index);
+    let paused_render = common::render_model(&model);
+    let top_region = paused_render.lines().take(5).collect::<Vec<_>>().join("\n");
+    assert!(top_region.contains("PAUSED FOR USER · VST-101 · scope_creep_detected"));
+    assert_eq!(paused_render.matches("PAUSED FOR USER").count(), 2);
+
+    let other_index = model
+        .snapshot
+        .sessions
+        .iter()
+        .position(|session| session.id != "VST-101")
+        .expect("non-paused fixture row exists");
+    model.set_selected_index(other_index);
+    let other_render = common::render_model(&model);
+    assert_eq!(other_render.matches("PAUSED FOR USER").count(), 1);
+    insta::assert_snapshot!("overview_pause_banner_scoped_right_rail", paused_render);
+}
+
+#[test]
+fn default_selects_paused_then_prompting_then_first() {
+    let mut paused_snapshot =
+        flightdeck_dashboard::fixtures::load_demo_snapshot("mixed", common::fixed_now())
+            .expect("fixture loads");
+    paused_snapshot.paused_for_user = Some(PauseInfo {
+        entry_id: Some("dashboard-rust".to_owned()),
+        issue_id: None,
+        reason: "operator-question".to_owned(),
+        prompt_text: Some("Need direction".to_owned()),
+    });
+    let paused_model = Model::new(
+        paused_snapshot,
+        SnapshotSource::Demo("mixed"),
+        MotionLevel::Off,
+        common::fixed_now,
+    );
+    assert_eq!(
+        paused_model
+            .selected_session()
+            .map(|session| session.id.as_str()),
+        Some("dashboard-rust")
+    );
+
+    let prompting_model = common::model_for_fixture("mixed", MotionLevel::Off);
+    assert_eq!(
+        prompting_model
+            .selected_session()
+            .map(|session| session.id.as_str()),
+        Some("VST-101")
+    );
+
+    let mut first_snapshot =
+        flightdeck_dashboard::fixtures::load_demo_snapshot("mixed", common::fixed_now())
+            .expect("fixture loads");
+    for session in &mut first_snapshot.sessions {
+        session.state = SessionState::Dead;
+    }
+    let first_model = Model::new(
+        first_snapshot,
+        SnapshotSource::Demo("mixed"),
+        MotionLevel::Off,
+        common::fixed_now,
+    );
+    assert_eq!(
+        first_model
+            .selected_session()
+            .map(|session| session.id.as_str()),
+        Some("VST-101")
+    );
+}
+
+#[test]
+fn header_counts_fit_at_140_cols() {
+    let rendered = common::render_model_with_size(
+        &common::model_for_fixture("mixed", MotionLevel::Off),
+        140,
+        common::SNAPSHOT_HEIGHT,
+    );
+    assert!(rendered.contains("P:1"));
+    assert!(rendered.contains("S:1"));
+    assert!(rendered.contains("W:1"));
+    assert!(!rendered.contains("prompting:"));
+    insta::assert_snapshot!("overview_header_counts_140_cols", rendered);
+}
+
+#[test]
 fn observer_banner() {
     let mut model = common::model_for_fixture("observer", MotionLevel::Off);
     model.current_pane_id = Some("%99".to_owned());
     let rendered = common::render_model(&model);
-    assert!(rendered.contains("OBSERVER"));
-    assert!(rendered.contains("Read-only observer"));
+    assert!(rendered.contains("observer"));
+    assert!(!rendered.contains("Read-only observer"));
     insta::assert_snapshot!("overview_observer_banner", rendered);
 }
 
@@ -63,6 +162,16 @@ fn compact_dashboard_widget() {
         "overview_compact_dashboard_widget",
         common::render_model(&model)
     );
+}
+
+#[test]
+fn compact_tree_dashboard_widget() {
+    let mut model = common::model_for_fixture("mixed", MotionLevel::Off);
+    model.ui.compact = true;
+    let rendered = common::render_model(&model);
+    assert!(rendered.contains("› VST-101"));
+    assert!(rendered.contains("dashboard-rust"));
+    insta::assert_snapshot!("overview_compact_tree_dashboard_widget", rendered);
 }
 
 #[test]
