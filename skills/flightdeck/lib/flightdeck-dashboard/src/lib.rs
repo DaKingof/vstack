@@ -3,6 +3,7 @@ pub mod cli;
 pub mod daemon;
 pub mod events;
 pub mod fixtures;
+pub mod launch;
 pub mod state;
 pub mod util;
 pub mod watcher;

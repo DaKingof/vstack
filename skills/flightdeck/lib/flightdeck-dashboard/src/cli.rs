@@ -21,7 +21,7 @@ pub enum Command {
     /// Back-compat alias: start daemon detached for the session.
     Supervise(SuperviseArgs),
     /// Launch the dashboard window from Flightdeck startup.
-    Launch(StubArgs),
+    Launch(LaunchArgs),
 }
 
 #[derive(Debug, Args)]
@@ -38,6 +38,9 @@ pub struct TuiArgs {
     /// Subscribe to a dashboard daemon Unix socket.
     #[arg(long, value_name = "PATH")]
     pub socket: Option<PathBuf>,
+    /// Motion level for dashboard effects.
+    #[arg(long, value_enum)]
+    pub motion: Option<MotionArg>,
 }
 
 #[derive(Debug, Args)]
@@ -111,7 +114,44 @@ pub enum DaemonTailSource {
 }
 
 #[derive(Debug, Args)]
-pub struct StubArgs {}
+pub struct LaunchArgs {
+    /// Flightdeck tmux session name/id/key. Defaults to current tmux session.
+    #[arg(long, value_name = "NAME")]
+    pub session: Option<String>,
+    /// Dashboard tmux window name.
+    #[arg(long, value_name = "NAME")]
+    pub window_name: Option<String>,
+    /// Read a concrete Flightdeck master-state JSON file.
+    #[arg(long, value_name = "PATH")]
+    pub state_file: Option<PathBuf>,
+    /// Motion level for the launched TUI.
+    #[arg(long, value_enum)]
+    pub motion: Option<MotionArg>,
+    /// Skip auto-starting the Rust dashboard daemon.
+    #[arg(long)]
+    pub no_daemon: bool,
+    /// Ignore already-running guards for debugging.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MotionArg {
+    Full,
+    Reduced,
+    Off,
+}
+
+impl MotionArg {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Reduced => "reduced",
+            Self::Off => "off",
+        }
+    }
+}
 
 impl TuiArgs {
     #[must_use]

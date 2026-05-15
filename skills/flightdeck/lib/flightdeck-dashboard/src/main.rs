@@ -16,7 +16,7 @@ use flightdeck_dashboard::app::model::{utc_now, Model, ReadSourceState};
 use flightdeck_dashboard::app::motion::{self, MotionLevel};
 use flightdeck_dashboard::app::msg::Msg;
 use flightdeck_dashboard::app::{update, view};
-use flightdeck_dashboard::cli::{Cli, Command, DaemonAction, DaemonArgs, TuiArgs};
+use flightdeck_dashboard::cli::{Cli, Command, DaemonAction, DaemonArgs, MotionArg, TuiArgs};
 use flightdeck_dashboard::daemon::client::DaemonClient;
 use flightdeck_dashboard::daemon::rpc::DaemonStatus as RuntimeDaemonStatus;
 use flightdeck_dashboard::events::{self, EventSource};
@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
             .await
         }
         Command::Supervise(args) => flightdeck_dashboard::daemon::cli::run_supervise(args).await,
-        Command::Launch(_) => not_implemented("launch"),
+        Command::Launch(args) => flightdeck_dashboard::launch::run(args).await,
     }
 }
 
@@ -68,7 +68,7 @@ async fn run_tui(args: TuiArgs) -> Result<()> {
     let mut model = Model::new(
         initial.snapshot,
         initial.source,
-        MotionLevel::from_env(),
+        motion_level(&args),
         utc_now,
     );
     model.read_source_state = initial.source_state;
@@ -173,6 +173,15 @@ fn file_session_key(session: &str) -> String {
         fd_session_key_from_id(session)
     } else {
         session.to_owned()
+    }
+}
+
+fn motion_level(args: &TuiArgs) -> MotionLevel {
+    match args.motion {
+        Some(MotionArg::Full) => MotionLevel::Full,
+        Some(MotionArg::Reduced) => MotionLevel::Reduced,
+        Some(MotionArg::Off) => MotionLevel::Off,
+        None => MotionLevel::from_env(),
     }
 }
 
@@ -588,9 +597,4 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         self.cleanup();
     }
-}
-
-fn not_implemented(command: &str) -> Result<()> {
-    eprintln!("flightdeck-dashboard {command}: not yet implemented");
-    std::process::exit(2);
 }
