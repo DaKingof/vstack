@@ -20,5 +20,6 @@ pub enum Cmd {
     ReloadFromSource(SnapshotSource),
     LogAction(String),
     PauseSideEffects,
+    ProbePanes,
     Spawn(BoxFuture<'static, Msg>),
 }

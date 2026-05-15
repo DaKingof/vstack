@@ -7,13 +7,16 @@ use regex::Regex;
 
 use chrono::{DateTime, Utc};
 
+use crate::actions::WriteAction;
 use crate::app::command::SnapshotSource;
 use crate::app::motion::{EffectInstance, MotionLevel};
 use crate::app::reload::ReloadCoalescer;
 use crate::app::theme::{Palette, Theme};
+use crate::cost::{CostMetrics, SessionTotals};
 use crate::state::snapshot::{
     DashboardSnapshot, Event, EventImportance, SessionKind, SessionState, TrackedSession,
 };
+use crate::tmux::panes::PaneSnapshot;
 
 pub type Clock = fn() -> DateTime<Utc>;
 
@@ -26,16 +29,18 @@ pub enum Tab {
     Conversations,
     Merges,
     Decisions,
+    Costs,
     Daemon,
 }
 
 impl Tab {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Overview,
         Self::LiveFeed,
         Self::Conversations,
         Self::Merges,
         Self::Decisions,
+        Self::Costs,
         Self::Daemon,
     ];
 
@@ -47,6 +52,7 @@ impl Tab {
             Self::Conversations => "Conversations",
             Self::Merges => "Conflicts & merges",
             Self::Decisions => "Decisions",
+            Self::Costs => "Costs",
             Self::Daemon => "Daemon",
         }
     }
@@ -183,6 +189,23 @@ pub enum ModalState {
     SessionDetail,
     EventDetail,
     FilterInput,
+    ConfirmAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmDialog {
+    pub title: String,
+    pub body: String,
+    pub destructive: bool,
+    pub primary_label: String,
+    pub secondary_label: String,
+    pub action: WriteAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionStatus {
+    pub message: String,
+    pub success: bool,
 }
 
 #[derive(Debug)]
@@ -208,6 +231,10 @@ pub struct Model {
     pub feed_filter: FeedFilter,
     pub event_detail: Option<usize>,
     pub current_pane_id: Option<String>,
+    pub tmux_panes: PaneSnapshot,
+    pub cost_totals: SessionTotals,
+    pub confirm: Option<ConfirmDialog>,
+    pub status_message: Option<ActionStatus>,
     pub quit_requested: bool,
     pub error: Option<String>,
     pub clock: Clock,
@@ -258,6 +285,10 @@ impl Model {
             current_pane_id: std::env::var("TMUX_PANE")
                 .ok()
                 .filter(|pane| !pane.is_empty()),
+            tmux_panes: PaneSnapshot::default(),
+            cost_totals: SessionTotals::default(),
+            confirm: None,
+            status_message: None,
             quit_requested: false,
             error: None,
             clock,
@@ -328,6 +359,7 @@ impl Model {
                 .len()
                 .saturating_add(self.snapshot.conflict_graph.edges.len()),
             Tab::Decisions => self.decision_count(),
+            Tab::Costs => self.cost_row_count(),
             Tab::Daemon => 1,
         };
         len.saturating_sub(1)
@@ -447,6 +479,28 @@ impl Model {
         self.filtered_events()
             .len()
             .saturating_add(usize::from(self.hidden_noise_count() > 0))
+    }
+
+    #[must_use]
+    pub fn cost_for_entry(&self, entry_id: &str) -> Option<&CostMetrics> {
+        self.cost_totals.by_entry.get(entry_id)
+    }
+
+    #[must_use]
+    pub fn cost_row_count(&self) -> usize {
+        self.snapshot.sessions.len()
+    }
+
+    pub fn set_tmux_panes(&mut self, panes: PaneSnapshot) {
+        self.tmux_panes = panes;
+    }
+
+    #[must_use]
+    pub fn session_is_stale(&self, session: &TrackedSession) -> bool {
+        let Some(pane_id) = session.pane_id.as_deref() else {
+            return false;
+        };
+        self.tmux_panes.is_loaded() && !self.tmux_panes.contains(pane_id)
     }
 }
 

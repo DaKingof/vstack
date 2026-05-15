@@ -6,6 +6,10 @@ use crate::app::model::Tab;
 pub enum ClickAction {
     SelectTab(Tab),
     SelectRow(usize),
+    SelectCostRow(usize),
+    PromptPrune(usize),
+    PromptFocus(usize),
+    ConfirmAction,
     OpenDetail,
     JumpToPaused,
     ToggleNoiseFilter,
@@ -29,6 +33,7 @@ pub enum ScrollSource {
     Activity,
     Decisions,
     Conversations,
+    Costs,
     DetailRail,
 }
 

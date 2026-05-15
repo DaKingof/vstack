@@ -9,6 +9,7 @@ use crate::app::labels::{kind_badge, kind_label_for, state_label_for};
 use crate::app::model::{Model, ReadSourceState};
 use crate::app::theme::Palette;
 use crate::app::view::{fx, human_duration};
+use crate::cost::{format_compact, format_cost, format_tokens};
 use crate::state::snapshot::{SessionState, TrackedSession};
 use crate::state::tracked_entries::PRE_PURGE_BANNER;
 
@@ -179,6 +180,11 @@ fn render_single_column(
         } else {
             theme.frame()
         };
+        let stale = if model.session_is_stale(session) {
+            " (stale)"
+        } else {
+            ""
+        };
         lines.push(Line::from(vec![
             Span::styled(format!("{cursor} "), style),
             Span::styled(format!("{:<20}  ", session.id), style),
@@ -193,6 +199,7 @@ fn render_single_column(
             ),
             Span::raw(" "),
             Span::styled(format!("{:<40}", truncate(&session.title, 40)), style),
+            Span::styled(stale.to_owned(), theme.muted()),
             Span::styled(pr, style),
         ]));
     }
@@ -292,6 +299,7 @@ fn render_session_table(
         Cell::from("State"),
         Cell::from("Harness"),
         Cell::from("Title"),
+        Cell::from("Cost"),
         Cell::from("PR/worktree"),
         Cell::from("Age"),
         Cell::from("Decision"),
@@ -321,7 +329,8 @@ fn render_session_table(
                     theme.state(&session.state),
                 )),
                 Cell::from(session.harness.as_deref().unwrap_or("—")),
-                Cell::from(session.title.as_str()),
+                title_cell(model, session, theme),
+                Cell::from(cost_label(model, session)),
                 Cell::from(issue_label(session)),
                 Cell::from(age_label(session.spawned_at, model.now)),
                 Cell::from(last_decision(session)),
@@ -357,8 +366,9 @@ fn render_session_table(
             Constraint::Length(7),
             Constraint::Length(16),
             Constraint::Length(10),
-            Constraint::Percentage(26),
-            Constraint::Percentage(20),
+            Constraint::Percentage(24),
+            Constraint::Length(14),
+            Constraint::Percentage(18),
             Constraint::Length(8),
             Constraint::Percentage(20),
             Constraint::Length(12),
@@ -378,17 +388,32 @@ fn render_detail(
     hitmap: &mut HitMap,
 ) {
     hitmap.push(area, ClickAction::ScrollDown(ScrollSource::DetailRail), 0);
-    let lines = match model.selected_session() {
+    let (lines, buttons) = match model.selected_session() {
         Some(session) => detail_lines(session, model, theme),
-        None => vec![Line::from(Span::styled(
-            "No session selected",
-            theme.muted(),
-        ))],
+        None => (
+            vec![Line::from(Span::styled(
+                "No session selected",
+                theme.muted(),
+            ))],
+            Vec::new(),
+        ),
     };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(theme.border())
         .title(Span::styled(" detail ", theme.muted()));
+    for (line_index, action, width) in buttons {
+        hitmap.push(
+            Rect::new(
+                area.x.saturating_add(2),
+                area.y.saturating_add(1 + line_index as u16),
+                width,
+                1,
+            ),
+            action,
+            1,
+        );
+    }
     frame.render_widget(
         Paragraph::new(lines)
             .block(block)
@@ -398,7 +423,11 @@ fn render_detail(
     );
 }
 
-fn detail_lines(session: &TrackedSession, model: &Model, theme: &Palette) -> Vec<Line<'static>> {
+fn detail_lines(
+    session: &TrackedSession,
+    model: &Model,
+    theme: &Palette,
+) -> (Vec<Line<'static>>, Vec<(usize, ClickAction, u16)>) {
     let mut lines = vec![
         Line::from(Span::styled(session.title.clone(), theme.title())),
         Line::from(vec![
@@ -412,6 +441,7 @@ fn detail_lines(session: &TrackedSession, model: &Model, theme: &Palette) -> Vec
             ),
         ]),
     ];
+    let mut buttons = Vec::new();
     if let Some(substate) = &session.substate {
         lines.push(Line::from(format!("substate: {substate}")));
     }
@@ -471,6 +501,9 @@ fn detail_lines(session: &TrackedSession, model: &Model, theme: &Palette) -> Vec
     }
 
     lines.push(Line::from(""));
+    lines.extend(cost_lines(model, session, theme));
+
+    lines.push(Line::from(""));
     lines.push(Line::from(Span::styled("Recent decisions", theme.header())));
     let mut decisions = session.decisions_log.iter().rev().take(3).peekable();
     if decisions.peek().is_none() {
@@ -487,7 +520,22 @@ fn detail_lines(session: &TrackedSession, model: &Model, theme: &Palette) -> Vec
             theme.muted(),
         )));
     }
-    lines
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Actions", theme.header())));
+    if session.pane_target.is_some() {
+        let line = lines.len();
+        lines.push(Line::from(Span::styled(
+            "[ Focus tmux window ]",
+            theme.ok(),
+        )));
+        buttons.push((line, ClickAction::PromptFocus(model.selected_index()), 22));
+    }
+    if model.session_is_stale(session) {
+        let line = lines.len();
+        lines.push(Line::from(Span::styled("[ Prune ]", theme.error())));
+        buttons.push((line, ClickAction::PromptPrune(model.selected_index()), 10));
+    }
+    (lines, buttons)
 }
 
 fn ordered_state_counts(model: &Model) -> Vec<(SessionState, usize)> {
@@ -515,6 +563,66 @@ fn ordered_state_counts(model: &Model) -> Vec<(SessionState, usize)> {
         }
     }
     rows
+}
+
+fn title_cell(model: &Model, session: &TrackedSession, theme: &Palette) -> Cell<'static> {
+    if model.session_is_stale(session) {
+        return Cell::from(Line::from(vec![
+            Span::raw(session.title.clone()),
+            Span::raw(" "),
+            Span::styled("(stale)", theme.muted()),
+        ]));
+    }
+    Cell::from(session.title.clone())
+}
+
+fn cost_label(model: &Model, session: &TrackedSession) -> String {
+    model
+        .cost_for_entry(&session.id)
+        .map_or_else(|| String::from("—"), format_compact)
+}
+
+fn cost_lines(model: &Model, session: &TrackedSession, theme: &Palette) -> Vec<Line<'static>> {
+    let Some(metrics) = model.cost_for_entry(&session.id) else {
+        return vec![
+            Line::from(Span::styled("Cost", theme.header())),
+            Line::from("cost      — (no source)"),
+        ];
+    };
+    if let Some(error) = &metrics.source_error {
+        return vec![
+            Line::from(Span::styled("Cost", theme.header())),
+            Line::from(format!("cost      — (error: {error})")),
+        ];
+    }
+    vec![
+        Line::from(Span::styled("Cost", theme.header())),
+        Line::from(format!(
+            "model              {}",
+            metrics.last_model.as_deref().unwrap_or("—")
+        )),
+        Line::from(format!("turns              {}", metrics.turns)),
+        Line::from(format!(
+            "input tokens       {}",
+            format_tokens(metrics.input_tokens)
+        )),
+        Line::from(format!(
+            "output tokens      {}",
+            format_tokens(metrics.output_tokens)
+        )),
+        Line::from(format!(
+            "cache write        {}",
+            format_tokens(metrics.cache_creation_tokens)
+        )),
+        Line::from(format!(
+            "cache read         {}",
+            format_tokens(metrics.cache_read_tokens)
+        )),
+        Line::from(format!(
+            "total              {}",
+            format_cost(metrics.cost_usd)
+        )),
+    ]
 }
 
 fn optional_count(value: Option<u32>) -> String {

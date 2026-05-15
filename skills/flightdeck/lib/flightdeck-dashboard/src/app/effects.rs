@@ -34,6 +34,7 @@ impl Effects {
                 }
                 Cmd::LogAction(action) => tracing::info!(action = %action, "dashboard action"),
                 Cmd::PauseSideEffects => self.pause_side_effects(),
+                Cmd::ProbePanes => self.probe_panes(),
                 Cmd::Spawn(future) => self.spawn_msg(future),
             }
         }
@@ -85,6 +86,16 @@ impl Effects {
         tokio::spawn(async move {
             let msg = future.await;
             send_msg(&tx, msg);
+        });
+    }
+
+    fn probe_panes(&self) {
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let snapshot = tokio::task::spawn_blocking(crate::tmux::panes::current)
+                .await
+                .unwrap_or_default();
+            send_msg(&tx, Msg::PaneSnapshotUpdated(snapshot));
         });
     }
 

@@ -1,5 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use futures::FutureExt;
 
+use crate::actions::{self, WriteAction};
 use crate::daemon::rpc::DaemonStatus as RuntimeDaemonStatus;
 use crate::state::snapshot::{DaemonStatus as SnapshotDaemonStatus, EventImportance};
 use crate::watcher::WatcherEvent;
@@ -7,7 +9,7 @@ use crate::watcher::WatcherEvent;
 use super::command::Cmd;
 use super::hitmap::{ClickAction, ScrollSource};
 use super::keymap::{self, Action};
-use super::model::{ModalState, Model, Tab};
+use super::model::{ActionStatus, ConfirmDialog, ModalState, Model, Tab};
 use super::motion::{self, EffectKind, EffectTarget};
 use super::msg::Msg;
 
@@ -17,7 +19,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::Tick => {
             model.refresh_now();
-            vec![Cmd::Render]
+            vec![Cmd::ProbePanes, Cmd::Render]
         }
         Msg::AnimateTick => {
             model.animate_frame = model.animate_frame.saturating_add(1);
@@ -49,6 +51,42 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.snapshot.daemon = daemon_status_chip(&status);
             vec![Cmd::Render]
         }
+        Msg::CostUpdated(totals) => {
+            if model.cost_totals == totals {
+                Vec::new()
+            } else {
+                model.cost_totals = totals;
+                vec![Cmd::Render]
+            }
+        }
+        Msg::PaneSnapshotUpdated(snapshot) => {
+            if model.tmux_panes == snapshot {
+                Vec::new()
+            } else {
+                model.set_tmux_panes(snapshot);
+                vec![Cmd::Render]
+            }
+        }
+        Msg::ActionCompleted(result) => {
+            match result {
+                Ok(message) => {
+                    model.status_message = Some(ActionStatus {
+                        message,
+                        success: true,
+                    });
+                    model.error = None;
+                }
+                Err(error) => {
+                    model.status_message = Some(ActionStatus {
+                        message: error.clone(),
+                        success: false,
+                    });
+                    model.error = Some(error);
+                    push_effect(model, EffectKind::ErrorFlash, EffectTarget::Global);
+                }
+            }
+            vec![Cmd::Render]
+        }
         Msg::Error(error) => {
             model.error = Some(error);
             push_effect(model, EffectKind::ErrorFlash, EffectTarget::Global);
@@ -77,7 +115,7 @@ fn handle_snapshot_updated(
     model.refresh_now();
     model.refresh_tabs_enabled();
     model.initialize_overview_selection();
-    let mut commands = vec![Cmd::Render];
+    let mut commands = vec![Cmd::ProbePanes, Cmd::Render];
     if pause_edge && model.motion.allows_rich_motion() {
         commands.push(Cmd::PauseSideEffects);
     }
@@ -112,6 +150,10 @@ fn handle_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
     let Some(action) = keymap::action_for(key) else {
         return Vec::new();
     };
+
+    if model.modal == ModalState::ConfirmAction && action == Action::OpenDetail {
+        return confirm_action(model);
+    }
 
     if model.modal != ModalState::None
         && !matches!(
@@ -173,6 +215,8 @@ fn handle_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
         }
         Action::OpenDetail => open_detail(model),
         Action::OpenFilter => open_filter(model),
+        Action::PromptPrune => prompt_prune_selected(model),
+        Action::PromptFocus => prompt_focus_selected(model),
         Action::Reload => request_reload(model),
         Action::ToggleNoise => {
             model.ui.hide_noise = !model.ui.hide_noise;
@@ -229,6 +273,15 @@ fn handle_click(model: &mut Model, action: ClickAction) -> Vec<Cmd> {
             }
             vec![Cmd::Render]
         }
+        ClickAction::SelectCostRow(index) => {
+            model.current_tab = Tab::Overview;
+            model.set_selected_index(index);
+            model.mark_overview_selection_initialized();
+            vec![Cmd::Render]
+        }
+        ClickAction::PromptPrune(index) => prompt_prune(model, index),
+        ClickAction::PromptFocus(index) => prompt_focus(model, index),
+        ClickAction::ConfirmAction => confirm_action(model),
         ClickAction::OpenDetail => open_detail(model),
         ClickAction::JumpToPaused => {
             if let Some(entry_id) = model
@@ -315,6 +368,116 @@ fn open_detail(model: &mut Model) -> Vec<Cmd> {
     vec![Cmd::Render]
 }
 
+fn prompt_prune_selected(model: &mut Model) -> Vec<Cmd> {
+    prompt_prune(model, model.selected_index())
+}
+
+fn prompt_focus_selected(model: &mut Model) -> Vec<Cmd> {
+    prompt_focus(model, model.selected_index())
+}
+
+fn prompt_prune(model: &mut Model, index: usize) -> Vec<Cmd> {
+    let Some(session) = model.snapshot.sessions.get(index) else {
+        return Vec::new();
+    };
+    let entry_id = session.id.clone();
+    let title = session.title.clone();
+    let pane_id = session.pane_id.clone();
+    let is_stale = model.session_is_stale(session);
+    let Some(pane_id) = pane_id else {
+        set_status(model, "Selected entry has no tmux pane id", false);
+        return vec![Cmd::Render];
+    };
+    if let Some(error) = model.tmux_panes.error.clone() {
+        set_status(model, format!("tmux pane probe failed: {error}"), false);
+        return vec![Cmd::Render];
+    }
+    if !model.tmux_panes.is_loaded() {
+        set_status(model, "Pane list not loaded; retry in a moment", false);
+        return vec![Cmd::ProbePanes, Cmd::Render];
+    }
+    if !is_stale {
+        set_status(model, "Pane is still alive; prune disabled", false);
+        return vec![Cmd::Render];
+    }
+    model.confirm = Some(ConfirmDialog {
+        title: String::from("Prune stale entry?"),
+        body: format!(
+            "{entry_id} · {title}\n\npane {pane_id} is no longer in tmux. The registry entry will be removed.\n\nThis does NOT delete the worktree, branch, or PR."
+        ),
+        destructive: true,
+        primary_label: String::from("Prune"),
+        secondary_label: String::from("Cancel"),
+        action: WriteAction::PruneStaleEntry { entry_id },
+    });
+    model.modal = ModalState::ConfirmAction;
+    vec![Cmd::Render]
+}
+
+fn prompt_focus(model: &mut Model, index: usize) -> Vec<Cmd> {
+    let Some(session) = model.snapshot.sessions.get(index) else {
+        return Vec::new();
+    };
+    let entry_id = session.id.clone();
+    let title = session.title.clone();
+    let window = session.window.as_deref().unwrap_or("session").to_owned();
+    let Some(pane_target) = session.pane_target.clone() else {
+        set_status(model, "Selected entry has no tmux target", false);
+        return vec![Cmd::Render];
+    };
+    let action = WriteAction::FocusWindow {
+        pane_target: pane_target.clone(),
+    };
+    if quick_focus_enabled() {
+        return vec![run_write_action(action)];
+    }
+    model.confirm = Some(ConfirmDialog {
+        title: String::from("Focus this session?"),
+        body: format!("{entry_id} · {title}\n\nSwitch tmux to window '{window}' ({pane_target})."),
+        destructive: false,
+        primary_label: String::from("Focus"),
+        secondary_label: String::from("Cancel"),
+        action,
+    });
+    model.modal = ModalState::ConfirmAction;
+    vec![Cmd::Render]
+}
+
+fn confirm_action(model: &mut Model) -> Vec<Cmd> {
+    let Some(dialog) = model.confirm.take() else {
+        close_overlay(model);
+        return vec![Cmd::Render];
+    };
+    model.modal = ModalState::None;
+    model.ui.filter_open = false;
+    vec![run_write_action(dialog.action), Cmd::Render]
+}
+
+fn run_write_action(action: WriteAction) -> Cmd {
+    Cmd::Spawn(
+        async move {
+            match actions::run(action).await {
+                Ok(message) => Msg::ActionCompleted(Ok(message)),
+                Err(error) => Msg::ActionCompleted(Err(error)),
+            }
+        }
+        .boxed(),
+    )
+}
+
+fn set_status(model: &mut Model, message: impl Into<String>, success: bool) {
+    model.status_message = Some(ActionStatus {
+        message: message.into(),
+        success,
+    });
+}
+
+fn quick_focus_enabled() -> bool {
+    std::env::var("FLIGHTDECK_DASHBOARD_QUICK_FOCUS")
+        .ok()
+        .is_some_and(|value| value.trim() == "1")
+}
+
 fn open_filter(model: &mut Model) -> Vec<Cmd> {
     model.feed_filter.begin_edit();
     model.ui.filter_open = true;
@@ -330,6 +493,7 @@ fn close_overlay(model: &mut Model) {
     model.modal = ModalState::None;
     model.ui.filter_open = false;
     model.event_detail = None;
+    model.confirm = None;
 }
 
 fn handle_scroll(model: &mut Model, source: ScrollSource, delta: isize) {
@@ -337,7 +501,8 @@ fn handle_scroll(model: &mut Model, source: ScrollSource, delta: isize) {
         (ScrollSource::Sessions | ScrollSource::DetailRail, Tab::Overview)
         | (ScrollSource::Activity, Tab::LiveFeed)
         | (ScrollSource::Decisions, Tab::Decisions)
-        | (ScrollSource::Conversations, Tab::Conversations) => move_selection(model, delta),
+        | (ScrollSource::Conversations, Tab::Conversations)
+        | (ScrollSource::Costs, Tab::Costs) => move_selection(model, delta),
         _ => {}
     }
 }

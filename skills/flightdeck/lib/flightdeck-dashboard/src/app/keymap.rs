@@ -12,6 +12,8 @@ pub enum Action {
     Last,
     OpenDetail,
     OpenFilter,
+    PromptPrune,
+    PromptFocus,
     Reload,
     ToggleNoise,
     ToggleCompact,
@@ -80,6 +82,16 @@ pub const BINDINGS: &[KeyBinding] = &[
         action: Action::OpenFilter,
     },
     KeyBinding {
+        keys: "D",
+        description: "Prune stale entry",
+        action: Action::PromptPrune,
+    },
+    KeyBinding {
+        keys: "g",
+        description: "Focus tmux window",
+        action: Action::PromptFocus,
+    },
+    KeyBinding {
         keys: "r",
         description: "Force snapshot reload",
         action: Action::Reload,
@@ -124,6 +136,8 @@ pub fn action_for(key: &KeyEvent) -> Option<Action> {
         KeyCode::End => Some(Action::Last),
         KeyCode::Enter => Some(Action::OpenDetail),
         KeyCode::Char('/') => Some(Action::OpenFilter),
+        KeyCode::Char('D') => Some(Action::PromptPrune),
+        KeyCode::Char('g') => Some(Action::PromptFocus),
         KeyCode::Char('r') => Some(Action::Reload),
         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::ToggleNoise)

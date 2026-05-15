@@ -1,4 +1,5 @@
 pub mod conversations;
+pub mod costs;
 pub mod daemon;
 pub mod decisions;
 pub mod fx;
@@ -18,6 +19,7 @@ use crate::app::command::SnapshotSource;
 use crate::app::hitmap::{ClickAction, HitMap};
 use crate::app::model::{Model, Tab};
 use crate::app::theme::Palette;
+use crate::cost::format_summary;
 use crate::state::snapshot::Staleness;
 
 pub fn render(frame: &mut Frame<'_>, model: &Model) {
@@ -66,6 +68,9 @@ pub fn render_with_hitmap(frame: &mut Frame<'_>, model: &Model, hitmap: &mut Hit
         crate::app::model::ModalState::FilterInput => {
             modals::render_filter_input(frame, area, model, theme, hitmap);
         }
+        crate::app::model::ModalState::ConfirmAction => {
+            modals::render_confirm(frame, area, model, theme, hitmap);
+        }
         crate::app::model::ModalState::None => {}
     }
 }
@@ -93,6 +98,7 @@ fn render_status(
         Staleness::WarnAfter(age) => format!("stale-warn {}", duration_label(age)),
         Staleness::StaleAfter(age) => format!("stale-dead {}", duration_label(age)),
     };
+    let cost_chip = format_summary(&model.cost_totals.grand);
     let theme_chip = format!("{} ▾", model.theme.as_str());
     let pause_chip = snapshot
         .paused_for_user
@@ -129,7 +135,28 @@ fn render_status(
         spans.push(Span::styled(chip.clone(), theme.pause()));
     }
     spans.push(Span::raw("  "));
+    spans.push(Span::styled(cost_chip.clone(), theme.info()));
+    if model.cost_totals.unhealthy_sources > 0 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!(
+                "{} cost source unhealthy",
+                model.cost_totals.unhealthy_sources
+            ),
+            theme.warning(),
+        ));
+    }
+    spans.push(Span::raw("  "));
     spans.push(Span::styled(theme_chip.clone(), theme.header()));
+    if let Some(status) = &model.status_message {
+        spans.push(Span::raw("  "));
+        let style = if status.success {
+            theme.ok()
+        } else {
+            theme.warning()
+        };
+        spans.push(Span::styled(status.message.clone(), style));
+    }
     if let Some(error) = &model.error {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(format!("ERR {error}"), theme.error()));
@@ -162,6 +189,18 @@ fn render_status(
                 1,
             );
         }
+    }
+    if let Some(cost_x) = header_chip_x(&spans, &cost_chip) {
+        hitmap.push(
+            Rect::new(
+                inner_x.saturating_add(cost_x),
+                inner_y,
+                cost_chip.len() as u16,
+                1,
+            ),
+            ClickAction::SelectTab(Tab::Costs),
+            1,
+        );
     }
     if let Some(theme_x) = header_chip_x(&spans, &theme_chip) {
         hitmap.push(
@@ -276,6 +315,7 @@ fn render_body(
         Tab::Conversations => conversations::render(frame, area, model, theme, hitmap),
         Tab::Merges => merges::render(frame, area, model, theme, hitmap),
         Tab::Decisions => decisions::render(frame, area, model, theme, hitmap),
+        Tab::Costs => costs::render(frame, area, model, theme, hitmap),
         Tab::Daemon => daemon::render(frame, area, model, theme, hitmap),
     }
 }
@@ -310,7 +350,7 @@ fn render_footer(
             format!("filter: {}", model.feed_filter.pattern)
         };
         let left =
-            " ↹ tabs   j/k or ↑/↓ select   ⏎ detail   / filter   ⇧M compact   ? help   q quit";
+            " ↹ tabs   j/k or ↑/↓ select   ⏎ detail   D prune   g focus   / filter   ⇧M compact   ? help   q quit";
         push_footer_target(
             hitmap,
             area,
@@ -319,10 +359,24 @@ fn render_footer(
             ClickAction::SelectTab(model.next_tab()),
         );
         push_footer_target(hitmap, area, 32, "⏎ detail", ClickAction::OpenDetail);
-        push_footer_target(hitmap, area, 43, "/ filter", ClickAction::OpenFilter);
-        push_footer_target(hitmap, area, 54, "⇧M compact", ClickAction::ToggleCompact);
-        push_footer_target(hitmap, area, 67, "? help", ClickAction::OpenHelp);
-        push_footer_target(hitmap, area, 76, "q quit", ClickAction::Quit);
+        push_footer_target(
+            hitmap,
+            area,
+            43,
+            "D prune",
+            ClickAction::PromptPrune(model.selected_index()),
+        );
+        push_footer_target(
+            hitmap,
+            area,
+            53,
+            "g focus",
+            ClickAction::PromptFocus(model.selected_index()),
+        );
+        push_footer_target(hitmap, area, 63, "/ filter", ClickAction::OpenFilter);
+        push_footer_target(hitmap, area, 74, "⇧M compact", ClickAction::ToggleCompact);
+        push_footer_target(hitmap, area, 87, "? help", ClickAction::OpenHelp);
+        push_footer_target(hitmap, area, 96, "q quit", ClickAction::Quit);
         let right = format!("{noisy}  ·  {filter}");
         let padding = area
             .width

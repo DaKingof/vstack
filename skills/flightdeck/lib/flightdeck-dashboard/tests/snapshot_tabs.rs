@@ -1,7 +1,10 @@
 mod common;
 
+use std::collections::HashMap;
+
 use flightdeck_dashboard::app::model::{ModalState, Tab};
 use flightdeck_dashboard::app::motion::{self, EffectKind, EffectTarget, MotionLevel};
+use flightdeck_dashboard::cost::{CostMetrics, HarnessTotal, SessionTotals};
 use flightdeck_dashboard::state::snapshot::{ActivitySource, Event, EventImportance};
 
 #[test]
@@ -155,6 +158,16 @@ fn mixed_decisions_tab() {
 }
 
 #[test]
+fn mixed_costs_tab() {
+    let mut model = common::model_for_tab(Tab::Costs);
+    model.cost_totals = sample_cost_totals();
+    let rendered = common::render_model(&model);
+    assert!(rendered.contains("Session total"));
+    assert!(rendered.contains("Pricing source: bundled @ 2026-05-15"));
+    insta::assert_snapshot!("tab_costs", rendered);
+}
+
+#[test]
 fn decisions_detail_popup() {
     let mut model = common::model_for_fixture("decisions", MotionLevel::Off);
     model.current_tab = Tab::Decisions;
@@ -188,6 +201,58 @@ fn daemon_tab_file_mode_message() {
     assert!(rendered.contains("file-watcher (no daemon socket)"));
     assert!(rendered.contains("daemon: file-mode"));
     insta::assert_snapshot!("tab_daemon_file_mode", rendered);
+}
+
+fn sample_cost_totals() -> SessionTotals {
+    let mut by_entry = HashMap::new();
+    by_entry.insert(
+        String::from("VST-101"),
+        CostMetrics {
+            input_tokens: 845_200,
+            output_tokens: 78_500,
+            cache_creation_tokens: 12_300,
+            cache_read_tokens: 4_500,
+            cost_usd: 0.12,
+            turns: 23,
+            last_model: Some(String::from("claude-opus-4-20250514")),
+            last_updated: Some(common::fixed_now()),
+            source_error: None,
+        },
+    );
+    by_entry.insert(
+        String::from("dashboard-rust"),
+        CostMetrics {
+            input_tokens: 320_000,
+            output_tokens: 28_000,
+            cost_usd: 0.08,
+            turns: 18,
+            source_error: Some(String::from("codex usage not yet supported")),
+            ..CostMetrics::default()
+        },
+    );
+    let mut grand = CostMetrics::default();
+    for metrics in by_entry
+        .values()
+        .filter(|metrics| metrics.source_error.is_none())
+    {
+        grand.add_assign(metrics);
+    }
+    let mut by_harness = HashMap::new();
+    by_harness.insert(
+        String::from("opencode"),
+        HarnessTotal {
+            sessions: 1,
+            metrics: grand.clone(),
+        },
+    );
+    SessionTotals {
+        by_entry,
+        grand,
+        by_harness,
+        pricing_source: String::from("bundled @ 2026-05-15"),
+        last_polled: Some(common::fixed_now()),
+        unhealthy_sources: 1,
+    }
 }
 
 fn seed_events(model: &mut flightdeck_dashboard::app::model::Model) {

@@ -1,7 +1,7 @@
 use ratatui::layout::{Alignment, Constraint, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Cell, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
 use crate::app::hitmap::{ClickAction, HitMap};
@@ -206,7 +206,7 @@ pub fn render_session_detail(
         width: PopupWidth::PercentOfFrame(72),
         height: PopupHeight::PercentOfFrame(70),
     };
-    render_popup(frame, area, chrome, theme, hitmap, |frame, body, _| {
+    render_popup(frame, area, chrome, theme, hitmap, |frame, body, hitmap| {
         let mut lines = vec![
             Line::from(Span::styled("Overview", theme.header())),
             Line::from(format!(
@@ -270,7 +270,98 @@ pub fn render_session_detail(
                 decision.prompt_tag, decision.answer
             )));
         }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("Actions", theme.header())));
+        if session.pane_target.is_some() {
+            let line = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+            lines.push(Line::from(Span::styled(
+                "[ Focus tmux window ]",
+                theme.ok(),
+            )));
+            hitmap.push(
+                Rect::new(body.x, body.y.saturating_add(line), 22, 1),
+                ClickAction::PromptFocus(model.selected_index()),
+                10,
+            );
+        }
+        if model.session_is_stale(session) {
+            let line = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+            lines.push(Line::from(Span::styled("[ Prune ]", theme.error())));
+            hitmap.push(
+                Rect::new(body.x, body.y.saturating_add(line), 10, 1),
+                ClickAction::PromptPrune(model.selected_index()),
+                10,
+            );
+        }
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
+    });
+}
+
+pub fn render_confirm(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    theme: &Palette,
+    hitmap: &mut HitMap,
+) {
+    let Some(dialog) = &model.confirm else {
+        render_message_popup(frame, area, "Confirm", "No action pending", theme, hitmap);
+        return;
+    };
+    let chrome = PopupChrome {
+        title: &dialog.title,
+        subtitle: None,
+        footer_hints: &["Enter confirm", "Esc cancel"],
+        width: PopupWidth::PercentOfFrame(58),
+        height: PopupHeight::Fixed(15),
+    };
+    render_popup(frame, area, chrome, theme, hitmap, |frame, body, hitmap| {
+        let chunks = ratatui::layout::Layout::default()
+            .direction(ratatui::layout::Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(3)])
+            .split(body);
+        let body_style = if dialog.destructive {
+            theme.warning()
+        } else {
+            theme.frame()
+        };
+        frame.render_widget(
+            Paragraph::new(dialog.body.clone())
+                .style(body_style)
+                .wrap(Wrap { trim: true }),
+            chunks[0],
+        );
+        let primary = Rect::new(chunks[1].x, chunks[1].y, 18, 3);
+        let cancel = Rect::new(chunks[1].x.saturating_add(22), chunks[1].y, 18, 3);
+        hitmap.push(primary, ClickAction::ConfirmAction, 10);
+        hitmap.push(cancel, ClickAction::CloseOverlay, 10);
+        let primary_style = if dialog.destructive {
+            theme.error()
+        } else {
+            theme.ok()
+        };
+        frame.render_widget(
+            Paragraph::new(format!("[ {} ]", dialog.primary_label))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(primary_style),
+                )
+                .alignment(Alignment::Center)
+                .style(primary_style),
+            primary,
+        );
+        frame.render_widget(
+            Paragraph::new(format!("[ {} ]", dialog.secondary_label))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(theme.border()),
+                )
+                .alignment(Alignment::Center)
+                .style(theme.muted()),
+            cancel,
+        );
     });
 }
 

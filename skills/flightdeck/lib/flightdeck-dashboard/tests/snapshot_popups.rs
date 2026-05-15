@@ -1,6 +1,7 @@
 mod common;
 
-use flightdeck_dashboard::app::model::{ModalState, Tab};
+use flightdeck_dashboard::actions::WriteAction;
+use flightdeck_dashboard::app::model::{ConfirmDialog, ModalState, Tab};
 use flightdeck_dashboard::app::motion::MotionLevel;
 use flightdeck_dashboard::state::snapshot::{ActivitySource, Event, EventImportance};
 
@@ -37,6 +38,25 @@ fn popup_event_detail() {
     ));
     model.modal = ModalState::EventDetail;
     insta::assert_snapshot!("popup_event_detail", common::render_model(&model));
+}
+
+#[test]
+fn popup_confirm_prune() {
+    let mut model = common::model_for_fixture("mixed", MotionLevel::Off);
+    model.confirm = Some(ConfirmDialog {
+        title: String::from("Prune stale entry?"),
+        body: String::from(
+            "VST-101 · Fix dashboard state reader\n\npane %41 is no longer in tmux. The registry entry will be removed.\n\nThis does NOT delete the worktree, branch, or PR.",
+        ),
+        destructive: true,
+        primary_label: String::from("Prune"),
+        secondary_label: String::from("Cancel"),
+        action: WriteAction::PruneStaleEntry {
+            entry_id: String::from("VST-101"),
+        },
+    });
+    model.modal = ModalState::ConfirmAction;
+    insta::assert_snapshot!("popup_confirm_prune", common::render_model(&model));
 }
 
 #[test]

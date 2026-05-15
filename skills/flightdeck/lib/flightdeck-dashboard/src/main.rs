@@ -18,6 +18,7 @@ use flightdeck_dashboard::app::{update, view};
 use flightdeck_dashboard::cli::{
     Cli, Command, DaemonAction, DaemonArgs, MotionArg, ThemeArg, TuiArgs,
 };
+use flightdeck_dashboard::cost::CostAggregator;
 use flightdeck_dashboard::daemon::client::DaemonClient;
 use flightdeck_dashboard::daemon::rpc::DaemonStatus as RuntimeDaemonStatus;
 use flightdeck_dashboard::events::{self, EventSource};
@@ -41,6 +42,7 @@ use tokio::time::{timeout, MissedTickBehavior};
 const ANIMATION_TICK_MS: u64 = 80;
 const CLOCK_TICK_MS: u64 = 1_000;
 const WATCH_DEBOUNCE_MS: u64 = 150;
+const DEFAULT_COST_POLL_SECS: u64 = 5;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -201,6 +203,14 @@ fn file_mode_daemon_status() -> SnapshotDaemonStatus {
         pid: None,
         last_heartbeat_at: None,
     }
+}
+
+fn cost_poll_secs() -> u64 {
+    std::env::var("FLIGHTDECK_DASHBOARD_COST_POLL_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_COST_POLL_SECS)
 }
 
 fn runtime_daemon_status_chip(status: &RuntimeDaemonStatus) -> SnapshotDaemonStatus {
@@ -455,6 +465,15 @@ async fn run_app_loop(
     let mut clock = tokio::time::interval(Duration::from_millis(CLOCK_TICK_MS));
     clock.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut hitmap = HitMap::default();
+    let mut cost_aggregator = CostAggregator::default();
+    let mut cost = tokio::time::interval(Duration::from_secs(cost_poll_secs()));
+    cost.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let commands = update(
+        model,
+        Msg::CostUpdated(cost_aggregator.poll_snapshot(&model.snapshot, (model.clock)())),
+    );
+    effects.run_commands(commands);
+    effects.run_commands(vec![flightdeck_dashboard::app::command::Cmd::ProbePanes]);
 
     terminal.draw(|frame| view::render_with_hitmap(frame, model, &mut hitmap))?;
     loop {
@@ -480,6 +499,11 @@ async fn run_app_loop(
             }
             _ = clock.tick() => {
                 let commands = update(model, flightdeck_dashboard::app::msg::Msg::Tick);
+                effects.run_commands(commands);
+            }
+            _ = cost.tick() => {
+                let totals = cost_aggregator.poll_snapshot(&model.snapshot, (model.clock)());
+                let commands = update(model, flightdeck_dashboard::app::msg::Msg::CostUpdated(totals));
                 effects.run_commands(commands);
             }
             _ = tokio::signal::ctrl_c() => {
