@@ -95,7 +95,7 @@ export const subagentToolRenderers = {
 		const resultSessionChip = (r: SingleResult) => sessionModeChipSuffix(theme, { kind: resultKind(r), sessionMode: resultSessionMode(r), sessionKey: r.sessionKeyExplicit ? r.sessionKey : undefined });
 		const queuedPaneLine = (r: SingleResult, _dashboard = false) => {
 			if (!r.taskId || !r.paneId) return "";
-			const suffix = `${theme.fg("dim", " · pane")}${resultSessionChip(r)}${theme.fg("dim", " · ctrl+o expand")}`;
+			const suffix = `${theme.fg("dim", " · pane")}${resultSessionChip(r)}${theme.fg("dim", " · ctrl+o to expand")}`;
 			return agentStatusLine(theme, r.agent, "Queued task", "warning", suffix);
 		};
 		const queuedTaskPreviewComponent = (r: SingleResult, dashboard = false) => ({
@@ -246,7 +246,7 @@ export const subagentToolRenderers = {
 				// reader can't tell whether the body is what was asked or what
 				// came back).
 				const previewIsTask = !(finalOutput && !finalOutputLooksLikeToolEcho(finalOutput, toolCalls));
-				let text = `${agentStatusLine(theme, r.agent, "completed", "success", `${theme.fg("dim", " · bg")}${resultSessionChip(r)}${theme.fg("dim", " · ctrl+o expand")}`)}${truncationBadge(r)}`;
+				let text = `${agentStatusLine(theme, r.agent, "completed", "success", `${theme.fg("dim", " · bg")}${resultSessionChip(r)}${theme.fg("dim", " · ctrl+o to expand")}`)}${truncationBadge(r)}`;
 				if (preview) {
 					const body = previewIsTask
 						? `${theme.fg("dim", "Task: ")}${theme.fg("toolOutput", preview)}`
@@ -260,7 +260,7 @@ export const subagentToolRenderers = {
 
 			const compactStatusLabel = isRunning ? "working" : needsCompletion ? "needs completion" : isError ? "failed" : "completed";
 			const compactStatusTone = isRunning || needsCompletion ? "warning" : isError ? "error" : "success";
-			let text = queued || agentStatusLine(theme, r.agent, compactStatusLabel, compactStatusTone, `${theme.fg("dim", " · bg")}${resultSessionChip(r)}${theme.fg("dim", " · ctrl+o expand")}`);
+			let text = queued || agentStatusLine(theme, r.agent, compactStatusLabel, compactStatusTone, `${theme.fg("dim", " · bg")}${resultSessionChip(r)}${theme.fg("dim", " · ctrl+o to expand")}`);
 			if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 			if (needsCompletion && r.needsCompletionReason) text += ` ${theme.fg("warning", `[${r.needsCompletionReason}]`)}`;
 			text += truncationBadge(r);
@@ -271,7 +271,7 @@ export const subagentToolRenderers = {
 			else {
 				if (r.task) text += `\n${subagentBranch(theme, "├", cwd)}${theme.fg("dim", `Task: ${oneLinePreview(r.task, 120)}`)}`;
 				text += `\n${renderDisplayItems(displayItems, collapsedItemCount)}`;
-				if (displayItems.length > collapsedItemCount) text += `\n${theme.fg("muted", "… more in ctrl+o expand")}`;
+				if (displayItems.length > collapsedItemCount) text += `\n${theme.fg("muted", "… more · ctrl+o to expand")}`;
 			}
 			const outputPath = queued ? "" : fullOutputLine(r);
 			if (outputPath) text += `\n${outputPath}`;
@@ -418,7 +418,7 @@ export const subagentToolRenderers = {
 						? theme.fg("muted", " · lifecycle in dashboard")
 					: expanded
 						? ""
-						: theme.fg("muted", " (ctrl+o to inspect)");
+						: theme.fg("muted", " (ctrl+o to expand)");
 			const headerText =
 				theme.fg("accent", "● ") +
 				theme.fg("toolTitle", theme.bold(headerLabel)) +

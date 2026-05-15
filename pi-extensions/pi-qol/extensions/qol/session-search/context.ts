@@ -146,7 +146,7 @@ export function renderSessionSearchContextMessage(message: any, options: any, th
 	const title = raw.match(/^## Session Search Context:\s*(.+)$/m)?.[1]?.trim() || "session";
 	const date = raw.match(/\*\*Date:\*\*\s*([^|\n]+)/)?.[1]?.trim() || "";
 	const header = `${theme.fg("customMessageLabel", theme.bold("Session context: "))}${theme.fg("accent", title)}${date ? theme.fg("muted", ` (${date})`) : ""}`;
-	if (!options?.expanded) return new Text(`${header}${theme.fg("dim", "  ctrl+o expand")}`, 0, 0);
+	if (!options?.expanded) return new Text(`${header}${theme.fg("dim", "  ctrl+o to expand")}`, 0, 0);
 	const body = raw.slice(raw.indexOf("\n") + 1).trim();
 	return new Text(body ? `${header}\n\n${body}` : header, 0, 0);
 }

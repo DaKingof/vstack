@@ -22,7 +22,7 @@ test("ExaClient.codeContext POSTs to /context and parses response", async () => 
 	assert.equal(out.resultsCount, 12);
 });
 
-test("code_search renderer shows Exa Code label with token count, content id, and Ctrl+O hint", () => {
+test("code_search renderer shows Exa Code label with token count, content id, and ctrl+o hint", () => {
 	const tool = createCodeSearchToolDefinition({ appendEntry() {} } as any, () => ({ apiKeys: { exa: "k" } } as any));
 	const theme = { fg: (_t: string, s: string) => s, bold: (s: string) => s };
 	const details = { provider: "exa-code", source: "exa-code", outputTokens: 1500, resultsCount: 8, contentId: "web-foo", results: [{ title: "React Hooks", url: "https://react.dev/reference/react/useState" }, { title: "GFG", url: "https://geeksforgeeks.org/x" }] };
@@ -30,7 +30,7 @@ test("code_search renderer shows Exa Code label with token count, content id, an
 	assert.match(compact, /Code Search \(Exa Code\) react/);
 	assert.match(compact, /1500 tokens · 8 sources/);
 	assert.match(compact, /content id web-foo/);
-	assert.match(compact, /… 2 sources · Ctrl\+O to expand/);
+	assert.match(compact, /… 2 sources · ctrl\+o to expand/);
 	assert.doesNotMatch(compact, /0 results/);
 	const expanded = tool.renderResult({ content: [{ type: "text", text: "snippets" }], details }, { expanded: true }, theme, { args: { query: "react" } }).render(200).join("\n");
 	assert.match(expanded, /React Hooks/);

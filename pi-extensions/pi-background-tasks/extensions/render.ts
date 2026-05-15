@@ -264,7 +264,7 @@ export function renderTaskEventMessage(
 			? `${theme.fg("toolTitle", theme.bold("Background task "))}${theme.fg("success", "finished")}`
 			: theme.fg("toolTitle", theme.bold("Background task output"));
 		return renderRuledBackgroundMessage(
-			`${prefix} ${label} ${theme.fg("accent", task.id)}${theme.fg("dim", ` · ${compactText(taskDisplayName(task), 64)} · ctrl+o details`)}`,
+			`${prefix} ${label} ${theme.fg("accent", task.id)}${theme.fg("dim", ` · ${compactText(taskDisplayName(task), 64)} · ctrl+o to expand`)}`,
 			theme,
 		);
 	}
@@ -343,7 +343,7 @@ export function renderBgToolResult(result: any, options: any, theme: Theme, cont
 		if (!task) return renderLines(`${theme.fg("warning", "● ")}${bgToolLabel(theme, "Background task started")}`);
 		let text = `${theme.fg("warning", "● ")}${bgToolLabel(theme, "Background task started ")}${theme.fg("accent", task.id)}${theme.fg(
 			"dim",
-			` · pid ${task.pid} · ${compactText(taskDisplayName(task), 72)}${expanded ? "" : " · ctrl+o details"}`,
+			` · pid ${task.pid} · ${compactText(taskDisplayName(task), 72)}${expanded ? "" : " · ctrl+o to expand"}`,
 		)}`;
 		if (expanded) text += `\n${renderTaskDetails(task, theme, cwd).join("\n")}`;
 		return renderLines(text);

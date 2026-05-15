@@ -165,7 +165,7 @@
         {
           "key": "toolRenderMode",
           "label": "Tool output style",
-          "description": "Compact keeps bg_task results to one status line; stacked adds short task/log rows and Ctrl+O expands details.",
+          "description": "Compact keeps bg_task results to one status line; stacked adds short task/log rows and ctrl+o to expand details.",
           "type": "enum",
           "enumValues": [
             "compact",
@@ -178,7 +178,7 @@
         {
           "key": "toolExpandedLogLines",
           "label": "Expanded tool log lines",
-          "description": "Maximum log lines shown when bg_task log output is expanded with Ctrl+O.",
+          "description": "Maximum log lines shown after ctrl+o to expand bg_task log output.",
           "type": "number",
           "default": 80,
           "category": "UI",

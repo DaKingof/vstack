@@ -26,7 +26,7 @@ function answerPreviewLines(answer: string, theme: any, expanded: boolean, hasRe
 		if (paragraphs.length > 1) chunks.push("");
 	}
 	while (chunks.at(-1) === "") chunks.pop();
-	if (truncated) chunks.push(expanded ? "… truncated by UI cap" : "… truncated · Ctrl+O to expand");
+	if (truncated) chunks.push(expanded ? "… truncated by UI cap" : "… truncated · ctrl+o to expand");
 	if (chunks.length === 0) return [];
 	return chunks.map((chunk, index) => {
 		const last = index === chunks.length - 1;
@@ -66,7 +66,7 @@ export function renderExaResultList(label: string, target: string | undefined, r
 		const contentIdLineLast = sources.length === 0;
 		if (contentId) lines.push(`${tree(theme, contentIdLineLast ? "└" : "├")}${muted(theme, "content id ")}${accent(theme, contentId)}`);
 		if (!expanded && sources.length > 0) {
-			lines.push(`${tree(theme, "└")}${muted(theme, `… ${sources.length} source${sources.length === 1 ? "" : "s"} · Ctrl+O to expand`)}`);
+			lines.push(`${tree(theme, "└")}${muted(theme, `… ${sources.length} source${sources.length === 1 ? "" : "s"} · ctrl+o to expand`)}`);
 		} else if (expanded && sources.length > 0) {
 			const limit = 12;
 			const shown = sources.slice(0, limit);
@@ -90,6 +90,6 @@ export function renderExaResultList(label: string, target: string | undefined, r
 		const isLast = index === shown.length - 1 && results.length <= shown.length;
 		lines.push(`${tree(theme, isLast ? "└" : "├")}${accent(theme, oneLine(title, 72))}${bits ? muted(theme, ` · ${bits}`) : ""}`);
 	}
-	if (results.length > limit) lines.push(`${tree(theme, "└")}${muted(theme, `… ${results.length - limit} more · Ctrl+O to expand`)}`);
+	if (results.length > limit) lines.push(`${tree(theme, "└")}${muted(theme, `… ${results.length - limit} more · ctrl+o to expand`)}`);
 	return textComponent(lines.join("\n"));
 }

@@ -30,7 +30,7 @@ Where the UI surfaces each layer:
 - **Mini dashboard widget** — one row per dispatched task (current state + usage rollup). Resumed pane work can share a row when transcript identity matches; task-centric detail surfaces expose individual `taskId`s.
 - **`/agents` popup → Agents tab** — agent profiles only: static frontmatter/config, source path, and system prompt. No task children, task ids, transcripts, completion summaries, or latest-message surfaces. The Inspector is intentionally static; execution data lives on Monitor.
 - **`/agents` popup → Monitor tab** — session-grouped tree of active + completed tasks. Session is the primary grouping: pane, bg-lane (`sessionKey`), or bg-one-shot. Repeated same-agent sessions get session numbers; task numbers reset inside each session. Selecting a session shows aggregate metadata/usage/status counts; selecting a task shows Summary, Completion, and Task detail.
-- **Tool output rendering** — per-task status rows (`● Agent <name> <status> · bg|pane · ctrl+o expand`) with a `Task: <prompt>` body line when echoing the prompt and a JSON/markdown-aware preview when showing the result.
+- **Tool output rendering** — per-task status rows (`● Agent <name> <status> · bg|pane · ctrl+o to expand`) with a `Task: <prompt>` body line when echoing the prompt and a JSON/markdown-aware preview when showing the result.
 
 When reading code, prefer the layer names above over ambiguous terms like "run" or "invocation". `PaneTaskRecord` is per-task; `PaneSession*` types refer to the session runtime; `discoveredAgent` / `agentConfig` refer to the static profile.
 

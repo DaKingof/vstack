@@ -60,7 +60,7 @@
         {
           "key": "stackChildDisplay",
           "label": "Stack child display",
-          "description": "How stacked child tool rows are displayed: rows = separate compact rows; headline = hidden rows with Ctrl+O list; anchor-list = list shown in the headline row by default.",
+          "description": "How stacked child tool rows are displayed: rows = separate compact rows; headline = hidden rows until ctrl+o to expand; anchor-list = list shown in the headline row by default.",
           "type": "enum",
           "enumValues": [
             "rows",

@@ -179,7 +179,7 @@ export function createWebSearchToolDefinition(pi: ExtensionAPI, getSettings: (cw
 				const meta = [item.url ? oneLine(item.url, 76) : undefined].filter(Boolean).join(" · ");
 				lines.push(`${tree(theme, index === shown.length - 1 && results.length <= shown.length ? "└" : "├")}${accent(theme, title)}${meta ? muted(theme, ` · ${meta}`) : ""}`);
 			}
-			if (results.length > (options?.expanded ? 8 : 3)) lines.push(`${tree(theme, "└")}${muted(theme, `… ${results.length - (options?.expanded ? 8 : 3)} more · Ctrl+O to expand`)}`);
+			if (results.length > (options?.expanded ? 8 : 3)) lines.push(`${tree(theme, "└")}${muted(theme, `… ${results.length - (options?.expanded ? 8 : 3)} more · ctrl+o to expand`)}`);
 			return textComponent(lines.join("\n"));
 		},
 		async execute(_toolCallId: string, params: WebSearchInput, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {

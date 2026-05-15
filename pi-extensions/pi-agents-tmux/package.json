@@ -112,7 +112,7 @@
         {
           "key": "quietInlineWhenDashboard",
           "label": "Quiet inline output with dashboard",
-          "description": "When the dashboard is enabled, keep chat/tool transcript rows to short event crumbs and move details into the persistent dashboard/Ctrl+O views.",
+          "description": "When the dashboard is enabled, keep chat/tool transcript rows to short event crumbs and move details into the persistent dashboard/ctrl+o to expand views.",
           "type": "boolean",
           "default": true,
           "category": "Rendering",

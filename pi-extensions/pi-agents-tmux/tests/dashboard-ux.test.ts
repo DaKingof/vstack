@@ -164,7 +164,7 @@ test("subagent renderer shows session-mode chips", () => {
 });
 
 test("session-mode rendering ignores corrupt mode values", async () => {
-	assert.match(renderSubagentSingle(singleResult({ sessionMode: "foo" as any })), /completed · bg · ctrl\+o expand/);
+	assert.match(renderSubagentSingle(singleResult({ sessionMode: "foo" as any })), /completed · bg · ctrl\+o to expand/);
 	assert.doesNotMatch(renderSubagentSingle(singleResult({ sessionMode: "foo" as any })), / · foo/);
 
 	const cwd = tempRuntime();

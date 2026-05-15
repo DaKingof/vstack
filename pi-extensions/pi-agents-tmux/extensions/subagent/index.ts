@@ -739,9 +739,9 @@ export default function (pi: ExtensionAPI) {
 			const completions = details?.completions ?? [];
 			if (completions.length === 1) {
 				const detail = completions[0]!;
-				return framedMessage(agentStatusLine(theme, detail.agent, detail.status, paneCompletionTone(detail.status), theme.fg("dim", " · ctrl+o expand")), theme);
+				return framedMessage(agentStatusLine(theme, detail.agent, detail.status, paneCompletionTone(detail.status), theme.fg("dim", " · ctrl+o to expand")), theme);
 			}
-			if (completions.length > 1) return framedMessage(`${theme.fg("success", ICONS.check)} ${theme.fg("toolTitle", theme.bold(`${completions.length} agents completed`))}${theme.fg("dim", " · ctrl+o expand")}`, theme);
+			if (completions.length > 1) return framedMessage(`${theme.fg("success", ICONS.check)} ${theme.fg("toolTitle", theme.bold(`${completions.length} agents completed`))}${theme.fg("dim", " · ctrl+o to expand")}`, theme);
 		}
 		return renderPaneCompletionMessage(message as { content: string; details?: unknown }, options as { expanded?: boolean } | undefined, theme);
 	});

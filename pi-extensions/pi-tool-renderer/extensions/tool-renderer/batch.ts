@@ -210,7 +210,7 @@ function renderToolBatchText(items: BatchToolItem[], theme: any, expanded: boole
 		stackPrefix(theme) +
 		toolLabel(theme, `Batch ${succeeded}/${items.length}`) +
 		theme.fg(failed > 0 ? "warning" : "success", failed > 0 ? ` · ${failed} failed` : " · succeeded") +
-		(expanded ? "" : theme.fg("dim", " · ctrl+o to inspect"));
+		(expanded ? "" : theme.fg("dim", " · ctrl+o to expand"));
 	const lines = [header];
 	items.forEach((item, index) => {
 		const stackItem = batchStackItem(item);

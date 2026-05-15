@@ -406,7 +406,7 @@ export function createWebResearchToolDefinition(pi: ExtensionAPI, getSettings: (
 			const target = context?.args?.query ?? context?.args?.queryFile ?? (outputPath ? displayWebResearchPath(context?.cwd, outputPath) : undefined) ?? "complete";
 			const hasSourceTree = Boolean(options?.expanded && sources.length > 0);
 			const modeMeta = [metadata.researchMode ?? context?.args?.researchMode ?? "standard", metadata.type ?? context?.args?.type].filter(Boolean).join("/");
-			const meta = [modeMeta, sourceCount != null ? `${sourceCount} sources` : undefined, sourceCount && !options?.expanded ? "Ctrl+O sources" : undefined].filter(Boolean).join(" · ");
+			const meta = [modeMeta, sourceCount != null ? `${sourceCount} sources` : undefined, sourceCount && !options?.expanded ? "ctrl+o to expand" : undefined].filter(Boolean).join(" · ");
 			const lines = [successSummary(theme, providerLabel("Web Research", "exa", metadata.type ?? researchProviderMode(context?.args)), target, meta)];
 			if (outputPath) lines.push(`${tree(theme, rawOutputPath || hasSourceTree ? "├" : "└")}${theme.fg("muted", "report ")}${theme.fg("accent", displayWebResearchPath(context?.cwd, outputPath))}`);
 			if (rawOutputPath) lines.push(`${tree(theme, hasSourceTree ? "├" : "└")}${theme.fg("muted", "raw metadata ")}${theme.fg("accent", displayWebResearchPath(context?.cwd, rawOutputPath))}`);
