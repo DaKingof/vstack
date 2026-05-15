@@ -1,11 +1,11 @@
-use std::io;
+use std::io::{self, Write};
 
 use chrono::{TimeZone, Utc};
 use flightdeck_dashboard::events::{
     parse_daemon_text_log_str, parse_jsonl_str, tail_read_error_event, DaemonTextLogSource,
     EventSource, JsonlEventSource,
 };
-use flightdeck_dashboard::state::snapshot::{ActivitySource, EventImportance};
+use flightdeck_dashboard::state::snapshot::{ActivitySource, Event, EventImportance};
 
 #[test]
 fn parse_jsonl_skips_invalid_lines() {
@@ -134,6 +134,55 @@ async fn tail_handles_invalid_utf8() {
 }
 
 #[tokio::test]
+async fn tail_carries_partial_lines_across_chunks() {
+    let dir = tempfile::tempdir().expect("tempdir creates");
+    let path = dir.path().join("fd-wake-events-s1.log");
+    let large_message = "x".repeat(300 * 1024);
+    let body = format!(
+        "{{\"ts\":\"2026-05-15T10:00:00Z\",\"message\":\"{large_message}\"}}\n{{\"ts\":\"2026-05-15T10:00:01Z\",\"message\":\"small\"}}\n"
+    );
+    tokio::fs::write(&path, body)
+        .await
+        .expect("large fixture writes");
+
+    let source = JsonlEventSource::new(path, ActivitySource::Wake);
+    let mut rx = source.subscribe();
+    let large = recv_event(&mut rx).await;
+    let small = recv_event(&mut rx).await;
+
+    assert_eq!(large.message, large_message);
+    assert_eq!(small.message, "small");
+}
+
+#[tokio::test]
+async fn tail_truncates_oversize_record_with_warning() {
+    let dir = tempfile::tempdir().expect("tempdir creates");
+    let path = dir.path().join("fd-wake-events-s1.log");
+    tokio::fs::write(&path, vec![b'x'; 2 * 1024 * 1024])
+        .await
+        .expect("oversize fixture writes");
+
+    let source = JsonlEventSource::new(path.clone(), ActivitySource::Wake);
+    let mut rx = source.subscribe();
+    let error = recv_event(&mut rx).await;
+    assert_eq!(error.source, ActivitySource::Error);
+    assert!(error.message.contains("record too large; truncating"));
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("append opens");
+    writeln!(
+        file,
+        "\n{{\"ts\":\"2026-05-15T10:00:02Z\",\"message\":\"after truncate\"}}"
+    )
+    .expect("normal record appends");
+
+    let normal = recv_event(&mut rx).await;
+    assert_eq!(normal.message, "after truncate");
+}
+
+#[tokio::test]
 async fn daemon_text_log_source_emits_existing_text_log() {
     let dir = tempfile::tempdir().expect("tempdir creates");
     let path = dir.path().join("fd-daemon-s1.log");
@@ -153,6 +202,13 @@ async fn daemon_text_log_source_emits_existing_text_log() {
 
     assert_eq!(event.source, ActivitySource::Daemon);
     assert_eq!(event.message, "[start] pid=31853 session_id=$3");
+}
+
+async fn recv_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>) -> Event {
+    tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("event arrives")
+        .expect("event exists")
 }
 
 #[test]

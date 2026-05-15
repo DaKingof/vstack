@@ -23,6 +23,7 @@ use crate::util::paths::{
 
 const TAIL_POLL_MS: u64 = 250;
 const TAIL_MAX_BYTES: usize = 256 * 1024;
+const TAIL_MAX_RECORD: usize = 1024 * 1024;
 
 pub trait EventSource: Send + 'static {
     fn subscribe(&self) -> mpsc::UnboundedReceiver<Event>;
@@ -194,10 +195,16 @@ where
             match read_tail_chunk(&path, &mut cursor).await {
                 Ok(bytes) => {
                     last_error_kind = None;
-                    if bytes.is_empty() {
+                    for event in cursor.push_chunk(&path, &bytes) {
+                        if tx.send(event).is_err() {
+                            return;
+                        }
+                    }
+                    let records = cursor.take_complete_records();
+                    if records.is_empty() {
                         continue;
                     }
-                    let text = String::from_utf8_lossy(&bytes);
+                    let text = String::from_utf8_lossy(&records);
                     for event in parser(&text, &mut |_| {}) {
                         if tx.send(event).is_err() {
                             return;
@@ -228,6 +235,9 @@ struct TailCursor {
     offset: u64,
     identity: Option<FileIdentity>,
     rotation_warned: bool,
+    pending: Vec<u8>,
+    complete: Vec<u8>,
+    discarding_oversize_record: bool,
 }
 
 impl TailCursor {
@@ -235,6 +245,47 @@ impl TailCursor {
         self.offset = 0;
         self.identity = None;
         self.rotation_warned = false;
+        self.pending.clear();
+        self.complete.clear();
+        self.discarding_oversize_record = false;
+    }
+
+    fn push_chunk(&mut self, path: &Path, bytes: &[u8]) -> Vec<Event> {
+        self.complete.clear();
+        if bytes.is_empty() {
+            return Vec::new();
+        }
+        let mut errors = Vec::new();
+        let start = self.consume_oversize_prefix(bytes);
+        self.pending.extend_from_slice(&bytes[start..]);
+        if let Some(newline) = self.pending.iter().rposition(|byte| *byte == b'\n') {
+            self.complete.extend_from_slice(&self.pending[..=newline]);
+            let remainder = self.pending[newline + 1..].to_vec();
+            self.pending = remainder;
+        }
+        if self.pending.len() > TAIL_MAX_RECORD {
+            self.pending.clear();
+            self.discarding_oversize_record = true;
+            errors.push(tail_record_too_large_event(path));
+        }
+        errors
+    }
+
+    fn consume_oversize_prefix(&mut self, bytes: &[u8]) -> usize {
+        if !self.discarding_oversize_record {
+            return 0;
+        }
+        match bytes.iter().position(|byte| *byte == b'\n') {
+            Some(newline) => {
+                self.discarding_oversize_record = false;
+                newline + 1
+            }
+            None => bytes.len(),
+        }
+    }
+
+    fn take_complete_records(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.complete)
     }
 }
 
@@ -281,6 +332,20 @@ async fn read_tail_chunk(path: &Path, cursor: &mut TailCursor) -> Result<Vec<u8>
     bytes.truncate(read);
     cursor.offset = cursor.offset.saturating_add(read as u64);
     Ok(bytes)
+}
+
+fn tail_record_too_large_event(path: &Path) -> Event {
+    tracing::warn!(path = %path.display(), max_bytes = TAIL_MAX_RECORD, "activity source record too large; truncating");
+    Event::new(
+        Utc::now(),
+        ActivitySource::Error,
+        EventImportance::Important,
+        format!(
+            "activity source record too large; truncating: {} (max {} bytes)",
+            path.display(),
+            TAIL_MAX_RECORD
+        ),
+    )
 }
 
 pub fn tail_read_error_event(

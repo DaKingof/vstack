@@ -124,13 +124,17 @@ async fn handle_connection(
             "subscribe_snapshots" => {
                 let mut rx = shared.snapshots.subscribe();
                 test_subscribe_pause().await;
-                let snapshot = shared.snapshot.read().await.clone();
+                let mut last_sent = shared.snapshot.read().await.clone();
                 write_ok_line(&mut write_half, request.id, json!({"subscribed": true})).await?;
-                write_snapshot_notification(&mut write_half, &snapshot).await?;
+                write_snapshot_notification(&mut write_half, &last_sent).await?;
                 loop {
                     match rx.recv().await {
                         Ok(snapshot) => {
+                            if last_sent.structural_eq(&snapshot) {
+                                continue;
+                            }
                             write_snapshot_notification(&mut write_half, &snapshot).await?;
+                            last_sent = snapshot;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
@@ -140,13 +144,17 @@ async fn handle_connection(
             "tail_state" => {
                 let mut rx = shared.snapshots.subscribe();
                 test_subscribe_pause().await;
-                let snapshot = shared.snapshot.read().await.clone();
+                let mut last_sent = shared.snapshot.read().await.clone();
                 write_ok_line(&mut write_half, request.id, json!({"subscribed": true})).await?;
-                write_state_change_notification(&mut write_half, &snapshot).await?;
+                write_state_change_notification(&mut write_half, &last_sent).await?;
                 loop {
                     match rx.recv().await {
                         Ok(snapshot) => {
+                            if last_sent.structural_eq(&snapshot) {
+                                continue;
+                            }
                             write_state_change_notification(&mut write_half, &snapshot).await?;
+                            last_sent = snapshot;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),

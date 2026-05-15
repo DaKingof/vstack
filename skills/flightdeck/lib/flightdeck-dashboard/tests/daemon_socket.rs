@@ -130,6 +130,7 @@ async fn subscribe_then_snapshot_sees_mutation_during_subscribe() -> Result<(), 
 
     let snapshot = recv_title(&mut rx, "updated-during-subscribe").await?;
     assert_eq!(first_title(&snapshot), Some("updated-during-subscribe"));
+    assert_no_duplicate_title(&mut rx, "updated-during-subscribe").await?;
 
     let stop = daemon_command(bin, temp.path(), ["daemon", "stop", "--session", SESSION])?;
     assert!(stop.status.success(), "stop command failed");
@@ -299,6 +300,31 @@ async fn wait_for_socket(socket: &Path) -> Result<(), Box<dyn Error>> {
             return Err(format!("daemon socket did not become ready: {}", socket.display()).into());
         }
         sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn assert_no_duplicate_title(
+    rx: &mut mpsc::UnboundedReceiver<
+        Result<DashboardSnapshot, flightdeck_dashboard::daemon::client::ClientError>,
+    >,
+    title: &str,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    loop {
+        match rx.try_recv() {
+            Ok(Ok(snapshot)) if first_title(&snapshot) == Some(title) => {
+                return Err(format!("duplicate snapshot title received: {title}").into())
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => return Err(format!("snapshot stream error: {error}").into()),
+            Err(mpsc::error::TryRecvError::Empty) => {
+                if Instant::now() >= deadline {
+                    return Ok(());
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => return Ok(()),
+        }
     }
 }
 
