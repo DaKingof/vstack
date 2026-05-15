@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
-use crate::app::model::Model;
+use crate::app::model::{Model, ReadSourceState};
 use crate::app::theme::Theme;
 use crate::app::view::{fx, human_duration};
 use crate::state::snapshot::TrackedSession;
@@ -14,7 +14,7 @@ const RIGHT_RAIL_MIN_WIDTH: u16 = 100;
 const SINGLE_COLUMN_WIDTH: u16 = 80;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) {
-    let area = render_pre_purge_banner(frame, area, model, theme);
+    let area = render_transition_banners(frame, area, model, theme);
     if area.width <= SINGLE_COLUMN_WIDTH || model.ui.compact {
         render_single_column(frame, area, model, theme);
         return;
@@ -43,22 +43,64 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) {
     render_detail(frame, columns[2], model, theme);
 }
 
-fn render_pre_purge_banner(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) -> Rect {
-    if !model.snapshot.pre_purge_state {
-        return area;
+fn render_transition_banners(
+    frame: &mut Frame<'_>,
+    mut area: Rect,
+    model: &Model,
+    theme: Theme,
+) -> Rect {
+    if model.snapshot.pre_purge_state {
+        area = render_banner(
+            frame,
+            area,
+            " state schema warning ",
+            PRE_PURGE_BANNER,
+            theme.error,
+        );
     }
+    match model.read_source_state {
+        ReadSourceState::Archive { archived_at } => {
+            area = render_banner(
+                frame,
+                area,
+                " archive state ",
+                &format!("Live state archived; showing terminated snapshot from {archived_at}."),
+                theme.warning,
+            );
+        }
+        ReadSourceState::Missing => {
+            area = render_banner(
+                frame,
+                area,
+                " missing state ",
+                "No live state file or terminated archive found yet.",
+                theme.muted,
+            );
+        }
+        ReadSourceState::Live => {}
+    }
+    area
+}
+
+fn render_banner(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &'static str,
+    message: &str,
+    style: ratatui::style::Style,
+) -> Rect {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.error)
-        .title(Span::styled(" state schema warning ", theme.error));
+        .border_style(style)
+        .title(Span::styled(title, style));
     frame.render_widget(
-        Paragraph::new(PRE_PURGE_BANNER)
+        Paragraph::new(message.to_owned())
             .block(block)
-            .style(theme.error)
+            .style(style)
             .alignment(Alignment::Center),
         chunks[0],
     );

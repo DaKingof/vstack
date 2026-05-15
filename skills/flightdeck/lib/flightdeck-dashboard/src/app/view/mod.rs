@@ -15,6 +15,7 @@ use ratatui::Frame;
 
 use crate::app::model::{Model, Tab};
 use crate::app::theme::Theme;
+use crate::state::snapshot::Staleness;
 
 pub fn render(frame: &mut Frame<'_>, model: &Model) {
     let theme = Theme::dark();
@@ -80,6 +81,18 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme)
         spans.push(Span::raw("  "));
         spans.push(Span::styled(state_counts, theme.muted));
     }
+    spans.push(Span::raw("  "));
+    match snapshot.staleness(model.now) {
+        Staleness::Fresh => spans.push(Span::styled(" fresh ", theme.muted)),
+        Staleness::WarnAfter(age) => spans.push(Span::styled(
+            format!(" stale-warn {} ", duration_label(age)),
+            theme.warning,
+        )),
+        Staleness::StaleAfter(age) => spans.push(Span::styled(
+            format!(" stale {} ", duration_label(age)),
+            theme.error,
+        )),
+    }
     if snapshot.terminated {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(" ✔ session complete ", theme.ok));
@@ -143,20 +156,42 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) {
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) {
     let text = if model.ui.filter_open {
+        let prefix = if model.feed_filter.error.is_some() {
+            " regex invalid > "
+        } else {
+            " filter > "
+        };
         Line::from(vec![
-            Span::styled(" > ", theme.filter),
-            Span::styled(
-                "filter input open — filtering lands in Phase 3",
-                theme.filter,
-            ),
+            Span::styled(prefix, theme.filter),
+            Span::styled(model.feed_filter.input.clone(), theme.filter),
         ])
     } else {
+        let noisy = if model.ui.show_noisy {
+            "noisy:on"
+        } else {
+            "important-only"
+        };
+        let filter = if model.feed_filter.pattern.is_empty() {
+            "filter:off".to_owned()
+        } else {
+            format!("filter:{}", model.feed_filter.pattern)
+        };
         Line::from(vec![Span::styled(
-            " Tab/Shift+Tab tabs  j/k select  r reload  Alt+M compact  ? help  q quit ",
+            format!(
+                " Tab/Shift+Tab tabs  j/k select  r reload  Ctrl+N {noisy}  / {filter}  Alt+M compact  ? help  q quit "
+            ),
             theme.footer,
         )])
     };
-    frame.render_widget(Paragraph::new(text).style(theme.footer), area);
+    let mut paragraph = Paragraph::new(text).style(theme.footer);
+    if model.ui.filter_open && model.feed_filter.error.is_some() {
+        paragraph = paragraph.block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme.error),
+        );
+    }
+    frame.render_widget(paragraph, area);
 }
 
 pub(super) fn render_placeholder(
@@ -188,6 +223,19 @@ fn owner_label(model: &Model) -> String {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| String::from("cwd?"));
     format!("{harness} · {pane} · {cwd}")
+}
+
+fn duration_label(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    let hours = seconds / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    if hours > 0 {
+        format!("{hours}h{minutes:02}m")
+    } else if minutes > 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 pub(super) fn human_duration(start: DateTime<Utc>, end: DateTime<Utc>) -> String {

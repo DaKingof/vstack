@@ -6,6 +6,8 @@ const TAB_SWITCH_FRAMES: u64 = 3;
 const HELP_FADE_FRAMES: u64 = 3;
 const ERROR_FLASH_FRAMES: u64 = 4;
 const SELECTION_HALO_FRAMES: u64 = 2;
+const ACTIVITY_ROW_ENTER_FRAMES: u64 = 1;
+const ACTIVITY_FLASH_FRAMES: u64 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MotionLevel {
@@ -45,6 +47,8 @@ pub enum EffectKind {
     HelpOverlay,
     ErrorFlash,
     SelectionHalo,
+    ActivityRowEnter,
+    ActivityImportantFlash,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,6 +94,16 @@ impl Effect {
             EffectKind::SelectionHalo => Self {
                 kind,
                 duration_frames: SELECTION_HALO_FRAMES,
+                rich_motion_only: true,
+            },
+            EffectKind::ActivityRowEnter => Self {
+                kind,
+                duration_frames: ACTIVITY_ROW_ENTER_FRAMES,
+                rich_motion_only: true,
+            },
+            EffectKind::ActivityImportantFlash => Self {
+                kind,
+                duration_frames: ACTIVITY_FLASH_FRAMES,
                 rich_motion_only: true,
             },
         }

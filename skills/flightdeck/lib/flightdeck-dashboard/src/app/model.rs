@@ -1,13 +1,19 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::path::Path;
 use std::time::Instant;
+
+use regex::Regex;
 
 use chrono::{DateTime, Utc};
 
 use crate::app::command::SnapshotSource;
 use crate::app::motion::{EffectInstance, MotionLevel};
-use crate::state::snapshot::{DashboardSnapshot, TrackedSession};
+use crate::state::snapshot::{DashboardSnapshot, Event, EventImportance, TrackedSession};
+use crate::watcher::coalesce::ReloadCoalescer;
 
 pub type Clock = fn() -> DateTime<Utc>;
+
+pub const RECENT_EVENTS_CAP: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tab {
@@ -76,6 +82,96 @@ impl Tab {
 pub struct UiFlags {
     pub compact: bool,
     pub filter_open: bool,
+    pub show_noisy: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct FeedFilter {
+    pub input: String,
+    pub pattern: String,
+    pub regex: Option<Regex>,
+    pub error: Option<String>,
+}
+
+impl FeedFilter {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            input: String::new(),
+            pattern: String::new(),
+            regex: None,
+            error: None,
+        }
+    }
+
+    pub fn begin_edit(&mut self) {
+        self.input.clone_from(&self.pattern);
+        self.error = None;
+    }
+
+    pub fn clear(&mut self) {
+        self.input.clear();
+        self.pattern.clear();
+        self.regex = None;
+        self.error = None;
+    }
+
+    pub fn commit(&mut self) -> bool {
+        if self.input.trim().is_empty() {
+            self.clear();
+            return true;
+        }
+        match Regex::new(&self.input) {
+            Ok(regex) => {
+                self.pattern.clone_from(&self.input);
+                self.regex = Some(regex);
+                self.error = None;
+                true
+            }
+            Err(error) => {
+                self.error = Some(error.to_string());
+                false
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn matches(&self, event: &Event) -> bool {
+        self.regex.as_ref().map_or(true, |regex| {
+            regex.is_match(&event.message) || regex.is_match(event.source.as_chip())
+        })
+    }
+}
+
+impl Default for FeedFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadSourceState {
+    Live,
+    Archive { archived_at: DateTime<Utc> },
+    Missing,
+}
+
+impl ReadSourceState {
+    #[must_use]
+    pub fn from_snapshot(snapshot: &DashboardSnapshot) -> Self {
+        if is_archive_path(&snapshot.master_state_path) {
+            return Self::Archive {
+                archived_at: snapshot.terminated_at.unwrap_or(snapshot.updated_at),
+            };
+        }
+        Self::Live
+    }
+}
+
+fn is_archive_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".json.archive"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +186,10 @@ pub struct Model {
     pub tabs_enabled: Vec<Tab>,
     pub snapshot: DashboardSnapshot,
     pub snapshot_source: SnapshotSource,
+    pub read_source_state: ReadSourceState,
+    pub recent_events: VecDeque<Event>,
+    pub snapshot_diff_drops: u64,
+    pub reload_coalescer: ReloadCoalescer,
     pub now: DateTime<Utc>,
     pub motion: MotionLevel,
     pub motion_clock: Instant,
@@ -98,6 +198,7 @@ pub struct Model {
     pub show_help: bool,
     pub modal: ModalState,
     pub ui: UiFlags,
+    pub feed_filter: FeedFilter,
     pub quit_requested: bool,
     pub error: Option<String>,
     pub clock: Clock,
@@ -117,11 +218,17 @@ impl Model {
         for tab in Tab::ALL {
             selection.insert(tab, 0);
         }
+        let read_source_state = ReadSourceState::from_snapshot(&snapshot);
+        let recent_events = snapshot.recent_events.clone();
         Self {
             current_tab: Tab::Overview,
             tabs_enabled,
             snapshot,
             snapshot_source,
+            read_source_state,
+            recent_events,
+            snapshot_diff_drops: 0,
+            reload_coalescer: ReloadCoalescer::new(),
             now: clock(),
             motion,
             motion_clock: Instant::now(),
@@ -132,7 +239,9 @@ impl Model {
             ui: UiFlags {
                 compact: false,
                 filter_open: false,
+                show_noisy: true,
             },
+            feed_filter: FeedFilter::new(),
             quit_requested: false,
             error: None,
             clock,
@@ -170,6 +279,23 @@ impl Model {
     pub fn clamp_selection(&mut self) {
         let current = self.selected_index();
         self.set_selected_index(current);
+    }
+
+    pub fn push_event(&mut self, event: Event) {
+        if self.recent_events.len() >= RECENT_EVENTS_CAP {
+            self.recent_events.pop_front();
+        }
+        self.recent_events.push_back(event);
+    }
+
+    #[must_use]
+    pub fn filtered_events(&self) -> Vec<&Event> {
+        self.recent_events
+            .iter()
+            .rev()
+            .filter(|event| self.ui.show_noisy || event.importance >= EventImportance::Important)
+            .filter(|event| self.feed_filter.matches(event))
+            .collect()
     }
 }
 

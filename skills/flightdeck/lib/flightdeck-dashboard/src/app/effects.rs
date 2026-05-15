@@ -3,7 +3,7 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
 
-use crate::app::model::Clock;
+use crate::app::model::{Clock, ReadSourceState};
 use crate::fixtures;
 use crate::state::snapshot::DashboardSnapshot;
 use crate::state::tracked_entries::{self, ArchiveError, SessionResolution, SnapshotError};
@@ -27,7 +27,9 @@ impl Effects {
         for command in commands {
             match command {
                 Cmd::Render => {}
-                Cmd::RequestSnapshot(source) => self.request_snapshot(source),
+                Cmd::RequestSnapshot(source) | Cmd::ReloadFromSource(source) => {
+                    self.request_snapshot(source);
+                }
                 Cmd::LogAction(action) => tracing::info!(action = %action, "dashboard action"),
                 Cmd::Spawn(future) => self.spawn_msg(future),
             }
@@ -38,7 +40,7 @@ impl Effects {
         match source {
             SnapshotSource::Demo(name) => {
                 let msg = match fixtures::load_demo_snapshot(name, (self.clock)()) {
-                    Ok(snapshot) => Msg::SnapshotUpdated(Box::new(snapshot)),
+                    Ok(snapshot) => snapshot_msg(snapshot, ReadSourceState::Live),
                     Err(error) => Msg::Error(error.to_string()),
                 };
                 send_msg(&self.tx, msg);
@@ -73,39 +75,52 @@ impl Effects {
 
 fn snapshot_file_msg(path: &Path, now: DateTime<Utc>) -> Msg {
     match tracked_entries::snapshot_from_file(path, now) {
-        Ok(snapshot) => Msg::SnapshotUpdated(Box::new(snapshot)),
-        Err(SnapshotError::PrePurgeState) => {
-            Msg::SnapshotUpdated(Box::new(tracked_entries::snapshot_for_error_path(
+        Ok(snapshot) => snapshot_msg(snapshot, ReadSourceState::Live),
+        Err(SnapshotError::PrePurgeState) => snapshot_msg(
+            tracked_entries::snapshot_for_error_path(
                 path,
                 now,
                 SnapshotError::PrePurgeState.to_string(),
                 true,
-            )))
-        }
+            ),
+            ReadSourceState::Live,
+        ),
         Err(error) => Msg::Error(error.to_string()),
     }
 }
 
 fn snapshot_session_msg(resolution: &SessionResolution, now: DateTime<Utc>) -> Msg {
     match tracked_entries::read_session_snapshot(resolution, now) {
-        Ok(snapshot) => Msg::SnapshotUpdated(Box::new(snapshot)),
-        Err(SnapshotError::PrePurgeState) => {
-            Msg::SnapshotUpdated(Box::new(tracked_entries::snapshot_for_error(
+        Ok(snapshot) => {
+            let source_state = ReadSourceState::from_snapshot(&snapshot);
+            snapshot_msg(snapshot, source_state)
+        }
+        Err(SnapshotError::PrePurgeState) => snapshot_msg(
+            tracked_entries::snapshot_for_error(
                 &resolution.session,
                 resolution.state_path.clone(),
                 now,
                 SnapshotError::PrePurgeState.to_string(),
                 true,
-            )))
-        }
-        Err(SnapshotError::Archive(ArchiveError::NoArchives { .. })) => {
-            Msg::SnapshotUpdated(Box::new(DashboardSnapshot::empty_for_session(
+            ),
+            ReadSourceState::Live,
+        ),
+        Err(SnapshotError::Archive(ArchiveError::NoArchives { .. })) => snapshot_msg(
+            DashboardSnapshot::empty_for_session(
                 &resolution.session,
                 resolution.state_path.clone(),
                 now,
-            )))
-        }
+            ),
+            ReadSourceState::Missing,
+        ),
         Err(error) => Msg::Error(error.to_string()),
+    }
+}
+
+fn snapshot_msg(snapshot: DashboardSnapshot, source_state: ReadSourceState) -> Msg {
+    Msg::SnapshotUpdated {
+        snapshot: Box::new(snapshot),
+        source_state,
     }
 }
 

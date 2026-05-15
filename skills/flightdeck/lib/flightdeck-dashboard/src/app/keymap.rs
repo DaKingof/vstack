@@ -13,6 +13,7 @@ pub enum Action {
     OpenDetail,
     OpenFilter,
     Reload,
+    ToggleNoise,
     ToggleCompact,
     ToggleHelp,
     Quit,
@@ -83,6 +84,11 @@ pub const BINDINGS: &[KeyBinding] = &[
         action: Action::Reload,
     },
     KeyBinding {
+        keys: "Ctrl+N",
+        description: "Toggle noisy activity rows",
+        action: Action::ToggleNoise,
+    },
+    KeyBinding {
         keys: "Alt+M",
         description: "Toggle compact layout",
         action: Action::ToggleCompact,
@@ -113,6 +119,9 @@ pub fn action_for(key: &KeyEvent) -> Option<Action> {
         KeyCode::Enter => Some(Action::OpenDetail),
         KeyCode::Char('/') => Some(Action::OpenFilter),
         KeyCode::Char('r') => Some(Action::Reload),
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::ToggleNoise)
+        }
         KeyCode::Char('m') | KeyCode::Char('M') if key.modifiers.contains(KeyModifiers::ALT) => {
             Some(Action::ToggleCompact)
         }

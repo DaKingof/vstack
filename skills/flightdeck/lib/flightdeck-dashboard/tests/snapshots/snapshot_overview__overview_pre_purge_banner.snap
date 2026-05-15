@@ -1,10 +1,9 @@
 ---
 source: tests/snapshot_overview.rs
-assertion_line: 62
 expression: rendered
 ---
 "┌ flightdeck-dashboard ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
-"│ Flightdeck  session HT  owner unknown  daemon: unknown  elapsed unknown  AH:0 ISS:0 WF:0                                                                                                             │"
+"│ Flightdeck  session HT  owner unknown  daemon: unknown  elapsed unknown  AH:0 ISS:0 WF:0   fresh                                                                                                     │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
 "┌ tabs ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│ Overview │ Live feed │ Conversations │ Conflicts & merges │ Decisions │ Daemon                                                                                                                       │"
@@ -61,5 +60,5 @@ expression: rendered
 "│                          ││                                                                                                                              ││                                          │"
 "│                          ││                                                                                                                              ││                                          │"
 "└──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────┘"
-" Tab/Shift+Tab tabs  j/k select  r reload  Alt+M compact  ? help  q quit                                                                                                                                "
+" Tab/Shift+Tab tabs  j/k select  r reload  Ctrl+N noisy:on  / filter:off  Alt+M compact  ? help  q quit                                                                                                 "
 "                                                                                                                                                                                                        "

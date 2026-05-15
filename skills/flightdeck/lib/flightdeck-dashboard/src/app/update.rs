@@ -1,3 +1,8 @@
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use crate::state::snapshot::EventImportance;
+use crate::watcher::WatcherEvent;
+
 use super::command::Cmd;
 use super::keymap::{self, Action};
 use super::model::{ModalState, Model};
@@ -19,16 +24,28 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::KeyPressed(key) => handle_key(model, &key),
         Msg::Resize(_, _) => vec![Cmd::Render],
-        Msg::SnapshotUpdated(snapshot) => {
-            model.snapshot = *snapshot;
-            model.refresh_now();
-            model.clamp_selection();
+        Msg::SnapshotUpdated {
+            snapshot,
+            source_state,
+        } => handle_snapshot_updated(model, *snapshot, source_state),
+        Msg::EventReceived(event) => {
+            let important = event.importance >= EventImportance::Important;
+            model.push_event(event);
+            push_effect(model, EffectKind::ActivityRowEnter, EffectTarget::Row(0));
+            if important {
+                push_effect(
+                    model,
+                    EffectKind::ActivityImportantFlash,
+                    EffectTarget::Row(0),
+                );
+            }
             vec![Cmd::Render]
         }
+        Msg::WatcherEvent(WatcherEvent::Reload) => request_reload(model),
         Msg::Error(error) => {
             model.error = Some(error);
             push_effect(model, EffectKind::ErrorFlash, EffectTarget::Global);
-            vec![Cmd::Render]
+            finish_reload(model, true)
         }
         Msg::Quit => {
             model.quit_requested = true;
@@ -37,7 +54,49 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     }
 }
 
-fn handle_key(model: &mut Model, key: &crossterm::event::KeyEvent) -> Vec<Cmd> {
+fn handle_snapshot_updated(
+    model: &mut Model,
+    snapshot: crate::state::snapshot::DashboardSnapshot,
+    source_state: super::model::ReadSourceState,
+) -> Vec<Cmd> {
+    let pending_reload = finish_reload(model, false);
+    if model.snapshot.structural_eq(&snapshot) && model.read_source_state == source_state {
+        model.snapshot_diff_drops = model.snapshot_diff_drops.saturating_add(1);
+        return pending_reload;
+    }
+    model.snapshot = snapshot;
+    model.read_source_state = source_state;
+    model.refresh_now();
+    model.clamp_selection();
+    let mut commands = vec![Cmd::Render];
+    commands.extend(pending_reload);
+    commands
+}
+
+fn finish_reload(model: &mut Model, render: bool) -> Vec<Cmd> {
+    let mut commands = Vec::new();
+    if model.reload_coalescer.finish() {
+        commands.push(Cmd::ReloadFromSource(model.snapshot_source.clone()));
+    }
+    if render {
+        commands.push(Cmd::Render);
+    }
+    commands
+}
+
+fn request_reload(model: &mut Model) -> Vec<Cmd> {
+    if model.reload_coalescer.request() {
+        vec![Cmd::ReloadFromSource(model.snapshot_source.clone())]
+    } else {
+        Vec::new()
+    }
+}
+
+fn handle_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
+    if model.ui.filter_open {
+        return handle_filter_key(model, key);
+    }
+
     let Some(action) = keymap::action_for(key) else {
         return Vec::new();
     };
@@ -98,13 +157,18 @@ fn handle_key(model: &mut Model, key: &crossterm::event::KeyEvent) -> Vec<Cmd> {
             model.selected_index()
         ))],
         Action::OpenFilter => {
+            model.feed_filter.begin_edit();
             model.ui.filter_open = true;
             vec![
                 Cmd::LogAction(String::from("filter input opened")),
                 Cmd::Render,
             ]
         }
-        Action::Reload => vec![Cmd::RequestSnapshot(model.snapshot_source.clone())],
+        Action::Reload => request_reload(model),
+        Action::ToggleNoise => {
+            model.ui.show_noisy = !model.ui.show_noisy;
+            vec![Cmd::Render]
+        }
         Action::ToggleCompact => {
             model.ui.compact = !model.ui.compact;
             vec![Cmd::Render]
@@ -129,6 +193,37 @@ fn handle_key(model: &mut Model, key: &crossterm::event::KeyEvent) -> Vec<Cmd> {
             model.ui.filter_open = false;
             vec![Cmd::Render]
         }
+    }
+}
+
+fn handle_filter_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
+    match key.code {
+        KeyCode::Enter => {
+            if model.feed_filter.commit() {
+                model.ui.filter_open = false;
+            }
+            vec![Cmd::Render]
+        }
+        KeyCode::Esc => {
+            model.ui.filter_open = false;
+            model.feed_filter.error = None;
+            vec![Cmd::Render]
+        }
+        KeyCode::Backspace => {
+            model.feed_filter.input.pop();
+            model.feed_filter.error = None;
+            vec![Cmd::Render]
+        }
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            model.ui.show_noisy = !model.ui.show_noisy;
+            vec![Cmd::Render]
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            model.feed_filter.input.push(ch);
+            model.feed_filter.error = None;
+            vec![Cmd::Render]
+        }
+        _ => Vec::new(),
     }
 }
 

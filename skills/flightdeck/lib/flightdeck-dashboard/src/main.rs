@@ -11,14 +11,18 @@ use crossterm::terminal::{
 };
 use flightdeck_dashboard::app::command::SnapshotSource;
 use flightdeck_dashboard::app::effects::Effects;
-use flightdeck_dashboard::app::model::{utc_now, Model};
+use flightdeck_dashboard::app::model::{utc_now, Model, ReadSourceState};
 use flightdeck_dashboard::app::motion::{self, MotionLevel};
 use flightdeck_dashboard::app::{update, view};
 use flightdeck_dashboard::cli::{Cli, Command, TuiArgs};
+use flightdeck_dashboard::events::{
+    self, CompositeSource, DaemonLogSource, EventSource, PendingWakeSource,
+};
 use flightdeck_dashboard::fixtures;
 use flightdeck_dashboard::state::snapshot::DashboardSnapshot;
 use flightdeck_dashboard::state::tracked_entries::{self, ArchiveError, SnapshotError};
 use flightdeck_dashboard::util::logging;
+use flightdeck_dashboard::watcher::StateWatcher;
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
@@ -27,6 +31,7 @@ use tokio::time::MissedTickBehavior;
 
 const ANIMATION_TICK_MS: u64 = 80;
 const CLOCK_TICK_MS: u64 = 1_000;
+const WATCH_DEBOUNCE_MS: u64 = 150;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -50,6 +55,7 @@ async fn run_tui(args: TuiArgs) -> Result<()> {
         MotionLevel::from_env(),
         utc_now,
     );
+    model.read_source_state = initial.source_state;
     if let Some(error) = initial.status_error {
         model.error = Some(error);
     }
@@ -69,6 +75,7 @@ async fn run_tui(args: TuiArgs) -> Result<()> {
 struct InitialSnapshot {
     snapshot: DashboardSnapshot,
     source: SnapshotSource,
+    source_state: ReadSourceState,
     status_error: Option<String>,
 }
 
@@ -79,6 +86,7 @@ fn initial_snapshot(args: &TuiArgs) -> Result<InitialSnapshot> {
             Ok(snapshot) => InitialSnapshot {
                 snapshot,
                 source: SnapshotSource::File(path.clone()),
+                source_state: ReadSourceState::Live,
                 status_error: None,
             },
             Err(SnapshotError::PrePurgeState) => InitialSnapshot {
@@ -89,6 +97,7 @@ fn initial_snapshot(args: &TuiArgs) -> Result<InitialSnapshot> {
                     true,
                 ),
                 source: SnapshotSource::File(path.clone()),
+                source_state: ReadSourceState::Live,
                 status_error: None,
             },
             Err(error) => return Err(error.into()),
@@ -101,6 +110,7 @@ fn initial_snapshot(args: &TuiArgs) -> Result<InitialSnapshot> {
         return Ok(InitialSnapshot {
             snapshot,
             source: SnapshotSource::Demo(demo_name),
+            source_state: ReadSourceState::Live,
             status_error: None,
         });
     }
@@ -108,11 +118,15 @@ fn initial_snapshot(args: &TuiArgs) -> Result<InitialSnapshot> {
     let resolution = tracked_entries::resolve_session_state(args.session.as_deref())?;
     let source = SnapshotSource::Session(resolution.clone());
     match tracked_entries::read_session_snapshot(&resolution, now) {
-        Ok(snapshot) => Ok(InitialSnapshot {
-            snapshot,
-            source,
-            status_error: None,
-        }),
+        Ok(snapshot) => {
+            let source_state = ReadSourceState::from_snapshot(&snapshot);
+            Ok(InitialSnapshot {
+                snapshot,
+                source,
+                source_state,
+                status_error: None,
+            })
+        }
         Err(SnapshotError::PrePurgeState) => Ok(InitialSnapshot {
             snapshot: tracked_entries::snapshot_for_error(
                 &resolution.session,
@@ -122,6 +136,7 @@ fn initial_snapshot(args: &TuiArgs) -> Result<InitialSnapshot> {
                 true,
             ),
             source,
+            source_state: ReadSourceState::Live,
             status_error: None,
         }),
         Err(SnapshotError::Archive(ArchiveError::NoArchives { .. })) => Ok(InitialSnapshot {
@@ -131,6 +146,7 @@ fn initial_snapshot(args: &TuiArgs) -> Result<InitialSnapshot> {
                 now,
             ),
             source,
+            source_state: ReadSourceState::Missing,
             status_error: None,
         }),
         Err(error) => Ok(InitialSnapshot {
@@ -142,9 +158,70 @@ fn initial_snapshot(args: &TuiArgs) -> Result<InitialSnapshot> {
                 false,
             ),
             source,
+            source_state: ReadSourceState::Live,
             status_error: Some(error.to_string()),
         }),
     }
+}
+
+fn start_state_watcher(
+    source: &SnapshotSource,
+    tx: mpsc::UnboundedSender<flightdeck_dashboard::app::msg::Msg>,
+    model: &mut Model,
+) -> Option<StateWatcher> {
+    let (live_path, archive_dir) = match source {
+        SnapshotSource::Demo(_) => return None,
+        SnapshotSource::File(path) => {
+            let archive_dir = path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf();
+            (path.clone(), archive_dir)
+        }
+        SnapshotSource::Session(resolution) => {
+            (resolution.state_path.clone(), resolution.state_dir.clone())
+        }
+    };
+    match StateWatcher::spawn(
+        live_path,
+        archive_dir,
+        tx,
+        Duration::from_millis(WATCH_DEBOUNCE_MS),
+    ) {
+        Ok(watcher) => Some(watcher),
+        Err(error) => {
+            model.error = Some(error.to_string());
+            None
+        }
+    }
+}
+
+fn start_event_sources(
+    source: &SnapshotSource,
+    tx: mpsc::UnboundedSender<flightdeck_dashboard::app::msg::Msg>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let session = match source {
+        SnapshotSource::Demo(_) => return None,
+        SnapshotSource::File(path) => tracked_entries::session_id_from_state_path(path),
+        SnapshotSource::Session(resolution) => resolution.session.clone(),
+    };
+    let state_dir = events::daemon_state_dir();
+    let session_key = events::session_key_from_name(&session);
+    let source = CompositeSource::new(vec![
+        Box::new(DaemonLogSource::for_session(&state_dir, &session_key)),
+        Box::new(PendingWakeSource::for_session(&state_dir, &session_key)),
+    ]);
+    let mut rx = source.subscribe();
+    Some(tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if tx
+                .send(flightdeck_dashboard::app::msg::Msg::EventReceived(event))
+                .is_err()
+            {
+                break;
+            }
+        }
+    }))
 }
 
 async fn run_app_loop(
@@ -153,6 +230,9 @@ async fn run_app_loop(
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let effects = Effects::new(tx.clone(), model.clock);
+    let source = model.snapshot_source.clone();
+    let _state_watcher = start_state_watcher(&source, tx.clone(), model);
+    let _event_task = start_event_sources(&source, tx.clone());
     let mut events = EventStream::new();
     let mut anim = tokio::time::interval(Duration::from_millis(ANIMATION_TICK_MS));
     anim.set_missed_tick_behavior(MissedTickBehavior::Skip);

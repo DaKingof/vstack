@@ -1,6 +1,8 @@
 use crossterm::event::KeyEvent;
 
-use crate::state::snapshot::DashboardSnapshot;
+use crate::app::model::ReadSourceState;
+use crate::state::snapshot::{DashboardSnapshot, Event};
+use crate::watcher::WatcherEvent;
 
 #[derive(Debug)]
 pub enum Msg {
@@ -8,7 +10,12 @@ pub enum Msg {
     AnimateTick,
     KeyPressed(KeyEvent),
     Resize(u16, u16),
-    SnapshotUpdated(Box<DashboardSnapshot>),
+    SnapshotUpdated {
+        snapshot: Box<DashboardSnapshot>,
+        source_state: ReadSourceState,
+    },
+    EventReceived(Event),
+    WatcherEvent(WatcherEvent),
     Error(String),
     Quit,
 }

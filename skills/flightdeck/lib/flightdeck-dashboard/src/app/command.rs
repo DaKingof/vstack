@@ -16,6 +16,7 @@ pub enum SnapshotSource {
 pub enum Cmd {
     Render,
     RequestSnapshot(SnapshotSource),
+    ReloadFromSource(SnapshotSource),
     LogAction(String),
     Spawn(BoxFuture<'static, Msg>),
 }

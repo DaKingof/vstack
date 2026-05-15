@@ -3,7 +3,7 @@ mod common;
 use std::path::PathBuf;
 
 use flightdeck_dashboard::app::command::SnapshotSource;
-use flightdeck_dashboard::app::model::{Model, Tab};
+use flightdeck_dashboard::app::model::{Model, ReadSourceState, Tab};
 use flightdeck_dashboard::app::motion::{self, MotionLevel};
 use flightdeck_dashboard::state::snapshot::DashboardSnapshot;
 use flightdeck_dashboard::state::tracked_entries::{PRE_PURGE_BANNER, PRE_PURGE_STATE_MESSAGE};
@@ -40,6 +40,34 @@ fn terminated_fixture_overview() {
 #[test]
 fn paused_fixture_overview() {
     insta::assert_snapshot!("overview_paused", render_fixture("paused"));
+}
+
+#[test]
+fn stale_chip_warn() {
+    let mut model = common::model_for_fixture("mixed", MotionLevel::Off);
+    model.snapshot.updated_at = common::fixed_now() - chrono::Duration::seconds(90);
+    insta::assert_snapshot!("overview_stale_chip_warn", common::render_model(&model));
+}
+
+#[test]
+fn stale_chip_stale() {
+    let mut model = common::model_for_fixture("mixed", MotionLevel::Off);
+    model.snapshot.updated_at = common::fixed_now() - chrono::Duration::seconds(600);
+    insta::assert_snapshot!("overview_stale_chip_stale", common::render_model(&model));
+}
+
+#[test]
+fn archive_banner() {
+    let mut model = common::model_for_fixture("terminated", MotionLevel::Off);
+    model.snapshot.master_state_path =
+        PathBuf::from("tmp/flightdeck-state-demo-terminated-20260515T100700Z.json.archive");
+    model.read_source_state = ReadSourceState::Archive {
+        archived_at: model
+            .snapshot
+            .terminated_at
+            .expect("terminated fixture has ts"),
+    };
+    insta::assert_snapshot!("overview_archive_banner", common::render_model(&model));
 }
 
 #[test]

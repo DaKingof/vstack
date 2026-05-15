@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer};
@@ -164,14 +165,14 @@ impl fmt::Display for SessionState {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct ConflictGraph {
     #[serde(default)]
     pub edges: Vec<(String, String)>,
     pub computed_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct PauseInfo {
     pub entry_id: Option<String>,
     pub issue_id: Option<String>,
@@ -292,9 +293,64 @@ impl DashboardSnapshot {
             summary_path: None,
         }
     }
+
+    #[must_use]
+    pub fn structural_eq(&self, other: &Self) -> bool {
+        self.session_id == other.session_id
+            && self.started_at == other.started_at
+            && self.updated_at == other.updated_at
+            && self.terminated == other.terminated
+            && self.terminated_at == other.terminated_at
+            && self.master_state_path == other.master_state_path
+            && self.master_archive_error == other.master_archive_error
+            && self.master_error == other.master_error
+            && self.pre_purge_state == other.pre_purge_state
+            && self.owner == other.owner
+            && self.daemon == other.daemon
+            && self.counts == other.counts
+            && self.sessions == other.sessions
+            && self.merge_queue == other.merge_queue
+            && self.conflict_graph == other.conflict_graph
+            && self.paused_for_user == other.paused_for_user
+            && self.recent_events == other.recent_events
+            && self.conversations == other.conversations
+            && self.summary_path == other.summary_path
+    }
+
+    #[must_use]
+    pub fn staleness(&self, now: DateTime<Utc>) -> Staleness {
+        let basis = self.daemon.last_heartbeat_at.unwrap_or(self.updated_at);
+        let age = now.signed_duration_since(basis);
+        let age = age.to_std().unwrap_or(Duration::ZERO);
+        let warn_after = threshold_secs("FLIGHTDECK_DASHBOARD_STALE_WARN_SECS", 30);
+        let stale_after = threshold_secs("FLIGHTDECK_DASHBOARD_STALE_DEAD_SECS", 300);
+        if age >= stale_after {
+            Staleness::StaleAfter(age)
+        } else if age >= warn_after {
+            Staleness::WarnAfter(age)
+        } else {
+            Staleness::Fresh
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Staleness {
+    Fresh,
+    WarnAfter(Duration),
+    StaleAfter(Duration),
+}
+
+fn threshold_secs(name: &str, default: u64) -> Duration {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(default))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonStatus {
     pub label: String,
     pub healthy: Option<bool>,
@@ -314,7 +370,7 @@ impl DaemonStatus {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KindCounts {
     pub total: usize,
     pub adhoc: usize,
@@ -343,7 +399,7 @@ impl KindCounts {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TrackedSession {
     pub id: String,
     pub title: String,
@@ -409,20 +465,82 @@ impl TrackedSession {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct PaneStats {
     pub turns: Option<u32>,
     pub tokens: Option<u64>,
     pub cost_usd: Option<f64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
     pub ts: DateTime<Utc>,
-    pub label: String,
+    pub source: ActivitySource,
+    pub importance: EventImportance,
+    pub message: String,
 }
 
-#[derive(Debug, Clone)]
+impl Event {
+    #[must_use]
+    pub fn new(
+        ts: DateTime<Utc>,
+        source: ActivitySource,
+        importance: EventImportance,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            ts,
+            source,
+            importance,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ActivitySource {
+    Daemon,
+    Wake,
+    Prompt,
+    State,
+    Decision,
+    Error,
+}
+
+impl ActivitySource {
+    #[must_use]
+    pub const fn as_chip(self) -> &'static str {
+        match self {
+            Self::Daemon => "DAEMON",
+            Self::Wake => "WAKE",
+            Self::Prompt => "PROMPT",
+            Self::State => "STATE",
+            Self::Decision => "DECISION",
+            Self::Error => "ERR",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EventImportance {
+    #[default]
+    Low,
+    Medium,
+    Important,
+}
+
+impl EventImportance {
+    #[must_use]
+    pub const fn dot(self) -> &'static str {
+        match self {
+            Self::Low => "·",
+            Self::Medium => "•",
+            Self::Important => "●",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationStream {
     pub entry_id: String,
     pub excerpt: String,
