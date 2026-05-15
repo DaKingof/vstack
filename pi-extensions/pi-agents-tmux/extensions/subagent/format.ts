@@ -143,14 +143,6 @@ export function oneLinePreview(text: string | undefined, maxChars: number): stri
 
 export const COMPLETION_SUMMARY_UNAVAILABLE = "completion summary unavailable; see transcript";
 
-export function shortTaskSuffix(taskId: string | undefined, maxChars = 8): string {
-	const raw = taskId?.trim();
-	if (!raw) return "";
-	const parts = raw.split(/[-_/]+/).filter(Boolean);
-	const suffix = parts.at(-1) ?? raw;
-	return oneLinePreview(suffix, maxChars);
-}
-
 export function normalizeSummaryText(text: string | undefined): string | undefined {
 	const trimmed = text?.replace(/\r\n/g, "\n").trim();
 	return trimmed ? trimmed : undefined;

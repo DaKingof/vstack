@@ -12,6 +12,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { effortFromModelId, normalizeReasoningEffort } from "./settings.js";
 
 export type AgentScope = "user" | "project" | "both";
 
@@ -103,16 +104,19 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			continue;
 		}
 
+		const model = normalizeModel(frontmatter.model);
+		const effort = normalizeReasoningEffort(frontmatter["model-reasoning-effort"] ?? frontmatter.modelReasoningEffort ?? frontmatter.effort) ?? effortFromModelId(model);
+
 		agents.push({
 			name,
 			description,
 			color: asString(frontmatter.color),
 			denyTools: parseToolList(frontmatter["deny-tools"] ?? frontmatter.denyTools ?? frontmatter.disallowedTools),
-			model: normalizeModel(frontmatter.model),
+			model,
 			// Reasoning effort lives under different keys depending on harness
 			// (Claude `effort`, OpenCode/Codex `model-reasoning-effort`). Both
 			// resolve to the same display token (low|medium|high|xhigh|max).
-			effort: asString(frontmatter["model-reasoning-effort"] ?? frontmatter.modelReasoningEffort ?? frontmatter.effort),
+			effort,
 			pane: asBoolean(frontmatter.pane ?? frontmatter.persistentPane),
 			systemPrompt: body,
 			source,

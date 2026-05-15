@@ -113,6 +113,7 @@ import {
 	dashboardEnabled,
 	dashboardMaxItems,
 	dashboardShortcut,
+	normalizeReasoningEffort,
 	popupShortcut,
 	quietInline,
 	runtimeDirForContext,
@@ -356,6 +357,7 @@ export default function (pi: ExtensionAPI) {
 		status: item.status,
 		kind: item.kind,
 		model: item.model,
+		effort: item.effort,
 		usage: item.usage,
 		updatedAt: item.updatedAt,
 	});
@@ -420,6 +422,7 @@ export default function (pi: ExtensionAPI) {
 			const kind: DashboardKind = event.mode === "oneshot" ? "oneshot" : event.mode === "pane" ? "pane" : existing?.kind ?? (typeof event.paneId === "string" ? "pane" : "oneshot");
 			const usage = normalizeUsageStats(event.usage) ?? existing?.usage;
 			const model = typeof event.model === "string" ? event.model : existing?.model;
+			const effort = normalizeReasoningEffort(event.effort) ?? existing?.effort;
 			const summary = normalizeSummaryText(typeof event.summary === "string" ? event.summary : typeof event.finalOutput === "string" ? event.finalOutput : typeof event.error === "string" ? event.error : undefined) ?? existing?.summary;
 			const sessionMode = normalizeEventSessionMode(event.sessionMode) ?? existing?.sessionMode;
 			const sessionKey = normalizeEventSessionKey(event.sessionKey) ?? existing?.sessionKey;
@@ -442,6 +445,7 @@ export default function (pi: ExtensionAPI) {
 				transcriptPath: typeof event.transcriptPath === "string" ? event.transcriptPath : existing?.transcriptPath,
 				usage,
 				model,
+				effort,
 				summary,
 				createdAt: existing?.createdAt ?? (typeof event.timestamp === "string" ? event.timestamp : now),
 				updatedAt: now,
@@ -538,6 +542,7 @@ export default function (pi: ExtensionAPI) {
 			sessionKey: item.sessionKey ?? existing?.sessionKey,
 			usage: item.usage ?? existing?.usage,
 			model: item.model ?? existing?.model,
+			effort: item.effort ?? existing?.effort,
 		};
 		const maxKeep = Math.max(10, dashboardMaxItems(dashboardCtx?.cwd) * 3);
 		const sorted = Object.values(dashboardState.items).sort((a, b) => {
@@ -617,6 +622,7 @@ export default function (pi: ExtensionAPI) {
 			message: taskRecordDashboardMessage(record),
 			messageProvenance: taskRecordDashboardMessageProvenance(record),
 			model: record.model ?? existing?.model,
+			effort: record.effort ?? existing?.effort,
 			paneId: record.paneId,
 			sessionMode: record.sessionMode ?? existing?.sessionMode,
 			sessionKey: record.sessionKey ?? existing?.sessionKey,
@@ -744,6 +750,7 @@ export default function (pi: ExtensionAPI) {
 		if (!taskId || !agent) return;
 		const sessionMode = normalizeEventSessionMode(event.sessionMode);
 		const sessionKey = normalizeEventSessionKey(event.sessionKey);
+		const eventEffort = normalizeReasoningEffort(event.effort);
 		persistTaskEvent(event, "queued");
 		dashboardState.visible = true;
 		updateDashboard({
@@ -751,6 +758,8 @@ export default function (pi: ExtensionAPI) {
 			artifacts: true,
 			kind: event.mode === "oneshot" ? "oneshot" : "pane",
 			message: typeof event.task === "string" ? event.task : undefined,
+			model: typeof event.model === "string" ? event.model : undefined,
+			effort: eventEffort,
 			paneId: typeof event.paneId === "string" ? event.paneId : undefined,
 			sessionMode,
 			sessionKey,
@@ -771,12 +780,15 @@ export default function (pi: ExtensionAPI) {
 		if (!taskId || !agent) return;
 		const sessionMode = normalizeEventSessionMode(event.sessionMode);
 		const sessionKey = normalizeEventSessionKey(event.sessionKey);
+		const eventEffort = normalizeReasoningEffort(event.effort);
 		persistTaskEvent(event, "running");
 		dashboardState.visible = true;
 		updateDashboard({
 			agent,
 			kind: event.mode === "pane" ? "pane" : "oneshot",
 			message: typeof event.task === "string" ? event.task : undefined,
+			model: typeof event.model === "string" ? event.model : undefined,
+			effort: eventEffort,
 			paneId: typeof event.paneId === "string" ? event.paneId : undefined,
 			sessionMode,
 			sessionKey,
@@ -805,6 +817,7 @@ export default function (pi: ExtensionAPI) {
 		const transcriptPath = typeof event.transcriptPath === "string" ? event.transcriptPath : existing?.transcriptPath;
 		const eventUsage = normalizeUsageStats(event.usage);
 		const eventModel = typeof event.model === "string" ? event.model : undefined;
+		const eventEffort = normalizeReasoningEffort(event.effort) ?? existing?.effort;
 		const sessionMode = normalizeEventSessionMode(event.sessionMode) ?? existing?.sessionMode;
 		const sessionKey = normalizeEventSessionKey(event.sessionKey) ?? existing?.sessionKey;
 		const eventSummary = normalizeSummaryText(typeof event.summary === "string" ? event.summary : typeof event.finalOutput === "string" ? event.finalOutput : typeof event.error === "string" ? event.error : undefined);
@@ -834,6 +847,7 @@ export default function (pi: ExtensionAPI) {
 			updatedAt: new Date().toISOString(),
 			usage: eventUsage ?? existing?.usage,
 			model: eventModel ?? existing?.model,
+			effort: eventEffort,
 		});
 		if (transcriptPath && runtimeRoot) {
 			parseTranscriptUsage(transcriptPath)

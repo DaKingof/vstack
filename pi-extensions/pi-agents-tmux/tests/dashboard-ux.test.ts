@@ -9,19 +9,15 @@ import {
 	buildMonitorSessionGroups,
 	buildAgentRows,
 	clampMonitorUiToRows,
-	filteredMonitorSessionGroups,
 	monitorFooterHint,
 	monitorRecordLabel,
 	monitorTreeRows,
 	renderMonitorDetail,
-	readTranscriptTail,
 	renderAgentBrowserTabs,
 	renderAgentInspector,
 	renderMonitorTree,
 	renderMonitorSessionDetail,
 	taskNumberById,
-	transcriptCompactRows,
-	transcriptExpandedRows,
 	traceViewerItems,
 } from "../extensions/subagent/browser.js";
 import { renderDashboardWidgetLines } from "../extensions/subagent/dashboard.js";
@@ -85,13 +81,9 @@ function uiState(patch: Partial<AgentBrowserUiState> = {}): AgentBrowserUiState 
 		selected: 0,
 		scroll: 0,
 		agentSubtab: 0,
-		activeSelected: 0,
-		activeScroll: 0,
 		monitorSelected: 0,
 		monitorScroll: 0,
 		monitorSubtab: 0,
-		monitorTranscriptExpanded: false,
-		monitorFilter: "all",
 		...patch,
 	};
 }
@@ -365,14 +357,21 @@ test("monitor labels number repeated same-agent tasks latest-first friendly", ()
 
 	assert.equal(numbers.get(first.taskId), 1);
 	assert.equal(numbers.get(second.taskId), 2);
-	assert.match(monitorRecordLabel(second, numbers), /reviewer-arch #2 · \d{2}:\d{2} · 77abfc41/);
+	assert.match(monitorRecordLabel(second, numbers), /reviewer-arch #2 · \d{2}:\d{2}$/);
 });
 
 test("Monitor tab line replaces History", () => {
-	const line = renderAgentBrowserTabs("monitor", false, 120, theme as any);
+	const line = renderAgentBrowserTabs("monitor", 120, theme as any);
 
 	assert.match(line, /Monitor/);
 	assert.doesNotMatch(line, /History/);
+});
+
+test("Monitor footer omits filter and transcript toggle hints", () => {
+	const footer = monitorFooterHint(uiState({ tab: "monitor", pane: "inspector" }), theme as any, true).replace(/\x1b\[[0-9;]*m/g, "");
+
+	assert.match(footer, /enter open\/toggle/);
+	assert.doesNotMatch(footer, /filter|x expand|x compact/);
 });
 
 test("Monitor session grouping derives pane, lane, and one-shot sessions", () => {
@@ -427,39 +426,37 @@ test("Monitor corrupt records default to one-shot grouping without crashing", ()
 	assert.equal(groups[0]!.kind, "oneshot");
 });
 
-test("Monitor active/completed filter and tree expansion work", () => {
+test("Monitor active/completed sections and tree expansion work", () => {
 	const running = record("planner", "planner-1700000000-aaaaaaaa", "2026-05-14T05:00:00.000Z", { kind: "pane", paneId: "%1", status: "running", sessionMode: "resumed" });
 	const done = record("reviewer-doc", "reviewer-doc-1700000060-bbbbbbbb", "2026-05-14T05:01:00.000Z", { kind: "oneshot", status: "completed", sessionMode: "fresh" });
 	const unknown = record("reviewer-error", "reviewer-error-1700000120-cccccccc", "2026-05-14T05:02:00.000Z", { kind: "oneshot", status: "unknown", sessionMode: "fresh" });
 	const groups = buildMonitorSessionGroups([running, done, unknown]);
 
-	assert.deepEqual(filteredMonitorSessionGroups(groups, "active").map((group) => group.agent), ["reviewer-error", "planner"]);
-	assert.deepEqual(filteredMonitorSessionGroups(groups, "completed").map((group) => group.agent), ["reviewer-doc"]);
-
-	const rows = monitorTreeRows(groups, "all");
+	const rows = monitorTreeRows(groups);
 	assert.equal(rows.filter((row) => row.kind === "section").length, 2);
+	assert.deepEqual(rows.filter((row) => row.kind === "section").map((row) => row.label), ["Active (2)", "Completed (1)"]);
 	assert.equal(rows.filter((row) => row.kind === "session").length, 3);
 	assert.equal(rows.filter((row) => row.kind === "task").length, 3);
 
 	const firstSession = rows.find((row) => row.kind === "session")!;
-	const collapsed = monitorTreeRows(groups, "all", new Set([firstSession.key]));
+	const collapsed = monitorTreeRows(groups, new Set(), new Set([firstSession.key]));
 	assert.equal(collapsed.filter((row) => row.kind === "task").length, 2);
+
+	const collapsedActive = monitorTreeRows(groups, new Set(["active"]));
+	assert.equal(collapsedActive.find((row) => row.kind === "section" && row.section === "active")?.collapsed, true);
+	assert.equal(collapsedActive.filter((row) => row.kind === "session").length, 1);
 });
 
-test("Monitor filter cycle reset moves selection to first visible row", () => {
+test("Monitor clamp keeps section rows selectable", () => {
 	const running = record("planner", "planner-1700000000-aaaaaaaa", "2026-05-14T05:00:00.000Z", { kind: "pane", status: "running" });
 	const done = record("reviewer-doc", "reviewer-doc-1700000060-bbbbbbbb", "2026-05-14T05:01:00.000Z", { kind: "oneshot", status: "completed" });
 	const groups = buildMonitorSessionGroups([running, done]);
-	const rows = monitorTreeRows(groups, "active");
+	const rows = monitorTreeRows(groups);
 	const ui = uiState({ monitorSelected: 3, monitorScroll: 99 });
 
-	ui.monitorSelected = 0;
-	ui.monitorScroll = 0;
-	ui.monitorSubtab = 0;
-	ui.inspectorScroll = 0;
 	clampMonitorUiToRows(ui, rows, 10);
 
-	assert.equal(ui.monitorSelected, 0);
+	assert.equal(ui.monitorSelected, 3);
 	assert.equal(ui.monitorScroll, 0);
 });
 
@@ -495,7 +492,7 @@ test("Monitor session selection shows aggregate detail", () => {
 	assert.match(plain, /Usage:/);
 	assert.match(plain, /Pane ID:\s+%1/);
 	assert.match(plain, /Transcript:\s+\/tmp\/planner-session\.jsonl/);
-	assert.match(plain, /Task #2 · \d{2}:\d{2} · bbbbbbbb · running/);
+	assert.match(plain, /Task #2 · \d{2}:\d{2} · running/);
 });
 
 test("Agents tab rows are flat static catalog entries", () => {
@@ -550,155 +547,34 @@ test("Agents Inspector shows static config only for agent with active tasks", ()
 test("Monitor tab task rendering still exposes task trace metadata", async () => {
 	const taskId = "planner-1700000120-bbbbbbbb";
 	const taskRecord = record("planner", taskId, "2026-05-14T05:02:00.000Z", {
+		model: "openai-codex/gpt-5.5:xhigh",
+		effort: "xhigh",
 		summary: "completed planner summary",
+		completionArchivePath: "/tmp/planner-completion.json",
+		completionSourcePath: "/tmp/planner-source.json",
 		transcriptPath: "/tmp/planner-transcript.jsonl",
 	});
 	const numbers = taskNumberById([taskRecord]);
 	const items = await traceViewerItems(taskRecord, numbers.get(taskId), { agents: [agent("planner", true, { effort: "xhigh" })] });
 
-	assert.match(monitorRecordLabel(taskRecord, numbers), /planner #1 · \d{2}:\d{2} · bbbbbbbb/);
+	assert.match(monitorRecordLabel(taskRecord, numbers), /planner #1 · \d{2}:\d{2}$/);
 	assert.match(items[0]!.text, /Task ID  planner-1700000120-bbbbbbbb/);
-	assert.match(items[0]!.text, /Transcript  \/tmp\/planner-transcript\.jsonl/);
+	assert.match(items[0]!.text, /Model    openai-codex\/gpt-5\.5/);
+	assert.match(items[0]!.text, /Effort   xhigh/);
+	assert.doesNotMatch(items[0]!.text, /Transcript  \/tmp\/planner-transcript\.jsonl/);
+	assert.doesNotMatch(items[0]!.text, /Completion  \/tmp\/planner-completion\.json/);
+	assert.doesNotMatch(items[0]!.text, /Archive  \/tmp\/planner-completion\.json/);
+	assert.doesNotMatch(items[0]!.text, /Source   \/tmp\/planner-source\.json/);
+	assert.equal(items[1]!.path, "/tmp/planner-completion.json");
 	assert.match(items[0]!.text, /completed planner summary/);
 });
 
-test("Monitor task Summary includes compact Transcript rows", async () => {
-	const runtimeRoot = tempRuntime();
-	const transcriptPath = join(runtimeRoot, "monitor-transcript.jsonl");
-	writeFileSync(transcriptPath, [
-		JSON.stringify({ ts: "2026-05-14T05:00:00.000Z", event: { type: "message_end", message: { role: "user", content: [{ type: "text", text: "Please inspect this\nwith detail" }] } } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:01.000Z", event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Working on it\nsecond line" }] } } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:02.000Z", event: { type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: { command: "echo hi" } }] } } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:03.000Z", event: { type: "exit", code: 0 } }),
-	].join("\n"));
-	const taskRecord = record("planner", "planner-1700000120-bbbbbbbb", "2026-05-14T05:00:00.000Z", { transcriptPath });
+test("Monitor right-pane section labels use ANSI magenta", async () => {
+	const taskRecord = record("planner", "planner-1700000120-section", "2026-05-14T05:02:00.000Z", { summary: "done" });
+	const items = await traceViewerItems(taskRecord, 1, { agents: [agent("planner", true)] });
+	const rendered = renderMonitorDetail(taskRecord, new Map([[taskRecord.taskId, { items }]]), uiState({ tab: "monitor", pane: "inspector" }), 1, { agents: [agent("planner", true)] } as any, 120, 40, ansiTheme as any).join("\n");
 
-	const rows = transcriptCompactRows(taskRecord);
-	assert.deepEqual(rows, [
-		"05:00:00 → prompt Please inspect this",
-		"05:00:01 ← assistant Working on it",
-		"05:00:02 ← tool bash {\"command\":\"echo hi\"}",
-		"05:00:03 ← exit code 0",
-	]);
-
-	const summary = (await traceViewerItems(taskRecord))[0]!.text;
-	assert.match(summary, /Transcript\n----------\n05:00:00 → prompt Please inspect this\n05:00:01 ← assistant Working on it\n05:00:02 ← tool bash/);
-});
-
-test("Monitor transcript expanded view preserves full bodies and highlights JSON keys", async () => {
-	const runtimeRoot = tempRuntime();
-	const transcriptPath = join(runtimeRoot, "monitor-expanded-transcript.jsonl");
-	writeFileSync(transcriptPath, [
-		JSON.stringify({ ts: "2026-05-14T05:00:00.000Z", event: { type: "message_end", message: { role: "user", content: [{ type: "text", text: "Please inspect this\nwith detail" }] } } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:01.000Z", event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Working on it\nsecond line" }] } } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:02.000Z", event: { type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: { command: "echo hi", ok: "passed" } }] } } }),
-	].join("\n"));
-	const taskRecord = record("planner", "planner-1700000120-expanded", "2026-05-14T05:00:00.000Z", { transcriptPath });
-
-	const expanded = transcriptExpandedRows(taskRecord).join("\n");
-	assert.match(expanded, /05:00:00 → prompt\nPlease inspect this\nwith detail/);
-	assert.match(expanded, /05:00:01 ← assistant\nWorking on it\nsecond line/);
-	assert.match(expanded, /05:00:02 ← tool\nbash\n\{\n  "command": "echo hi",\n  "ok": "passed"\n\}/);
-
-	const items = await traceViewerItems(taskRecord, 1, { agents: [agent("planner", true)] }, { transcriptExpanded: true });
-	const ui = uiState({ tab: "monitor", pane: "inspector", monitorTranscriptExpanded: true });
-	const rendered = renderMonitorDetail(taskRecord, new Map([[taskRecord.taskId, { items }]]), ui, 1, { agents: [agent("planner", true)] } as any, 200, 80, ansiTheme as any).join("\n");
-	assert.match(rendered, /Working on it\nsecond line/);
-	assert.match(rendered, /\x1b\[36m"command"\x1b\[39m/);
-	assert.match(rendered, /\x1b\[32mpassed\x1b\[39m/);
-});
-
-test("Monitor transcript x toggle footer flips expanded state", () => {
-	const ui = uiState({ tab: "monitor", pane: "inspector" });
-	const plainFooter = (taskDetailFocused: boolean) => monitorFooterHint(ui, theme as any, taskDetailFocused).replace(/\x1b\[[0-9;]*m/g, "");
-
-	assert.match(plainFooter(true), /x expand/);
-	ui.monitorTranscriptExpanded = !ui.monitorTranscriptExpanded;
-	assert.match(plainFooter(true), /x compact/);
-	assert.doesNotMatch(plainFooter(false), /x (expand|compact)/);
-});
-
-test("Monitor transcript compaction banner renders in compact and expanded views", async () => {
-	const runtimeRoot = tempRuntime();
-	const transcriptPath = join(runtimeRoot, "monitor-compact-event.jsonl");
-	writeFileSync(transcriptPath, [
-		JSON.stringify({ ts: "2026-05-14T05:00:00.000Z", event: { type: "message_end", message: { role: "user", content: [{ type: "text", text: "before compact" }] } } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:01.000Z", event: { type: "session_compact" } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:02.000Z", event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "after compact" }] } } }),
-	].join("\n"));
-	const taskRecord = record("planner", "planner-1700000120-compact", "2026-05-14T05:00:00.000Z", { transcriptPath });
-
-	const compactRows = transcriptCompactRows(taskRecord);
-	assert.deepEqual(compactRows, [
-		"05:00:00 → prompt before compact",
-		"05:00:01 ⚠ COMPACTION — context window full, history compressed before continuation",
-		"05:00:02 ← assistant after compact",
-	]);
-	const expanded = transcriptExpandedRows(taskRecord).join("\n");
-	assert.ok(expanded.indexOf("before compact") < expanded.indexOf("⚠ COMPACTION"));
-	assert.ok(expanded.indexOf("⚠ COMPACTION") < expanded.indexOf("after compact"));
-	assert.match(expanded, /Pi runtime compacted context\. Subsequent messages start from the compacted state\./);
-
-	const compactSummary = (await traceViewerItems(taskRecord))[0]!.text;
-	const expandedSummary = (await traceViewerItems(taskRecord, undefined, undefined, { transcriptExpanded: true }))[0]!.text;
-	assert.match(compactSummary, /⚠ COMPACTION/);
-	assert.match(expandedSummary, /⚠ COMPACTION/);
-});
-
-test("Monitor transcript banner is stable across filter/search/scroll state", async () => {
-	const runtimeRoot = tempRuntime();
-	const transcriptPath = join(runtimeRoot, "monitor-banner-stable.jsonl");
-	writeFileSync(transcriptPath, [
-		JSON.stringify({ ts: "2026-05-14T05:00:00.000Z", event: { type: "message_end", message: { role: "user", content: [{ type: "text", text: "before" }] } } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:01.000Z", event: { type: "session_compact" } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:02.000Z", event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "after" }] } } }),
-	].join("\n"));
-	const taskRecord = record("planner", "planner-1700000120-stable", "2026-05-14T05:00:00.000Z", { transcriptPath });
-	const ui = uiState({ inspectorScroll: 99, monitorFilter: "completed", monitorScroll: 99, search: "no-match" });
-	clampMonitorUiToRows(ui, monitorTreeRows(buildMonitorSessionGroups([taskRecord]), ui.monitorFilter), 1);
-
-	const summary = (await traceViewerItems(taskRecord, undefined, undefined, { transcriptExpanded: true }))[0]!.text;
-	assert.equal((summary.match(/⚠ COMPACTION/g) ?? []).length, 1);
-	assert.match(summary, /after/);
-});
-
-test("Monitor compaction banner stays pinned when detail content is scrolled", async () => {
-	const runtimeRoot = tempRuntime();
-	const transcriptPath = join(runtimeRoot, "monitor-banner-scroll.jsonl");
-	const lines = [
-		JSON.stringify({ ts: "2026-05-14T05:00:00.000Z", event: { type: "message_end", message: { role: "user", content: [{ type: "text", text: "before" }] } } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:01.000Z", event: { type: "session_compact" } }),
-		...Array.from({ length: 100 }, (_value, index) => JSON.stringify({ ts: "2026-05-14T05:00:02.000Z", event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: `line ${index}` }] } } })),
-	];
-	writeFileSync(transcriptPath, lines.join("\n"));
-	const taskRecord = record("planner", "planner-1700000120-scroll", "2026-05-14T05:00:00.000Z", { transcriptPath });
-	const items = await traceViewerItems(taskRecord, undefined, undefined, { transcriptExpanded: true });
-	const ui = uiState({ inspectorScroll: 999, monitorTranscriptExpanded: true, pane: "inspector", tab: "monitor" });
-
-	const rendered = renderMonitorDetail(taskRecord, new Map([[taskRecord.taskId, { items }]]), ui, 1, { agents: [agent("planner", true)] } as any, 160, 22, theme as any).join("\n");
-	assert.match(rendered, /⚠ COMPACTION — context window full/);
-	assert.match(rendered, /line 99/);
-});
-
-test("Monitor transcript empty messages render placeholders and keep task fallback", () => {
-	const runtimeRoot = tempRuntime();
-	const transcriptPath = join(runtimeRoot, "monitor-empty-messages.jsonl");
-	writeFileSync(transcriptPath, [
-		JSON.stringify({ ts: "2026-05-14T05:00:00.000Z", event: { type: "message_end", message: { role: "user", content: "" } } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:01.000Z", event: { type: "message_end", message: { role: "assistant", content: [] } } }),
-	].join("\n"));
-	const taskRecord = record("planner", "planner-1700000120-empty", "2026-05-14T05:00:00.000Z", { task: "Fallback task prompt", transcriptPath });
-
-	assert.deepEqual(transcriptCompactRows(taskRecord), [
-		"05:00:00 → prompt Fallback task prompt",
-		"05:00:00 → prompt (empty)",
-		"05:00:01 ← assistant (empty)",
-	]);
-	const expanded = transcriptExpandedRows(taskRecord).join("\n");
-	assert.match(expanded, /05:00:00 → prompt\nFallback task prompt/);
-	assert.match(expanded, /05:00:00 → prompt\n\(empty\)/);
-	assert.match(expanded, /05:00:01 ← assistant\n\(empty\)/);
-	assert.doesNotMatch(expanded, /05:00:01 ← assistant\n\n/);
+	assert.match(rendered, /\x1b\[35m\x1b\[1mOverview/);
 });
 
 test("inline JSON highlighter protects keys before status value coloring", () => {
@@ -714,56 +590,4 @@ test("inline JSON highlighter protects keys before status value coloring", () =>
 	const validValue = highlightInlinePreview('{"status": "passed"}', ansiTheme as any);
 	assert.match(validValue, /\x1b\[36m"status"\x1b\[39m/);
 	assert.match(validValue, /\x1b\[32mpassed\x1b\[39m/);
-});
-
-test("Monitor transcript legacy events do not false-positive compaction banners", async () => {
-	const runtimeRoot = tempRuntime();
-	const transcriptPath = join(runtimeRoot, "monitor-legacy-transcript.jsonl");
-	writeFileSync(transcriptPath, [
-		JSON.stringify({ ts: "2026-05-14T05:00:00.000Z", event: { type: "message_end", message: { role: "user", content: [{ type: "text", text: "regular prompt" }] } } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:01.000Z", event: { type: "message_end", message: { role: "assistant", customType: "regular", content: [{ type: "text", text: "regular answer" }] } } }),
-	].join("\n"));
-	const taskRecord = record("planner", "planner-1700000120-legacy", "2026-05-14T05:00:00.000Z", { transcriptPath });
-
-	assert.doesNotMatch(transcriptCompactRows(taskRecord).join("\n"), /COMPACTION/);
-	assert.doesNotMatch((await traceViewerItems(taskRecord, undefined, undefined, { transcriptExpanded: true }))[0]!.text, /COMPACTION/);
-});
-
-test("Monitor compact Transcript handles missing and malformed JSONL", async () => {
-	const runtimeRoot = tempRuntime();
-	const missingPath = join(runtimeRoot, "missing.jsonl");
-	const missingRecord = record("planner", "planner-1700000000-missing", "2026-05-14T05:00:00.000Z", { task: "Missing transcript task", transcriptPath: missingPath });
-
-	assert.deepEqual(transcriptCompactRows(missingRecord), [
-		"05:00:00 → prompt Missing transcript task",
-		"--:--:-- ← error (transcript unavailable)",
-	]);
-	assert.match((await traceViewerItems(missingRecord))[0]!.text, /\(transcript unavailable\)/);
-
-	const malformedPath = join(runtimeRoot, "malformed.jsonl");
-	writeFileSync(malformedPath, "{not json\n");
-	const malformedRecord = record("planner", "planner-1700000000-malformed", "2026-05-14T05:00:00.000Z", { task: "Malformed transcript task", transcriptPath: malformedPath });
-
-	assert.deepEqual(transcriptCompactRows(malformedRecord), [
-		"05:00:00 → prompt Malformed transcript task",
-		"--:--:-- ← error (malformed transcript JSONL)",
-	]);
-	assert.match((await traceViewerItems(malformedRecord))[0]!.text, /\(malformed transcript JSONL\)/);
-});
-
-test("transcript tail preserves multiline assistant text and tool JSON structure", () => {
-	const runtimeRoot = tempRuntime();
-	const transcriptPath = join(runtimeRoot, "transcript.jsonl");
-	writeFileSync(transcriptPath, [
-		JSON.stringify({ ts: "2026-05-14T05:00:00.000Z", event: { type: "turn_start" } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:01.000Z", event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "line one\nline two" }] } } }),
-		JSON.stringify({ ts: "2026-05-14T05:00:02.000Z", event: { type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: { command: "echo hi" } }] } } }),
-	].join("\n"));
-
-	const tail = readTranscriptTail(transcriptPath, 40).join("\n");
-	assert.match(tail, /assistant/);
-	assert.match(tail, /line one\nline two/);
-	assert.match(tail, /tool call bash/);
-	assert.match(tail, /"command": "echo hi"/);
-	assert.equal(extractLastAssistantTextFromTranscriptContent(tail), undefined);
 });

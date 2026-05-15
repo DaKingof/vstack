@@ -9,11 +9,9 @@ Delegate work to specialized agents from a running Pi session. Agents run either
 - `subagent` tool delegates one task, parallel tasks, or sequential chains.
 - Agents with `pane: true` open a visible tmux pane that persists across turns. Other agents run in the background.
 - `/agents` browser lists project and user agents with search, static detail, Monitor task traces, and one-key launch.
-- Monitor groups tasks by session (pane, bg lane, bg one-shot) with active/completed/all filters.
+- Monitor groups tasks by session (pane, bg lane, bg one-shot) under expandable Active and Completed sections.
 - Chat completion rows show actual results, never a repeat of the original request.
-- Task detail shows compact Transcript rows plus Summary, Completion, and Task sections.
-- Monitor transcripts toggle between compact and expanded views — compact for scanning, expanded for full bodies + JSON highlighting.
-- Compaction events surface as a clear red banner row in transcripts so you can tell when Pi compressed context.
+- Task detail shows Summary, Completion, and Task sections; Summary includes the model and effort used for the run.
 - Dashboard widget shows live state, model, turns, tokens, and cost for every spawned agent.
 - Dashboard participates in vstack's stable mini-dashboard stack order: Flightdeck → Tasks → Agents → BG tasks.
 - Grouped completion notifications batch multiple agents finishing together.

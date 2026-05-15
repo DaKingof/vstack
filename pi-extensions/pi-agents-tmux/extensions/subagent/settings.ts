@@ -103,6 +103,34 @@ export function subagentModelSource(cwd?: string): "frontmatter" | "parent" {
 	return settingString("subagentModelSource", "frontmatter", cwd) === "parent" ? "parent" : "frontmatter";
 }
 
+const REASONING_EFFORT_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+export function normalizeReasoningEffort(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const normalized = value.trim().toLowerCase();
+	return REASONING_EFFORT_LEVELS.has(normalized) ? normalized : undefined;
+}
+
+export function effortFromModelId(model: string | undefined): string | undefined {
+	const trimmed = model?.trim();
+	if (!trimmed) return undefined;
+	const colon = trimmed.lastIndexOf(":");
+	if (colon < 0) return undefined;
+	return normalizeReasoningEffort(trimmed.slice(colon + 1));
+}
+
+export function modelWithoutEffortSuffix(model: string | undefined): string | undefined {
+	const trimmed = model?.trim();
+	if (!trimmed) return undefined;
+	const effort = effortFromModelId(trimmed);
+	if (!effort) return trimmed;
+	return trimmed.slice(0, trimmed.lastIndexOf(":")) || trimmed;
+}
+
+export function selectedEffortForAgent(agent: AgentConfig, selectedModel: string | undefined, selectedThinking: string | undefined): string | undefined {
+	return normalizeReasoningEffort(selectedThinking) ?? effortFromModelId(selectedModel) ?? normalizeReasoningEffort(agent.effort);
+}
+
 export function selectedModelForAgent(agent: AgentConfig, parentModel: string | undefined, cwd?: string): string | undefined {
 	return subagentModelSource(cwd) === "parent" ? (parentModel ?? agent.model) : (agent.model ?? parentModel);
 }

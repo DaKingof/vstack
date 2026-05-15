@@ -22,6 +22,7 @@ import {
 	legacyPackageSessionRuntimeDir,
 	piUserDir,
 	projectSettingsPath,
+	selectedEffortForAgent,
 	selectedModelForAgent,
 	selectedThinkingLevelForAgent,
 	selectedToolsForAgent,
@@ -421,6 +422,7 @@ export async function ensurePersistentPane(
 
 		const selectedModel = selectedModelForAgent(agent, parentModel, cwd);
 		const selectedThinking = selectedThinkingLevelForAgent(parentThinkingLevel, cwd);
+		const selectedEffort = selectedEffortForAgent(agent, selectedModel, selectedThinking);
 		const paths = await writeLauncher(runtimeRoot, parentSessionId, cwd, agent, selectedModel, selectedThinking, activeTools);
 		const windowName = `agent:${agent.name}`;
 		primaryPaneId = await getPrimaryPaneId();
@@ -466,6 +468,7 @@ export async function ensurePersistentPane(
 			promptFile: paths.promptFile,
 			launcherFile: paths.launcherFile,
 			model: selectedModel,
+			effort: selectedEffort,
 			thinkingLevel: selectedThinking,
 			startedAt: new Date().toISOString(),
 			launcherVersion: PANE_LAUNCHER_VERSION,
@@ -553,6 +556,7 @@ export async function queuePersistentPaneTask(
 	const hadLivePane = Boolean(existing && (await paneExists(existing.paneId)));
 	const hadSavedSession = hasSavedPaneSession(runtimeRoot, agent.name);
 	const pane = await ensurePersistentPane(runtimeRoot, parentSessionId, effectiveCwd, agent, parentModel, parentThinkingLevel, activeTools);
+	const effort = pane.effort ?? selectedEffortForAgent(agent, pane.model, pane.thinkingLevel);
 	const sessionMode: "live" | "resumed" | "new" = hadLivePane ? "live" : hadSavedSession ? "resumed" : "new";
 	if (!hadLivePane) {
 		emitSubagentEvent(pi, "subagents:created", {
@@ -561,6 +565,8 @@ export async function queuePersistentPaneTask(
 			paneId: pane.paneId,
 			runtimeRoot,
 			transcriptPath: pane.sessionFile,
+			model: pane.model,
+			effort,
 		});
 	}
 
@@ -586,6 +592,8 @@ export async function queuePersistentPaneTask(
 		sessionMode: paneSessionModeToRecordMode(sessionMode),
 		kind: "pane",
 		paneId: pane.paneId,
+		model: pane.model,
+		effort,
 		inboxFile: taskFile,
 		outboxFile,
 		transcriptPath: pane.sessionFile,
@@ -603,6 +611,8 @@ export async function queuePersistentPaneTask(
 		transcriptPath: pane.sessionFile,
 		completionPath: outboxFile,
 		sessionMode: paneSessionModeToRecordMode(sessionMode),
+		model: pane.model,
+		effort,
 	});
 	return { pane, taskId, outboxFile, taskFile, sessionMode };
 }

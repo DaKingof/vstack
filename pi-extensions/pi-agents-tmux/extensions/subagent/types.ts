@@ -41,6 +41,7 @@ export interface SubagentStatsItem {
 	status?: string;
 	kind?: string;
 	model?: string;
+	effort?: string;
 	usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; contextTokens: number; turns: number };
 	updatedAt?: string;
 }
@@ -80,17 +81,10 @@ export const AGENTS_POPUP_PADDING_Y = 1;
 export const AGENTS_POPUP_FRAME_ROWS = 2 + AGENTS_POPUP_PADDING_Y * 2;
 export const VSTACK_MODAL_LOCK_SYMBOL = Symbol.for("vstack.pi.modal-lock");
 
-export type AgentBrowserTabId = "agents" | "active" | "monitor" | AgentScope;
+export type AgentBrowserTabId = "agents" | "monitor";
 export type AgentBrowserTabDef = { id: AgentBrowserTabId; label: string };
-export type MonitorFilter = "active" | "completed" | "all";
 export const AGENTS_BROWSER_TAB: AgentBrowserTabDef = { id: "agents", label: "Agents" };
-export const ACTIVE_BROWSER_TAB: AgentBrowserTabDef = { id: "active", label: "Active" };
 export const MONITOR_BROWSER_TAB: AgentBrowserTabDef = { id: "monitor", label: "Monitor" };
-export const AGENT_SCOPE_TABS: Array<{ id: AgentScope; label: string }> = [
-	{ id: "project", label: "Project" },
-	{ id: "user", label: "User" },
-	{ id: "both", label: "Both" },
-];
 export const MONITOR_SUBTAB_LABELS = ["Summary", "Completion", "Task"] as const;
 
 export type AgentBrowserAction =
@@ -113,13 +107,9 @@ export interface AgentBrowserUiState {
 	selected: number;
 	scroll: number;
 	agentSubtab: number;
-	activeSelected: number;
-	activeScroll: number;
 	monitorSelected: number;
 	monitorScroll: number;
 	monitorSubtab: number;
-	monitorTranscriptExpanded: boolean;
-	monitorFilter: MonitorFilter;
 }
 
 export type MonitorDetailEntry = { items?: TraceViewerItem[]; loading?: boolean; error?: string };
@@ -207,6 +197,7 @@ export interface SingleResult {
 	stderr: string;
 	usage: UsageStats;
 	model?: string;
+	effort?: string;
 	sessionKey?: string;
 	sessionKeyExplicit?: boolean;
 	sessionPath?: string;
@@ -256,6 +247,7 @@ export interface PaneRegistryEntry {
 	promptFile: string;
 	launcherFile: string;
 	model?: string;
+	effort?: string;
 	thinkingLevel?: string;
 	startedAt: string;
 	lastTaskAt?: string;
@@ -332,6 +324,7 @@ export interface PaneTaskRecord {
 	transcriptPath?: string;
 	usage?: UsageStats;
 	model?: string;
+	effort?: string;
 	summary?: string;
 	filesChanged?: string[];
 	validation?: string[];
@@ -370,6 +363,7 @@ export interface SubagentDashboardItem {
 	updatedAt: string;
 	usage?: UsageStats;
 	model?: string;
+	effort?: string;
 }
 
 export interface SubagentDashboardState {
@@ -463,7 +457,7 @@ export interface TraceViewerItem {
 	ref?: string;
 	status?: string;
 	text: string;
-	type?: "index" | "summary" | "transcript" | "completion" | "task";
+	type?: "index" | "summary" | "completion" | "task";
 }
 
 export interface TraceViewerState {

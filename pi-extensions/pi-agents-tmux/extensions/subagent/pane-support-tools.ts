@@ -197,6 +197,7 @@ export function registerPaneSupportTools(deps: PaneSupportToolDeps): void {
 					kind: steerKind,
 					message: completionBodyWithoutPromptEcho(record.summary, record.task),
 					model: record.model,
+					effort: record.effort,
 					paneId: record.paneId,
 					startedAt: record.createdAt,
 					status: dashboardStatusFor(record.status, steerKind),

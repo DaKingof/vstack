@@ -40,9 +40,7 @@ import {
 	inactivePill,
 	sessionModeChipLabel,
 	sessionModeDetailLabel,
-	shortTaskSuffix,
 	simpleFrame,
-	textFromMessageContent,
 	truncateSessionKeyForChip,
 } from "./format.js";
 import {
@@ -55,6 +53,7 @@ import { readPaneRegistry, readTaskRegistry } from "./tasks.js";
 import { paneCompletionTone, readTextFileIfExists } from "./renderers.js";
 import { recordTraceRef } from "./renderers.js";
 import { taskRegistryPath } from "./paths.js";
+import { effortFromModelId, modelWithoutEffortSuffix, normalizeReasoningEffort } from "./settings.js";
 import {
 	AGENTS_BROWSER_TAB,
 	AGENTS_BROWSER_HEIGHT_RATIO,
@@ -82,7 +81,6 @@ import {
 	type ChatMessage,
 	type CompletionMessageProvenance,
 	type MonitorDetailEntry,
-	type MonitorFilter,
 	type PaneTaskRecord,
 	type PaneTaskRegistry,
 	type PaneTaskStatus,
@@ -436,7 +434,7 @@ function agentSearchText(agent: AgentConfig, status?: AgentPaneStatus): string {
 	].join(" ").toLowerCase();
 }
 
-function tabNext(current: AgentBrowserTabId, _hasActive: boolean, delta: number): AgentBrowserTabId {
+function tabNext(current: AgentBrowserTabId, delta: number): AgentBrowserTabId {
 	const tabs: AgentBrowserTabId[] = ["agents", "monitor"];
 	const index = Math.max(0, tabs.indexOf(current));
 	return tabs[(index + delta + tabs.length) % tabs.length]!;
@@ -512,8 +510,7 @@ function agentEntityTitle(theme: Theme, label: string): string {
 	return ansiMagenta(theme.bold(label));
 }
 
-export function renderAgentBrowserTabs(active: AgentBrowserTabId, hasActive: boolean, width: number, theme: Theme): string {
-	void hasActive;
+export function renderAgentBrowserTabs(active: AgentBrowserTabId, width: number, theme: Theme): string {
 	const tabs = [AGENTS_BROWSER_TAB, MONITOR_BROWSER_TAB];
 	const partFor = (tab: AgentBrowserTabDef): string => {
 		const label = ` ${truncateToWidth(tab.label, 18, "…")} `;
@@ -582,7 +579,19 @@ function agentLiveBadge(agent: AgentConfig, status: AgentPaneStatus | undefined,
 }
 
 function displayAgentModel(agent: AgentConfig): string {
-	return agent.model ?? "default";
+	return modelWithoutEffortSuffix(agent.model) ?? "default";
+}
+
+function displayAgentEffort(agent: AgentConfig): string {
+	return normalizeReasoningEffort(agent.effort) ?? effortFromModelId(agent.model) ?? "default";
+}
+
+function recordRunEffort(record: PaneTaskRecord, agentConfig: AgentConfig | undefined): string | undefined {
+	return normalizeReasoningEffort(record.effort) ?? effortFromModelId(record.model) ?? normalizeReasoningEffort(agentConfig?.effort) ?? effortFromModelId(agentConfig?.model);
+}
+
+function recordRunModel(record: PaneTaskRecord, agentConfig: AgentConfig | undefined): string | undefined {
+	return modelWithoutEffortSuffix(record.model ?? agentConfig?.model);
 }
 
 function renderAgentList(rows: AgentBrowserRow[], statuses: Map<string, AgentPaneStatus>, ui: AgentBrowserUiState, width: number, theme: Theme, listRows: number): string[] {
@@ -661,7 +670,7 @@ export function renderAgentInspector(agent: AgentConfig | undefined, statuses: M
 		lines,
 		`${theme.fg("muted", "Kind")}: ${agent.pane ? "persistent pane" : "bg"}    ${theme.fg("muted", "Scope")}: ${agent.source}`,
 	);
-	pushWrapped(lines, `${theme.fg("muted", "Model")}: ${displayAgentModel(agent)}    ${theme.fg("muted", "Effort")}: ${agent.effort ?? "default"}`);
+	pushWrapped(lines, `${theme.fg("muted", "Model")}: ${displayAgentModel(agent)}    ${theme.fg("muted", "Effort")}: ${displayAgentEffort(agent)}`);
 	pushWrapped(lines, `${theme.fg("muted", "Deny tools")}: ${agent.denyTools && agent.denyTools.length > 0 ? agent.denyTools.join(", ") : "none"}`);
 	pushWrapped(lines, `${theme.fg("muted", "Color")}: ${agent.color ?? "default"}`);
 	pushWrapped(lines, `${theme.fg("muted", "Source path")}: ${compactPath(agent.filePath, { baseDir: process.cwd(), maxChars: Number.POSITIVE_INFINITY }) || compactAgentPath(agent.filePath)}`);
@@ -675,321 +684,6 @@ export function renderAgentInspector(agent: AgentConfig | undefined, statuses: M
 
 export function activeDashboardItems(items: SubagentDashboardItem[]): SubagentDashboardItem[] {
 	return sortDashboardItems(items);
-}
-
-export function readTranscriptTail(transcriptPath: string | undefined, maxLines: number): string[] {
-	if (!transcriptPath) return [];
-	// Pi's --mode json stream emits ~50-100x more streaming-delta events
-	// (message_update, tool_execution_update) than terminal ones, and the
-	// deltas carry partial/empty argument objects. Rendering them produces a
-	// flood of duplicate "assistant: [tool] bash {}" lines that don't reflect
-	// real activity. Restrict to terminal lifecycle events that carry final
-	// content. tool_execution_start is kept so we still see the tool call
-	// before its result arrives.
-	const INCLUDED_EVENT_TYPES = new Set([
-		"start",
-		"agent_start",
-		"session",
-		"session_compact",
-		"turn_start",
-		"turn_end",
-		"message_end",
-		"tool_execution_start",
-		"tool_execution_end",
-		"tool_result_end",
-		"exit",
-	]);
-	try {
-		const raw = fs.readFileSync(transcriptPath, "utf-8");
-		const lines = raw.split(/\r?\n/);
-		const rendered: string[] = [];
-		let lastRendered: string | undefined;
-		const push = (text: string | undefined) => {
-			if (text === undefined) return;
-			const parts = String(text).replace(/\r\n/g, "\n").split("\n");
-			for (const part of parts) {
-				if (part === lastRendered) continue;
-				lastRendered = part;
-				rendered.push(part);
-			}
-		};
-		const pushSection = (label: string, ts?: string) => {
-			push(`── ${label}${ts ? ` · ${ts}` : ""} ──`);
-		};
-		const eventTime = (outer: any, inner: any): string | undefined => {
-			const rawTs = typeof outer?.ts === "string" ? outer.ts : typeof inner?.timestamp === "string" ? inner.timestamp : undefined;
-			if (!rawTs) return undefined;
-			const date = new Date(rawTs);
-			if (!Number.isFinite(date.getTime())) return rawTs;
-			return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`;
-		};
-		const pushJson = (value: unknown) => {
-			try {
-				const text = JSON.stringify(value ?? {}, null, 2);
-				for (const line of text.split(/\r?\n/)) push(line);
-			} catch {
-				push(String(value));
-			}
-		};
-		for (const line of lines) {
-			if (!line.trim()) continue;
-			let event: any;
-			try { event = JSON.parse(line); } catch { push(line); continue; }
-			const inner = transcriptInnerEvent(event);
-			const innerType = typeof inner?.type === "string" ? inner.type : undefined;
-			const ts = eventTime(event, inner);
-			if (isTranscriptCompactionEvent(event, inner)) {
-				push(transcriptCompactionBanner(ts));
-				continue;
-			}
-			if (innerType && !INCLUDED_EVENT_TYPES.has(innerType)) continue;
-			const msg = inner?.message;
-			if (msg && typeof msg === "object") {
-				const role = msg.role || innerType || "?";
-				const content = Array.isArray(msg.content) ? msg.content : [];
-				const tool = content.find((c: any) => c?.type === "toolCall");
-				if (tool) {
-					const args = tool.arguments ?? tool.args ?? {};
-					pushSection(`${role} tool call ${tool.name ?? "?"}`, ts);
-					if (Object.keys(args).length > 0) pushJson(args);
-				} else {
-					const text = textFromMessageContent(msg.content);
-					if (text.trim()) {
-						pushSection(String(role), ts);
-						push(text);
-					} else if (innerType) pushSection(`${role} (${innerType})`, ts);
-				}
-				continue;
-			}
-			// tool_execution_start/end carry identity in inner.toolName + inner.toolCallId
-			// at the top level (not inside a .message or .call). Render the tool name
-			// and a short id so dedup doesn't collapse two distinct tool runs into a
-			// single bare event-type line.
-			if (innerType && typeof inner?.toolName === "string") {
-				const rawId = typeof inner.toolCallId === "string" ? inner.toolCallId : "";
-				const id = rawId ? rawId.split("|").pop()?.slice(-8) : undefined;
-				const suffix = id ? ` · ${id}` : "";
-				const phase = innerType === "tool_execution_start" ? "tool start" : innerType === "tool_execution_end" ? "tool end" : innerType;
-				pushSection(`${phase} ${inner.toolName}${suffix}`, ts);
-				const result = inner.result ?? inner.output ?? inner.content;
-				if (innerType === "tool_result_end" && result) push(typeof result === "string" ? result : JSON.stringify(result, null, 2));
-				continue;
-			}
-			if (innerType) {
-				if (innerType === "turn_start" || innerType === "turn_end") pushSection(innerType.replace("_", " "), ts);
-				else if (innerType === "exit") pushSection(`exit${typeof inner?.code === "number" ? ` ${inner.code}` : ""}`, ts);
-				else pushSection(innerType, ts);
-				continue;
-			}
-			push(line);
-		}
-		return rendered.slice(-maxLines);
-	} catch {
-		return [];
-	}
-}
-
-function transcriptRowTime(raw: string | undefined): string {
-	if (!raw) return "--:--:--";
-	const date = new Date(raw);
-	if (!Number.isFinite(date.getTime())) return raw.slice(0, 8).padEnd(8, "-");
-	return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`;
-}
-
-function transcriptEventTimestamp(outer: any, inner: any): string | undefined {
-	return typeof outer?.ts === "string"
-		? outer.ts
-		: typeof inner?.timestamp === "string"
-			? inner.timestamp
-			: typeof inner?.ts === "string"
-				? inner.ts
-				: typeof outer?.timestamp === "string"
-					? outer.timestamp
-					: undefined;
-}
-
-function firstTranscriptLine(value: unknown): string {
-	const text = typeof value === "string" ? value : value === undefined ? "" : JSON.stringify(value) ?? "";
-	return text.replace(/\r\n/g, "\n").split("\n")[0]?.replace(/\s+/g, " ").trim() ?? "";
-}
-
-type TranscriptEntryType = "prompt" | "assistant" | "tool" | "error" | "exit" | "turn";
-type TranscriptEntry =
-	| { arrow: "→" | "←"; body?: string; compaction?: false; preview: string; timestamp?: string; type: TranscriptEntryType }
-	| { body: string; compaction: true; preview: string; timestamp?: string };
-
-const TRANSCRIPT_COMPACTION_BANNER = "⚠ COMPACTION — context window full, history compressed before continuation";
-const TRANSCRIPT_COMPACTION_BODY = "(Pi runtime compacted context. Subsequent messages start from the compacted state.)";
-const TRANSCRIPT_EMPTY_PLACEHOLDER = "(empty)";
-
-function transcriptCompactRow(timestamp: string | undefined, arrow: "→" | "←", type: TranscriptEntryType, text: string): string {
-	return `${transcriptRowTime(timestamp)} ${arrow} ${type} ${firstTranscriptLine(text)}`.trimEnd();
-}
-
-function transcriptHeaderRow(timestamp: string | undefined, arrow: "→" | "←", type: TranscriptEntryType): string {
-	return `${transcriptRowTime(timestamp)} ${arrow} ${type}`;
-}
-
-function transcriptCompactionBanner(timestamp: string | undefined): string {
-	return `${transcriptRowTime(timestamp)} ${TRANSCRIPT_COMPACTION_BANNER}`;
-}
-
-function transcriptInnerEvent(event: any): any {
-	const inner = event?.event && typeof event.event === "object" ? event.event : event;
-	if (inner?.type === "event" && inner?.data && typeof inner.data === "object") return inner.data;
-	return inner;
-}
-
-function isCompactionToken(value: unknown): boolean {
-	return value === "session_compact" || value === "session-compact" || value === "compact";
-}
-
-function isTranscriptCompactionEvent(outer: any, inner: any): boolean {
-	return isCompactionToken(outer?.type)
-		|| isCompactionToken(inner?.type)
-		|| isCompactionToken(outer?.event)
-		|| isCompactionToken(inner?.event)
-		|| isCompactionToken(outer?.customType)
-		|| isCompactionToken(inner?.customType)
-		|| isCompactionToken(outer?.message?.customType)
-		|| isCompactionToken(inner?.message?.customType);
-}
-
-function hasTranscriptValue(value: unknown): boolean {
-	if (value == null) return false;
-	if (typeof value === "string") return value.trim().length > 0;
-	if (Array.isArray(value)) return value.length > 0;
-	if (typeof value === "object") return Object.keys(value).length > 0;
-	return true;
-}
-
-function formatTranscriptJson(value: unknown): string {
-	if (typeof value === "string") {
-		const trimmed = value.trim();
-		if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-			try { return JSON.stringify(JSON.parse(trimmed), null, 2); } catch { /* keep raw */ }
-		}
-		return value;
-	}
-	try { return JSON.stringify(value ?? {}, null, 2); } catch { return String(value); }
-}
-
-function transcriptTextOrPlaceholder(text: string): string {
-	return text.trim() ? text : TRANSCRIPT_EMPTY_PLACEHOLDER;
-}
-
-function toolCallPreview(tool: any): string {
-	const name = tool?.name ?? tool?.toolName ?? "tool";
-	const args = tool?.arguments ?? tool?.args;
-	if (!args || (typeof args === "object" && Object.keys(args).length === 0)) return String(name);
-	return `${name} ${firstTranscriptLine(args)}`;
-}
-
-function toolCallBody(tool: any): string {
-	const name = String(tool?.name ?? tool?.toolName ?? "tool");
-	const args = tool?.arguments ?? tool?.args;
-	if (!hasTranscriptValue(args)) return name;
-	return `${name}\n${formatTranscriptJson(args)}`;
-}
-
-function parseTranscriptEntries(record: PaneTaskRecord): TranscriptEntry[] {
-	const entries: TranscriptEntry[] = [];
-	let sawPrompt = false;
-	let sawMalformedLine = false;
-	try {
-		const raw = record.transcriptPath ? fs.readFileSync(record.transcriptPath, "utf-8") : "";
-		for (const line of raw.split(/\r?\n/)) {
-			if (!line.trim()) continue;
-			let event: any;
-			try { event = JSON.parse(line); } catch { sawMalformedLine = true; continue; }
-			const inner = transcriptInnerEvent(event);
-			if (isTranscriptCompactionEvent(event, inner)) {
-				entries.push({ body: TRANSCRIPT_COMPACTION_BODY, compaction: true, preview: TRANSCRIPT_COMPACTION_BANNER, timestamp: transcriptEventTimestamp(event, inner) });
-				continue;
-			}
-			const innerType = typeof inner?.type === "string" ? inner.type : undefined;
-			const timestamp = transcriptEventTimestamp(event, inner);
-			const msg = inner?.message;
-			if (msg && typeof msg === "object") {
-				const role = String(msg.role ?? "");
-				const content = Array.isArray(msg.content) ? msg.content : [];
-				const tool = content.find((item: any) => item?.type === "toolCall" || item?.type === "tool_call");
-				if (tool) {
-					entries.push({ arrow: "←", body: toolCallBody(tool), preview: toolCallPreview(tool), timestamp, type: "tool" });
-					continue;
-				}
-				const text = textFromMessageContent(msg.content);
-				if (role === "user") {
-					if (text.trim()) sawPrompt = true;
-					const body = transcriptTextOrPlaceholder(text);
-					entries.push({ arrow: "→", body, preview: body, timestamp, type: "prompt" });
-				} else if (role === "assistant") {
-					const body = transcriptTextOrPlaceholder(text);
-					entries.push({ arrow: "←", body, preview: body, timestamp, type: "assistant" });
-				} else {
-					const body = transcriptTextOrPlaceholder(text);
-					entries.push({ arrow: "←", body, preview: `${role || innerType || "message"} ${body}`, timestamp, type: "turn" });
-				}
-				continue;
-			}
-			if (innerType && typeof inner?.toolName === "string") {
-				const phase = innerType === "tool_execution_start" ? "start" : innerType === "tool_execution_end" ? "end" : innerType === "tool_result_end" ? "result" : innerType;
-				const result = inner.result ?? inner.output ?? inner.content;
-				const args = inner.arguments ?? inner.args ?? inner.input;
-				const bodyParts = [`${inner.toolName} ${phase}`];
-				if (hasTranscriptValue(args)) bodyParts.push(formatTranscriptJson(args));
-				if (hasTranscriptValue(result)) bodyParts.push(formatTranscriptJson(result));
-				entries.push({
-					arrow: "←",
-					body: bodyParts.join("\n"),
-					preview: `${inner.toolName} ${phase}${result ? ` ${firstTranscriptLine(result)}` : ""}`,
-					timestamp,
-					type: "tool",
-				});
-				continue;
-			}
-			if (innerType === "turn_start" || innerType === "turn_end") {
-				entries.push({ arrow: "←", body: innerType.replace("_", " "), preview: innerType.replace("_", " "), timestamp, type: "turn" });
-				continue;
-			}
-			if (innerType === "exit") {
-				const text = typeof inner?.code === "number" ? `code ${inner.code}` : "exit";
-				entries.push({ arrow: "←", body: text, preview: text, timestamp, type: "exit" });
-				continue;
-			}
-			if (innerType && (innerType.includes("error") || inner?.error)) {
-				const text = String(inner.error ?? innerType);
-				entries.push({ arrow: "←", body: text, preview: text, timestamp, type: "error" });
-			}
-		}
-	} catch {
-		entries.push({ arrow: "←", body: "(transcript unavailable)", preview: "(transcript unavailable)", timestamp: undefined, type: "error" });
-	}
-	if (sawMalformedLine) entries.push({ arrow: "←", body: "(malformed transcript JSONL)", preview: "(malformed transcript JSONL)", timestamp: undefined, type: "error" });
-	if (!sawPrompt && record.task?.trim()) entries.unshift({ arrow: "→", body: record.task, preview: record.task, timestamp: record.createdAt, type: "prompt" });
-	return entries;
-}
-
-export function transcriptCompactRows(record: PaneTaskRecord, maxRows = 200): string[] {
-	return parseTranscriptEntries(record).slice(-maxRows).map((entry) => entry.compaction
-		? transcriptCompactionBanner(entry.timestamp)
-		: transcriptCompactRow(entry.timestamp, entry.arrow, entry.type, entry.preview));
-}
-
-function expandedTranscriptEntryLines(entry: TranscriptEntry): string[] {
-	if (entry.compaction) return [transcriptCompactionBanner(entry.timestamp), entry.body];
-	const body = entry.body ?? entry.preview;
-	const bodyLines = body.replace(/\r\n/g, "\n").split("\n");
-	return [transcriptHeaderRow(entry.timestamp, entry.arrow, entry.type), ...bodyLines];
-}
-
-export function transcriptExpandedRows(record: PaneTaskRecord, maxRows = 200): string[] {
-	const out: string[] = [];
-	for (const entry of parseTranscriptEntries(record).slice(-maxRows)) {
-		if (out.length > 0) out.push("");
-		out.push(...expandedTranscriptEntryLines(entry));
-	}
-	return out;
 }
 
 // Multiple bg launches of the same agent name produce distinct dashboard rows
@@ -1079,12 +773,12 @@ export interface MonitorSessionGroup {
 	usage?: UsageStats;
 }
 
+export type MonitorSectionKind = "active" | "completed";
+
 export type MonitorTreeRow =
-	| { key: string; kind: "section"; label: string }
+	| { collapsed: boolean; count: number; key: string; kind: "section"; label: string; section: MonitorSectionKind }
 	| { group: MonitorSessionGroup; key: string; kind: "session" }
 	| { group: MonitorSessionGroup; key: string; kind: "task"; record: PaneTaskRecord };
-
-const MONITOR_FILTERS: MonitorFilter[] = ["active", "completed", "all"];
 
 function sortedMonitorRecords(registry: PaneTaskRegistry): PaneTaskRecord[] {
 	return Object.values(registry)
@@ -1123,13 +817,13 @@ function recordClockTime(record: PaneTaskRecord): string {
 export function monitorRecordLabel(record: PaneTaskRecord, taskNumbers: Map<string, number>): string {
 	const number = taskNumbers.get(record.taskId);
 	const numberText = number ? ` #${number}` : "";
-	return `${record.agent}${numberText} · ${recordClockTime(record)} · ${shortTaskSuffix(record.taskId)}`;
+	return `${record.agent}${numberText} · ${recordClockTime(record)}`;
 }
 
 export function monitorTaskRowLabel(record: PaneTaskRecord, taskNumbers: Map<string, number>): string {
 	const number = taskNumbers.get(record.taskId);
 	const numberText = number ? `#${number}` : "Task";
-	return `${numberText} · ${recordClockTime(record)} · ${shortTaskSuffix(record.taskId)}`;
+	return `${numberText} · ${recordClockTime(record)}`;
 }
 
 function recordTimestampLocal(record: PaneTaskRecord): number {
@@ -1226,14 +920,7 @@ export function buildMonitorSessionGroups(records: PaneTaskRecord[]): MonitorSes
 	});
 }
 
-export function filteredMonitorSessionGroups(groups: MonitorSessionGroup[], filter: MonitorFilter): MonitorSessionGroup[] {
-	if (filter === "active") return groups.filter((group) => group.isActive);
-	if (filter === "completed") return groups.filter((group) => group.isCompleted);
-	return groups;
-}
-
-export function monitorTreeRows(groups: MonitorSessionGroup[], filter: MonitorFilter, collapsedSessionIds: Set<string> = new Set()): MonitorTreeRow[] {
-	const filtered = filteredMonitorSessionGroups(groups, filter);
+export function monitorTreeRows(groups: MonitorSessionGroup[], collapsedSectionIds: Set<MonitorSectionKind> = new Set(), collapsedSessionIds: Set<string> = new Set()): MonitorTreeRow[] {
 	const rows: MonitorTreeRow[] = [];
 	const pushGroup = (group: MonitorSessionGroup) => {
 		rows.push({ group, key: group.id, kind: "session" });
@@ -1241,22 +928,19 @@ export function monitorTreeRows(groups: MonitorSessionGroup[], filter: MonitorFi
 			for (const record of group.records) rows.push({ group, key: `${group.id}:${record.taskId}`, kind: "task", record });
 		}
 	};
-	const pushSection = (label: string, sectionGroups: MonitorSessionGroup[]) => {
-		if (filter === "all" && sectionGroups.length === 0) return;
-		rows.push({ key: `section:${label.toLowerCase()}`, kind: "section", label: `${label} (${sectionGroups.length})` });
+	const pushSection = (section: MonitorSectionKind, label: string, sectionGroups: MonitorSessionGroup[]) => {
+		const collapsed = collapsedSectionIds.has(section);
+		rows.push({ collapsed, count: sectionGroups.length, key: `section:${section}`, kind: "section", label: `${label} (${sectionGroups.length})`, section });
+		if (collapsed) return;
 		for (const group of sectionGroups) pushGroup(group);
 	};
-	if (filter === "active") pushSection("Active", filtered);
-	else if (filter === "completed") pushSection("Completed", filtered);
-	else {
-		pushSection("Active", groups.filter((group) => group.isActive));
-		pushSection("Completed", groups.filter((group) => group.isCompleted));
-	}
+	pushSection("active", "Active", groups.filter((group) => group.isActive));
+	pushSection("completed", "Completed", groups.filter((group) => group.isCompleted));
 	return rows;
 }
 
 function selectableMonitorRows(rows: MonitorTreeRow[]): MonitorTreeRow[] {
-	return rows.filter((row) => row.kind !== "section");
+	return rows;
 }
 
 function selectedMonitorRow(rows: MonitorTreeRow[], ui: AgentBrowserUiState): MonitorTreeRow | undefined {
@@ -1275,22 +959,6 @@ export function clampMonitorUiToRows(ui: AgentBrowserUiState, rows: MonitorTreeR
 	if (selectedIndex >= 0 && selectedIndex < ui.monitorScroll) ui.monitorScroll = selectedIndex;
 	if (selectedIndex >= 0 && selectedIndex >= ui.monitorScroll + listRows) ui.monitorScroll = selectedIndex - listRows + 1;
 	ui.monitorScroll = Math.max(0, Math.min(ui.monitorScroll, Math.max(0, rows.length - listRows)));
-}
-
-function monitorFilter(ui: AgentBrowserUiState): MonitorFilter {
-	return ui.monitorFilter ?? "all";
-}
-
-function cycleMonitorFilter(filter: MonitorFilter): MonitorFilter {
-	return MONITOR_FILTERS[(MONITOR_FILTERS.indexOf(filter) + 1) % MONITOR_FILTERS.length] ?? "all";
-}
-
-function renderMonitorFilterBar(filter: MonitorFilter, width: number, theme: Theme): string {
-	const parts = MONITOR_FILTERS.map((value) => {
-		const label = ` ${value} `;
-		return value === filter ? agentActivePill(theme, label) : agentInactivePill(theme, label);
-	});
-	return truncateToWidth(`${parts.join(" ")} ${theme.fg("dim", "f cycle")}`, width, "");
 }
 
 function monitorSessionKindLabel(group: MonitorSessionGroup): string {
@@ -1313,10 +981,9 @@ function monitorSessionRowLabel(group: MonitorSessionGroup, theme: Theme): strin
 }
 
 export function renderMonitorTree(rows: MonitorTreeRow[], records: PaneTaskRecord[], collapsedSessionIds: Set<string>, ui: AgentBrowserUiState, width: number, theme: Theme, listRows: number): string[] {
-	const filter = monitorFilter(ui);
-	const groups = rows.filter((row) => row.kind === "session").length;
-	const lines = [`${agentPaneTitle(theme, "Monitor", ui.pane === "list")} ${theme.fg("dim", `(${groups})`)}`, renderMonitorFilterBar(filter, width, theme), ""];
-	if (rows.length === 0 || selectableMonitorRows(rows).length === 0) {
+	const groups = buildMonitorSessionGroups(records).length;
+	const lines = [`${agentPaneTitle(theme, "Monitor", ui.pane === "list")} ${theme.fg("dim", `(${groups})`)}`, ""];
+	if (records.length === 0 || rows.length === 0 || selectableMonitorRows(rows).length === 0) {
 		lines.push(theme.fg("dim", "No tasks yet. Dispatch via `subagent` or `/agents`."));
 		return lines;
 	}
@@ -1325,7 +992,10 @@ export function renderMonitorTree(rows: MonitorTreeRow[], records: PaneTaskRecor
 	const selectedKey = selectedMonitorRow(rows, ui)?.key;
 	for (const row of rows.slice(ui.monitorScroll, ui.monitorScroll + listRows)) {
 		let rendered = "";
-		if (row.kind === "section") rendered = `${theme.fg("muted", "▼")} ${theme.fg("accent", row.label)}`;
+		if (row.kind === "section") {
+			const expander = row.collapsed ? "▶" : "▼";
+			rendered = `${theme.fg("muted", expander)} ${ansiMagenta(theme.bold(row.label))}`;
+		}
 		else if (row.kind === "session") {
 			const expander = collapsedSessionIds.has(row.group.id) ? "▶" : "▼";
 			rendered = `  ${theme.fg("muted", expander)} ${monitorSessionRowLabel(row.group, theme)}`;
@@ -1376,30 +1046,10 @@ function colorTraceValue(label: string, value: string, theme: Theme): string {
 function traceLineLooksJsonLike(line: string, type: TraceViewerItem["type"] | undefined): boolean {
 	const trimmed = line.trim();
 	return type === "completion"
-		|| type === "transcript"
 		|| trimmed.startsWith("{")
 		|| trimmed.startsWith("[")
 		|| /^"[^"\\]+"\s*:/.test(trimmed)
 		|| /^[}\]],?$/.test(trimmed);
-}
-
-function monitorStickyTranscriptRawLines(rawLines: string[], type: TraceViewerItem["type"] | undefined): { scrollRawLines: string[]; stickyRawLines: string[] } {
-	if (type !== "summary") return { scrollRawLines: rawLines, stickyRawLines: [] };
-	const stickyIndexes = new Set<number>();
-	const stickyRawLines: string[] = [];
-	for (let index = 0; index < rawLines.length; index += 1) {
-		const line = rawLines[index] ?? "";
-		if (!line.includes(TRANSCRIPT_COMPACTION_BANNER)) continue;
-		stickyIndexes.add(index);
-		stickyRawLines.push(line);
-		const next = rawLines[index + 1] ?? "";
-		if (next.trim() === TRANSCRIPT_COMPACTION_BODY) {
-			stickyIndexes.add(index + 1);
-			stickyRawLines.push(next);
-		}
-	}
-	if (stickyRawLines.length === 0) return { scrollRawLines: rawLines, stickyRawLines };
-	return { scrollRawLines: rawLines.filter((_line, index) => !stickyIndexes.has(index)), stickyRawLines };
 }
 
 function renderTraceContentLines(rawLines: string[], type: TraceViewerItem["type"] | undefined, width: number, theme: Theme): string[] {
@@ -1415,14 +1065,12 @@ function renderTraceContentLine(raw: string, type: TraceViewerItem["type"] | und
 	const line = raw.replace(/\t/g, "  ");
 	const trimmed = line.trim();
 	if (!trimmed) return [""];
-	if (trimmed.includes("⚠ COMPACTION")) return [theme.fg("error", agentPad(truncateToWidth(line, width, ""), width))];
-	if (trimmed === TRANSCRIPT_COMPACTION_BODY) return wrapTextWithAnsi(theme.fg("error", line), width);
 	if (/^── .+ ──$/.test(trimmed)) return wrapTextWithAnsi(theme.fg("muted", trimmed.replace(/(assistant|user|tool call|tool start|tool end|turn start|turn end|exit)/i, (match) => theme.fg("accent", theme.bold(match)))), width);
 	if (/^-{3,}$/.test(trimmed)) return [];
 	if (/^(Overview|Metadata|Summary|Files changed|Validation|Notes|Task|Artifacts)$/i.test(trimmed)) {
-		return wrapTextWithAnsi(theme.fg("accent", theme.bold(trimmed)), width);
+		return wrapTextWithAnsi(ansiMagenta(theme.bold(trimmed)), width);
 	}
-	const labelMatch = line.match(/^(Ref|Agent|Task #|Status|Task ID|Created|Done|Model|Session|Session type|Start|Latest|Duration|Tasks|Usage|Pane ID|SessionKey|Transcript|Completion|Archive|Source)\s{2,}(.+)$/);
+	const labelMatch = line.match(/^(Ref|Agent|Task #|Status|Task ID|Created|Done|Model|Effort|Session|Session type|Start|Latest|Duration|Tasks|Usage|Pane ID|SessionKey|Transcript|Completion|Archive|Source)\s{2,}(.+)$/);
 	if (labelMatch) return wrapTextWithAnsi(colorTraceValue(labelMatch[1], labelMatch[2], theme), width);
 	if (traceLineLooksJsonLike(line, type)) return wrapTextWithAnsi(highlightInlinePreview(line, theme), width);
 	const bullet = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
@@ -1439,21 +1087,14 @@ function monitorTaskTitle(record: PaneTaskRecord, taskNumber: number | undefined
 	const kind = recordMonitorKind(record) === "pane" ? "pane" : "bg";
 	const session = sessionModeChipLabel({ kind: recordMonitorKind(record), sessionMode: record.sessionMode, sessionKey: record.sessionKey });
 	const sessionPart = session ? `${theme.fg("dim", " · ")}${theme.fg("muted", session)}` : "";
-	const model = record.model ?? agentConfig?.model;
-	const effort = agentConfig?.effort?.trim();
+	const model = recordRunModel(record, agentConfig);
+	const effort = recordRunEffort(record, agentConfig);
 	const modelPart = model ? `${theme.fg("dim", " · ")}${theme.fg("muted", `${model}${effort ? ` ${effort}` : ""}`)}` : "";
 	return `${agentPaneTitle(theme, "Detail", active)} ${ansiMagenta(theme.bold(`${record.agent}${taskNumberText}`))}${theme.fg("dim", " · ")}${monitorStatusText(record.status, theme)}${theme.fg("dim", " · ")}${theme.fg("muted", kind)}${sessionPart}${modelPart}`;
 }
 
-function monitorDetailCacheKey(taskId: string, transcriptExpanded: boolean): string {
-	return `${taskId}:${transcriptExpanded ? "expanded" : "compact"}`;
-}
-
-export function monitorFooterHint(ui: AgentBrowserUiState, theme: Theme, taskDetailFocused = false): string {
-	const xHint = taskDetailFocused
-		? `${theme.fg("dim", " · ")}${ansiYellow("x")} ${theme.fg("dim", ui.monitorTranscriptExpanded ? "compact" : "expand")}`
-		: "";
-	return `${ansiYellow("tab")} ${theme.fg("dim", "switch · ")}${ansiYellow("↑/↓ -/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "tree↔detail · ")}${ansiYellow("enter")} ${theme.fg("dim", "open · ")}${ansiYellow("f")} ${theme.fg("dim", "filter")}${xHint}${theme.fg("dim", " · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
+export function monitorFooterHint(_ui: AgentBrowserUiState, theme: Theme, _taskDetailFocused = false): string {
+	return `${ansiYellow("tab")} ${theme.fg("dim", "switch · ")}${ansiYellow("↑/↓ -/=")} ${theme.fg("dim", "page · ")}${ansiYellow("←/→")} ${theme.fg("dim", "tree↔detail · ")}${ansiYellow("enter")} ${theme.fg("dim", "open/toggle")}${theme.fg("dim", " · ")}${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
 }
 
 export function renderMonitorDetail(
@@ -1470,7 +1111,7 @@ export function renderMonitorDetail(
 		return [`${agentPaneTitle(theme, "Detail", ui.pane === "inspector")} ${theme.fg("dim", "Select a task to view its trace.")}`];
 	}
 	const safeWidth = Math.max(8, width);
-	const entry = cache.get(monitorDetailCacheKey(record.taskId, ui.monitorTranscriptExpanded)) ?? cache.get(record.taskId);
+	const entry = cache.get(record.taskId);
 	const items = entry?.items;
 	const placeholderText = entry?.error ? `Error: ${entry.error}` : entry?.loading || !items ? "Loading…" : "(empty)";
 	const subtabs: TraceViewerItem[] = items ?? MONITOR_SUBTAB_LABELS.map((label) => ({ label, text: placeholderText, type: label.toLowerCase() as TraceViewerItem["type"] }));
@@ -1486,13 +1127,11 @@ export function renderMonitorDetail(
 		]
 			: [];
 	const rawLines = (item?.text || "(empty)").split(/\r?\n/);
-	const { scrollRawLines, stickyRawLines } = monitorStickyTranscriptRawLines(rawLines, item?.type);
-	const stickyWrapped = renderTraceContentLines(stickyRawLines, item?.type, safeWidth, theme);
-	const wrapped = renderTraceContentLines(scrollRawLines, item?.type, safeWidth, theme);
+	const wrapped = renderTraceContentLines(rawLines, item?.type, safeWidth, theme);
 	const header: string[] = [titleLine, "", subtabLine, "", ...fileLines];
 	const headerRows = header.length;
 	const footerRows = 1;
-	const visibleRows = Math.max(1, rows - headerRows - stickyWrapped.length - footerRows);
+	const visibleRows = Math.max(1, rows - headerRows - footerRows);
 	const maxScroll = Math.max(0, wrapped.length - visibleRows);
 	ui.inspectorScroll = Math.max(0, Math.min(ui.inspectorScroll, maxScroll));
 	const slice = wrapped.slice(ui.inspectorScroll, ui.inspectorScroll + visibleRows);
@@ -1501,7 +1140,6 @@ export function renderMonitorDetail(
 	const after = afterCount > 0 ? `↓ ${afterCount}` : "";
 	const scrollHint = [before, after].filter(Boolean).join(" · ");
 	const out: string[] = [...header];
-	out.push(...stickyWrapped);
 	out.push(...slice);
 	if (scrollHint) out.push(ansiYellow(scrollHint));
 	else out.push("");
@@ -1774,17 +1412,18 @@ function createAgentsBrowserComponent(
 	};
 	const monitorRecords = sortedMonitorRecords(taskRegistry);
 	const monitorGroups = buildMonitorSessionGroups(monitorRecords);
+	const monitorCollapsedSections = new Set<MonitorSectionKind>();
 	const monitorCollapsedSessions = new Set<string>();
-	const currentMonitorRows = () => monitorTreeRows(monitorGroups, monitorFilter(ui), monitorCollapsedSessions);
+	const currentMonitorRows = () => monitorTreeRows(monitorGroups, monitorCollapsedSections, monitorCollapsedSessions);
 	const monitorCache = new Map<string, MonitorDetailEntry>();
 	const monitorTaskNumbers = taskNumberById(monitorRecords);
 	const loadMonitorRecord = (record: PaneTaskRecord | undefined) => {
 		if (!record) return;
-		const cacheKey = monitorDetailCacheKey(record.taskId, ui.monitorTranscriptExpanded);
+		const cacheKey = record.taskId;
 		const entry = monitorCache.get(cacheKey);
 		if (entry?.items || entry?.loading) return;
 		monitorCache.set(cacheKey, { loading: true });
-		void traceViewerItems(record, monitorTaskNumbers.get(record.taskId), discovery, { transcriptExpanded: ui.monitorTranscriptExpanded }).then((items) => {
+		void traceViewerItems(record, monitorTaskNumbers.get(record.taskId), discovery).then((items) => {
 			monitorCache.set(cacheKey, { items });
 			requestRender();
 		}).catch((error) => {
@@ -1802,15 +1441,13 @@ function createAgentsBrowserComponent(
 		clampMonitorUiToRows(ui, rows, layout.listRows);
 	};
 
-	const hasActiveTab = () => getActiveItems().length > 0;
 	const switchTab = (delta: number) => {
-		const next = tabNext(ui.tab, hasActiveTab(), delta);
+		const next = tabNext(ui.tab, delta);
 		if (next === "monitor") {
 			ui.tab = "monitor";
 			ui.monitorSelected = 0;
 			ui.monitorScroll = 0;
 			ui.monitorSubtab = 0;
-			ui.monitorTranscriptExpanded = false;
 			ui.inspectorScroll = 0;
 			ui.pane = "list";
 			clampMonitor();
@@ -1902,25 +1539,12 @@ function createAgentsBrowserComponent(
 			const layout = getLayout();
 			const page = Math.max(1, layout.bodyRows);
 			const delta = matchesKey(data, "-") ? -page : page;
-			if (ui.tab === "active") {
-				const items = getActiveItems();
-				const totalRows = items.length;
-				if (ui.pane === "inspector") {
-					ui.inspectorScroll = Math.max(0, ui.inspectorScroll + delta);
-				} else {
-					ui.activeSelected = Math.max(0, Math.min(totalRows - 1, ui.activeSelected + delta));
-					if (ui.activeSelected < ui.activeScroll) ui.activeScroll = ui.activeSelected;
-					if (ui.activeSelected >= ui.activeScroll + layout.listRows) ui.activeScroll = ui.activeSelected - layout.listRows + 1;
-					ui.activeScroll = Math.max(0, Math.min(ui.activeScroll, Math.max(0, totalRows - layout.listRows)));
-					ui.inspectorScroll = 0;
-				}
-			} else if (ui.tab === "monitor") {
+			if (ui.tab === "monitor") {
 				if (ui.pane === "inspector") {
 					ui.inspectorScroll = Math.max(0, ui.inspectorScroll + delta);
 				} else {
 					ui.monitorSelected = Math.max(0, ui.monitorSelected + delta);
 					ui.monitorSubtab = 0;
-					ui.monitorTranscriptExpanded = false;
 					ui.inspectorScroll = 0;
 					clampMonitor();
 					loadMonitorSelection();
@@ -1935,97 +1559,44 @@ function createAgentsBrowserComponent(
 			requestRender();
 			return;
 		}
-		if (ui.tab === "active") {
-			const items = getActiveItems();
-			const layout = getLayout();
-			const totalRows = items.length;
-			const clampActive = () => {
-				ui.activeSelected = Math.max(0, Math.min(ui.activeSelected, Math.max(0, totalRows - 1)));
-				if (ui.activeSelected < ui.activeScroll) ui.activeScroll = ui.activeSelected;
-				if (ui.activeSelected >= ui.activeScroll + layout.listRows) ui.activeScroll = ui.activeSelected - layout.listRows + 1;
-				ui.activeScroll = Math.max(0, Math.min(ui.activeScroll, Math.max(0, totalRows - layout.listRows)));
-			};
-			if (matchesKey(data, "up")) {
-				if (ui.pane === "inspector") ui.inspectorScroll = Math.max(0, ui.inspectorScroll - 1);
-				else { ui.activeSelected -= 1; ui.inspectorScroll = 0; clampActive(); }
-				requestRender();
-				return;
-			}
-			if (matchesKey(data, "down")) {
-				if (ui.pane === "inspector") ui.inspectorScroll += 1;
-				else { ui.activeSelected += 1; ui.inspectorScroll = 0; clampActive(); }
-				requestRender();
-				return;
-			}
-			if (matchesKey(data, "pageup" as any)) {
-				if (ui.pane === "inspector") ui.inspectorScroll = Math.max(0, ui.inspectorScroll - Math.max(1, layout.bodyRows));
-				else { ui.activeSelected -= layout.listRows; ui.inspectorScroll = 0; clampActive(); }
-				requestRender();
-				return;
-			}
-			if (matchesKey(data, "pagedown" as any)) {
-				if (ui.pane === "inspector") ui.inspectorScroll += Math.max(1, layout.bodyRows);
-				else { ui.activeSelected += layout.listRows; ui.inspectorScroll = 0; clampActive(); }
-				requestRender();
-				return;
-			}
-			if (matchesKey(data, "home")) { if (ui.pane === "inspector") ui.inspectorScroll = 0; else { ui.activeSelected = 0; ui.activeScroll = 0; } requestRender(); return; }
-			if (matchesKey(data, "end")) { if (ui.pane === "inspector") ui.inspectorScroll = Number.MAX_SAFE_INTEGER; else { ui.activeSelected = Math.max(0, totalRows - 1); clampActive(); } requestRender(); return; }
-			return;
-		}
 		if (ui.tab === "monitor") {
 			const layout = getLayout();
-			if (matchesKey(data, "f")) {
-				ui.monitorFilter = cycleMonitorFilter(monitorFilter(ui));
-				ui.monitorSelected = 0;
-				ui.monitorScroll = 0;
-				ui.monitorSubtab = 0;
-				ui.monitorTranscriptExpanded = false;
-				ui.inspectorScroll = 0;
-				clampMonitor();
-				loadMonitorSelection();
-				requestRender();
-				return;
-			}
 			if (matchesKey(data, "up")) {
 				if (ui.pane === "inspector") ui.inspectorScroll = Math.max(0, ui.inspectorScroll - 1);
-				else { ui.monitorSelected = Math.max(0, ui.monitorSelected - 1); ui.monitorSubtab = 0; ui.monitorTranscriptExpanded = false; ui.inspectorScroll = 0; clampMonitor(); loadMonitorSelection(); }
+				else { ui.monitorSelected = Math.max(0, ui.monitorSelected - 1); ui.monitorSubtab = 0; ui.inspectorScroll = 0; clampMonitor(); loadMonitorSelection(); }
 				requestRender();
 				return;
 			}
 			if (matchesKey(data, "down")) {
 				if (ui.pane === "inspector") ui.inspectorScroll += 1;
-				else { ui.monitorSelected += 1; ui.monitorSubtab = 0; ui.monitorTranscriptExpanded = false; ui.inspectorScroll = 0; clampMonitor(); loadMonitorSelection(); }
+				else { ui.monitorSelected += 1; ui.monitorSubtab = 0; ui.inspectorScroll = 0; clampMonitor(); loadMonitorSelection(); }
 				requestRender();
 				return;
 			}
 			if (matchesKey(data, "pageup" as any)) {
 				if (ui.pane === "inspector") ui.inspectorScroll = Math.max(0, ui.inspectorScroll - Math.max(1, layout.bodyRows));
-				else { ui.monitorSelected = Math.max(0, ui.monitorSelected - layout.listRows); ui.monitorSubtab = 0; ui.monitorTranscriptExpanded = false; ui.inspectorScroll = 0; clampMonitor(); loadMonitorSelection(); }
+				else { ui.monitorSelected = Math.max(0, ui.monitorSelected - layout.listRows); ui.monitorSubtab = 0; ui.inspectorScroll = 0; clampMonitor(); loadMonitorSelection(); }
 				requestRender();
 				return;
 			}
 			if (matchesKey(data, "pagedown" as any)) {
 				if (ui.pane === "inspector") ui.inspectorScroll += Math.max(1, layout.bodyRows);
-				else { ui.monitorSelected += layout.listRows; ui.monitorSubtab = 0; ui.monitorTranscriptExpanded = false; ui.inspectorScroll = 0; clampMonitor(); loadMonitorSelection(); }
+				else { ui.monitorSelected += layout.listRows; ui.monitorSubtab = 0; ui.inspectorScroll = 0; clampMonitor(); loadMonitorSelection(); }
 				requestRender();
 				return;
 			}
-			if (matchesKey(data, "home")) { if (ui.pane === "inspector") ui.inspectorScroll = 0; else { ui.monitorSelected = 0; ui.monitorScroll = 0; ui.monitorSubtab = 0; ui.monitorTranscriptExpanded = false; clampMonitor(); loadMonitorSelection(); } requestRender(); return; }
-			if (matchesKey(data, "end")) { if (ui.pane === "inspector") ui.inspectorScroll = Number.MAX_SAFE_INTEGER; else { ui.monitorSelected = Math.max(0, selectableMonitorRows(currentMonitorRows()).length - 1); ui.monitorSubtab = 0; ui.monitorTranscriptExpanded = false; clampMonitor(); loadMonitorSelection(); } requestRender(); return; }
-			if (data === "x" && ui.pane === "inspector") {
-				const selected = selectedMonitorRow(currentMonitorRows(), ui);
-				if (selected?.kind === "task") {
-					ui.monitorTranscriptExpanded = !ui.monitorTranscriptExpanded;
-					ui.inspectorScroll = 0;
-					loadMonitorSelection();
-					requestRender();
-				}
-				return;
-			}
+			if (matchesKey(data, "home")) { if (ui.pane === "inspector") ui.inspectorScroll = 0; else { ui.monitorSelected = 0; ui.monitorScroll = 0; ui.monitorSubtab = 0; clampMonitor(); loadMonitorSelection(); } requestRender(); return; }
+			if (matchesKey(data, "end")) { if (ui.pane === "inspector") ui.inspectorScroll = Number.MAX_SAFE_INTEGER; else { ui.monitorSelected = Math.max(0, selectableMonitorRows(currentMonitorRows()).length - 1); ui.monitorSubtab = 0; clampMonitor(); loadMonitorSelection(); } requestRender(); return; }
 			if (matchesKey(data, "enter") || matchesKey(data, "return")) {
 				if (ui.pane === "list") {
 					const selected = selectedMonitorRow(currentMonitorRows(), ui);
+					if (selected?.kind === "section") {
+						if (monitorCollapsedSections.has(selected.section)) monitorCollapsedSections.delete(selected.section);
+						else monitorCollapsedSections.add(selected.section);
+						clampMonitor();
+						requestRender();
+						return;
+					}
 					if (selected?.kind === "session") {
 						if (monitorCollapsedSessions.has(selected.group.id)) monitorCollapsedSessions.delete(selected.group.id);
 						else monitorCollapsedSessions.add(selected.group.id);
@@ -2084,8 +1655,7 @@ function createAgentsBrowserComponent(
 		const layout = getLayout();
 		const safeWidth = Math.max(1, width);
 		const bodyWidth = agentFrameContentWidth(safeWidth);
-		const activeItems = getActiveItems();
-		const tabLine = renderAgentBrowserTabs(ui.tab, activeItems.length > 0, bodyWidth, theme);
+		const tabLine = renderAgentBrowserTabs(ui.tab, bodyWidth, theme);
 		if (ui.tab === "monitor") {
 			clampMonitor();
 			loadMonitorSelection();
@@ -2133,13 +1703,9 @@ export async function openAgentsBrowser(
 		selected: 0,
 		scroll: 0,
 		agentSubtab: 0,
-		activeSelected: 0,
-		activeScroll: 0,
 		monitorSelected: 0,
 		monitorScroll: 0,
 		monitorSubtab: 0,
-		monitorTranscriptExpanded: false,
-		monitorFilter: "all",
 	};
 	while (true) {
 		const discovery = discoverAgents(ctx.cwd, "both");
@@ -2375,29 +1941,23 @@ export async function showAgentEditConfirmation(ctx: ExtensionContext, message: 
 	}), { overlay: true, overlayOptions: { anchor: "center", width: AGENT_EDIT_CONFIRM_WIDTH, maxHeight: "40%" } });
 }
 
-export async function traceViewerItems(record: PaneTaskRecord, taskNumber?: number, discovery?: { agents: AgentConfig[] }, options: { transcriptExpanded?: boolean } = {}): Promise<TraceViewerItem[]> {
+export async function traceViewerItems(record: PaneTaskRecord, taskNumber?: number, discovery?: { agents: AgentConfig[] }): Promise<TraceViewerItem[]> {
 	const ref = recordTraceRef(record);
 	const usage = record.usage ? formatUsageStats(record.usage, record.model) : "";
-	const completionPath = record.completionArchivePath ?? record.completionSourcePath;
 	const summaryText = record.summary?.trim()
 		? completionBodyWithoutPromptEcho(record.summary, record.task)
 		: record.status === "completed" || record.status === "failed" || record.status === "blocked"
 			? COMPLETION_SUMMARY_UNAVAILABLE
 			: "No summary yet.";
-	// Reasoning-effort lookup: the record itself does not persist `effort`,
-	// but the agent's frontmatter does. Pull from discovery when available
-	// (popup path) so the Model line reads `gpt-5.5 xhigh` instead of just
-	// `gpt-5.5`. Effort lives under `model-reasoning-effort` (OpenCode /
-	// Codex / Pi) or `effort` (Claude); both resolve to the same display
-	// token.
 	const agentConfig = discovery?.agents.find((a) => a.name === record.agent);
-	const effort = agentConfig?.effort?.trim() || undefined;
-	const modelLine = record.model
-		? `Model    ${record.model}${effort ? ` ${effort}` : ""}`
+	const model = recordRunModel(record, agentConfig);
+	const effort = recordRunEffort(record, agentConfig);
+	const modelLine = model
+		? `Model    ${model}`
 		: "";
+	const effortLine = effort ? `Effort   ${effort}` : "";
 	const sessionDetail = sessionModeDetailLabel(record);
 	const sessionLine = sessionDetail ? `Session  ${sessionDetail}` : "";
-	const transcriptRows = options.transcriptExpanded ? transcriptExpandedRows(record) : transcriptCompactRows(record);
 	// `" "` (single space) is a sentinel for an intentional blank line; it
 	// survives the `.filter(Boolean)` pass below that drops conditionally
 	// empty entries (e.g. record.completedAt missing -> no `Done` line).
@@ -2411,18 +1971,11 @@ export async function traceViewerItems(record: PaneTaskRecord, taskNumber?: numb
 		`Status   ${record.status}`,
 		`Task ID  ${record.taskId}`,
 		modelLine,
+		effortLine,
 		sessionLine,
 		usage ? `Usage    ${usage}` : "",
-		record.transcriptPath ? `Transcript  ${record.transcriptPath}` : "",
-		completionPath ? `Completion  ${completionPath}` : "",
-		record.completionArchivePath ? `Archive  ${record.completionArchivePath}` : "",
-		record.completionSourcePath ? `Source   ${record.completionSourcePath}` : "",
 		`Created  ${record.createdAt}`,
 		record.completedAt ? `Done     ${record.completedAt}` : "",
-		BLANK,
-		"Transcript",
-		"----------",
-		transcriptRows.length ? transcriptRows.join("\n") : "Transcript unavailable.",
 		BLANK,
 		"Summary",
 		"-------",

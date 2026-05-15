@@ -24,6 +24,7 @@ import {
 import { randomHex } from "./random.js";
 import {
 	resultLimits,
+	selectedEffortForAgent,
 	selectedModelForAgent,
 	selectedThinkingLevelForAgent,
 	selectedToolsForAgent,
@@ -401,6 +402,7 @@ export async function runSingleAgent(
 
 	const selectedModel = selectedModelForAgent(agent, parentModel, defaultCwd);
 	const selectedThinking = selectedThinkingLevelForAgent(parentThinkingLevel, defaultCwd);
+	const selectedEffort = selectedEffortForAgent(agent, selectedModel, selectedThinking);
 	const firstSession = resolveBgSession(runtimeRoot, agent.name, sessionKey);
 	await fs.promises.mkdir(path.dirname(firstSession.path), { recursive: true, mode: 0o700 }).catch(() => undefined);
 
@@ -418,6 +420,7 @@ export async function runSingleAgent(
 			stderr: errorMessage,
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: budgetGuard.estimate.tokens, turns: 0 },
 			model: selectedModel,
+			effort: selectedEffort,
 			sessionMode: "resumed",
 			sessionKey: firstSession.key,
 			sessionKeyExplicit: true,
@@ -438,6 +441,7 @@ export async function runSingleAgent(
 		cwd,
 		selectedModel,
 		selectedThinking,
+		selectedEffort,
 		step,
 		pi,
 		signal,
@@ -462,6 +466,7 @@ export async function runSingleAgent(
 		runtimeRoot,
 		transcriptPath: first.transcriptPath,
 		model: first.model,
+		effort: first.effort,
 		usage: first.usage,
 		reason: "context_length_exceeded",
 		retrySessionKey: retrySession.key,
@@ -476,6 +481,7 @@ export async function runSingleAgent(
 		cwd,
 		selectedModel,
 		selectedThinking,
+		selectedEffort,
 		step,
 		pi,
 		signal,
@@ -516,6 +522,7 @@ async function runSingleAgentAttempt(
 	cwd: string | undefined,
 	selectedModel: string | undefined,
 	selectedThinking: string | undefined,
+	selectedEffort: string | undefined,
 	step: number | undefined,
 	pi: ExtensionAPI,
 	signal: AbortSignal | undefined,
@@ -557,6 +564,7 @@ async function runSingleAgentAttempt(
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 		model: selectedModel,
+		effort: selectedEffort,
 		sessionKey: session.key,
 		sessionKeyExplicit: session.explicit,
 		sessionPath: session.path,
@@ -592,6 +600,7 @@ async function runSingleAgentAttempt(
 			runtimeRoot,
 			transcriptPath,
 			model: selectedModel,
+			effort: selectedEffort,
 			sessionMode: currentResult.sessionMode,
 			sessionKey: session.explicit ? session.key : undefined,
 			sessionPath: session.path,
@@ -739,6 +748,7 @@ async function runSingleAgentAttempt(
 				runtimeRoot,
 				transcriptPath,
 				model: currentResult.model,
+				effort: currentResult.effort,
 				usage: currentResult.usage,
 				error: currentResult.errorMessage || "Agent was aborted",
 				sessionMode: currentResult.sessionMode,
@@ -770,6 +780,7 @@ async function runSingleAgentAttempt(
 				runtimeRoot,
 				transcriptPath,
 				model: currentResult.model,
+				effort: currentResult.effort,
 				usage: currentResult.usage,
 				sessionMode: currentResult.sessionMode,
 				sessionKey: session.explicit ? session.key : undefined,
@@ -799,6 +810,7 @@ async function runSingleAgentAttempt(
 			runtimeRoot,
 			transcriptPath,
 			model: currentResult.model,
+			effort: currentResult.effort,
 			usage: currentResult.usage,
 			error: failed ? currentResult.errorMessage || currentResult.stderr || undefined : undefined,
 			sessionMode: currentResult.sessionMode,
