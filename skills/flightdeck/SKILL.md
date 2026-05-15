@@ -285,7 +285,7 @@ Rust dashboard env vars:
 | `FLIGHTDECK_DASHBOARD_TEST_SUBSCRIBE_PAUSE_FILE` | unset | Test-only socket subscribe interleaving hook. Do not set in normal sessions. |
 | `FLIGHTDECK_DASHBOARD_TEST_SUBSCRIBE_RELEASE_FILE` | unset | Test-only release file for the subscribe interleaving hook. Do not set in normal sessions. |
 
-Daemon tuning (`FD_*`) is in README.md. Most `FD_*` knobs run inside the
+Daemon tuning (`FD_*`) is in DEVELOPMENT.md. Most `FD_*` knobs run inside the
 daemon and do not affect master operation directly, but two are
 consulted on the master poll path through the TS `pane-poll`:
 `FD_ADAPTER_READ_TIMEOUT_SEC` (default `2`, fractional values honored)

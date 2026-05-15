@@ -2,7 +2,7 @@
 
 **Branch:** `flightdeck-dashboard-rust`
 **Worktree:** `/mnt/Tertiary/dev/vstack/trees/flightdeck-dashboard-rust`
-**HEAD as of handoff:** `d8cc0f328236c2230f08739effd51021de0217b8`
+**HEAD as of handoff:** tip of branch `flightdeck-dashboard-rust`
 
 ## What's done
 
