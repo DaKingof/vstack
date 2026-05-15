@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
-// CLI parity port of skills/flightdeck/scripts/pane-registry.
-// Wraps flightdeck-state for the .issues map; handles 5-harness spawn
+// CLI for tracked-entry pane registry. Handles 5-harness spawn
 // discovery, freshness-gated adapter-args resolution, and live-pane
 // reconciliation against tmux.
 
@@ -15,9 +14,6 @@ import { piBridgeIsFresh, piSpawnFile } from "../paths/pi.ts";
 import { cxAdapterIsFresh, cxSpawnFile } from "../paths/codex.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// The bash trampoline lives at scripts/<name>; the .bash sibling is the
-// legacy bash flightdeck-state. We invoke the trampoline so the same
-// FLIGHTDECK_USE_TS_* gates apply.
 const FD_STATE_SCRIPT = resolve(HERE, "../../../../scripts/flightdeck-state");
 
 function die(msg: string, code = 2): never {
@@ -355,9 +351,9 @@ function trackedEntries(): Record<string, Record<string, unknown>> {
 	}
 }
 
-function registryMapHas(map: "entries" | "issues", id: string): boolean {
+function registryHasEntry(id: string): boolean {
 	const idJson = JSON.stringify(id);
-	const r = fdState(["get", `has(${JSON.stringify(map)}) and .${map}[${idJson}] != null`]);
+	const r = fdState(["get", `.entries[${idJson}] != null`]);
 	const status = r.status ?? 0;
 	if (status >= 2 || r.stderr.trim()) {
 		process.stderr.write(`pane-registry: registry read failed (flightdeck-state exit=${status}): ${r.stderr}`);
@@ -367,14 +363,27 @@ function registryMapHas(map: "entries" | "issues", id: string): boolean {
 	return r.status === 0 && r.stdout.trim() === "true";
 }
 
-function setRegistryFieldBoth(id: string, field: string, value: string): void {
-	const hasEntry = registryMapHas("entries", id);
-	const hasIssue = registryMapHas("issues", id);
-	if (!hasEntry && !hasIssue) {
-		die(`pane-registry: entry '${id}' not found in .entries or .issues`);
+// Issue-mode metadata lives under `entry.domain.issue`. If a caller
+// passes one of those field names as a top-level set, redirect into the
+// nested object so downstream readers (`pane-registry list --format json`,
+// pi-flightdeck, merge planning) see the value where they look for it.
+const ISSUE_DOMAIN_FIELDS = new Set([
+	"pr_number",
+	"worktree",
+	"merge_commit",
+	"scope_files_declared",
+	"scope_files_actual",
+	"orchestration_started",
+]);
+
+function setEntryField(id: string, field: string, value: string): void {
+	if (!registryHasEntry(id)) die(`pane-registry: entry '${id}' not found in .entries`);
+	const idJson = JSON.stringify(id);
+	if (ISSUE_DOMAIN_FIELDS.has(field)) {
+		fdStateOrDie(["set", `.entries[${idJson}].domain.issue.${field}`, value]);
+		return;
 	}
-	if (hasEntry) fdStateOrDie(["set", `.entries[${JSON.stringify(id)}].${field}`, value]);
-	if (hasIssue) fdStateOrDie(["set", `.issues[${JSON.stringify(id)}].${field}`, value]);
+	fdStateOrDie(["set", `.entries[${idJson}].${field}`, value]);
 }
 
 function nestedRecord(obj: Record<string, unknown>, key: string): Record<string, unknown> {
@@ -452,34 +461,37 @@ function cmdList(args: string[]): void {
 // ----- get / set-state / set-substate / set / log-decision -----------------
 
 function cmdGet(issue: string): void {
-	if (!issue) die("Usage: pane-registry get <ISSUE>");
-	const out = fdStateOrDie(["get", `.issues["${issue}"] // empty`]);
+	if (!issue) die("Usage: pane-registry get <ENTRY_ID>");
+	const out = fdStateOrDie(["get", `.entries["${issue}"] // empty`]);
 	if (!out.trim() || out.trim() === "null") process.exit(1);
 	process.stdout.write(out);
 }
 
-const VALID_STATES = new Set(["waiting", "prompting", "submitting", "merge-ready", "merged", "aborted", "dead"]);
+// Tracked entry states. Generic lifecycle plus issue-mode lifecycle states
+// (merge-ready/merged/aborted) which still write here when issue-mode
+// workflows tag a kind=issue entry.
+const VALID_STATES = new Set(["waiting", "prompting", "submitting", "ready", "merge-ready", "merged", "aborted", "complete", "cancelled", "dead"]);
 
 function cmdSetState(issue: string, state: string): void {
-	if (!issue || !state) die("Usage: set-state <ISSUE> <state>");
+	if (!issue || !state) die("Usage: set-state <ENTRY_ID> <state>");
 	if (!VALID_STATES.has(state)) die(`Unknown state: ${state}`);
-	setRegistryFieldBoth(issue, "state", JSON.stringify(state));
+	setEntryField(issue, "state", JSON.stringify(state));
 }
 
 function cmdSetSubstate(issue: string, sub: string): void {
-	if (!issue || !sub) die("Usage: set-substate <ISSUE> <substate>");
-	setRegistryFieldBoth(issue, "substate", JSON.stringify(sub));
+	if (!issue || !sub) die("Usage: set-substate <ENTRY_ID> <substate>");
+	setEntryField(issue, "substate", JSON.stringify(sub));
 }
 
 function cmdSetField(issue: string, field: string, value: string): void {
-	if (!issue || !field || !value) die("Usage: set <ISSUE> <field> <json-value>");
-	setRegistryFieldBoth(issue, field, value);
+	if (!issue || !field || !value) die("Usage: set <ENTRY_ID> <field> <json-value>");
+	setEntryField(issue, field, value);
 }
 
 function cmdLogDecision(issue: string, tag: string, answer: string): void {
-	if (!issue || !tag || !answer) die("Usage: log-decision <ISSUE> <prompt-tag> <answer>");
+	if (!issue || !tag || !answer) die("Usage: log-decision <ENTRY_ID> <prompt-tag> <answer>");
 	const entry = { answer, prompt_tag: tag, ts: nowIso() };
-	fdStateOrDie(["append", `.issues["${issue}"].decisions_log`, JSON.stringify(entry)]);
+	fdStateOrDie(["append", `.entries["${issue}"].decisions_log`, JSON.stringify(entry)]);
 }
 
 // ----- remove --------------------------------------------------------------
@@ -512,18 +524,13 @@ function cmdRemove(issue: string): void {
 	safeUnlink(piSpawnFile(issue));
 	// CX: drop spawn (server is per-session; terminate.md handles it)
 	safeUnlink(cxSpawnFile(issue));
-	// Issue #37(C): drop both the legacy .issues row AND the generic
-	// .entries row. Pre-fix, adhoc entries written only to .entries
-	// survived `remove` and required a manual flightdeck-state chase.
-	// Each `del` is idempotent on missing keys.
-	fdStateOrDie(["set", ".issues", `(.issues | del(.["${issue}"]))`]);
 	fdStateOrDie(["set", ".entries", `(.entries | del(.["${issue}"]))`]);
 }
 
 function readField(issue: string, field: string): string {
 	const id = lookupId(issue);
 	const idJson = JSON.stringify(id);
-	const r = fdState(["get", `(.issues[${idJson}].${field} // .entries[${idJson}].adapter.${field} // .entries[${idJson}].${field} // empty)`]);
+	const r = fdState(["get", `(.entries[${idJson}].adapter.${field} // .entries[${idJson}].${field} // empty)`]);
 	return r.stdout.replace(/\n$/, "").replace(/^"|"$/g, "");
 }
 
@@ -604,10 +611,15 @@ interface IssueRec {
 	window?: string | null;
 }
 
-function readIssuesJson(): Record<string, IssueRec> {
-	const out = fdState(["get", ".issues // {}"]);
-	try { return JSON.parse(out.stdout || "{}") as Record<string, IssueRec>; }
-	catch { return {}; }
+function readEntriesJson(): Record<string, IssueRec> {
+	const rows = entryRows();
+	const out: Record<string, IssueRec> = {};
+	for (const row of rows) {
+		const id = typeof row.id === "string" ? row.id : "";
+		if (!id) continue;
+		out[id] = row as IssueRec;
+	}
+	return out;
 }
 
 function livePanesAndWindows(): { panes: Set<string>; windows: Set<string> } {
@@ -623,16 +635,16 @@ function livePanesAndWindows(): { panes: Set<string>; windows: Set<string> } {
 
 function cmdRemoveMerged(): void {
 	const live = livePanesAndWindows();
-	const issues = readIssuesJson();
+	const entries = readEntriesJson();
 	const dropped: string[] = [];
-	for (const [issue, rec] of Object.entries(issues)) {
+	for (const [issue, rec] of Object.entries(entries)) {
 		const state = String(rec.state ?? "");
-		if (state !== "merged" && state !== "aborted" && state !== "dead") continue;
+		if (state !== "merged" && state !== "aborted" && state !== "dead" && state !== "complete" && state !== "cancelled") continue;
 		const paneId = String(rec.pane_id ?? "");
 		const win = String(rec.window ?? "");
 		const alive = paneId ? live.panes.has(paneId) : !win || live.windows.has(win);
 		if (!alive) {
-			fdStateOrDie(["set", ".issues", `(.issues | del(.["${issue}"]))`]);
+			fdStateOrDie(["set", ".entries", `(.entries | del(.["${issue}"]))`]);
 			dropped.push(`${issue}:${state}`);
 		}
 	}
@@ -643,11 +655,11 @@ function cmdRemoveMerged(): void {
 
 function cmdReconcile(): void {
 	const live = livePanesAndWindows();
-	const issues = readIssuesJson();
+	const entries = readEntriesJson();
 	const dropped: string[] = [];
 	const backfilled: string[] = [];
 	const drift: string[] = [];
-	for (const [issue, rec] of Object.entries(issues)) {
+	for (const [issue, rec] of Object.entries(entries)) {
 		let paneId = String(rec.pane_id ?? "");
 		const paneTarget = String(rec.pane_target ?? "");
 		const win = String(rec.window ?? "");
@@ -681,7 +693,7 @@ function cmdReconcile(): void {
 				} else {
 					const resolved = tmuxField(paneTarget, "#{pane_id}");
 					if (resolved) {
-						fdStateOrDie(["set", `.issues["${issue}"].pane_id`, JSON.stringify(resolved)]);
+						fdStateOrDie(["set", `.entries["${issue}"].pane_id`, JSON.stringify(resolved)]);
 						paneId = resolved;
 						backfilled.push(issue);
 					}
@@ -691,7 +703,7 @@ function cmdReconcile(): void {
 		if (driftedThis) continue;
 		const alive = paneId ? live.panes.has(paneId) : !win || live.windows.has(win);
 		if (!alive) {
-			fdStateOrDie(["set", ".issues", `(.issues | del(.["${issue}"]))`]);
+			fdStateOrDie(["set", ".entries", `(.entries | del(.["${issue}"]))`]);
 			dropped.push(issue);
 		}
 	}
@@ -710,10 +722,10 @@ function cmdReconcile(): void {
 
 // ----- teardown-window -----------------------------------------------------
 //
-// Parity: scripts/pane-registry.bash cmd_teardown_window
+// pane-registry teardown-window
 // (see tests/parity/pane-registry.test.ts).
 //
-// Exit codes (mirror the bash sibling):
+// Exit codes:
 //   0 - window/pane killed, or already closed (terminal + dead pane)
 //   1 - issue not registered (caller may treat as idempotent no-op)
 //   2 - bad arguments
@@ -722,9 +734,9 @@ function cmdReconcile(): void {
 //   5 - tmux kill failed: pane still alive after kill attempt
 //   6 - registry read failure
 
-// Issue #37(B): legacy issue-flow terminal states (merged|aborted|dead)
-// plus generic session-lifecycle terminal states (complete|cancelled)
-// so adhoc entries can teardown without --force.
+// Terminal states across both adhoc and issue-mode lifecycles. Issue mode
+// keeps the {merged, aborted} states for PR-flow semantics; the generic
+// lifecycle uses {complete, cancelled}; both share {dead} for force-kill.
 const TERMINAL_STATES = new Set(["merged", "aborted", "dead", "complete", "cancelled"]);
 
 function cmdTeardownWindow(args: string[]): void {
@@ -744,7 +756,7 @@ function cmdTeardownWindow(args: string[]): void {
 	//   exit >= 2             — usage error or genuine read failure
 	// Treat 0+empty and 1 as "not found" (exit 1); only exit >= 2 escalates
 	// to exit 6 (registry read failure) per BLOCK #2.
-	const r = fdState(["get", `.entries["${issue}"] // .issues["${issue}"] // empty`]);
+	const r = fdState(["get", `.entries["${issue}"] // empty`]);
 	const status = r.status ?? 0;
 	if (status >= 2) {
 		process.stderr.write(

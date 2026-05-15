@@ -1,22 +1,8 @@
 #!/usr/bin/env bash
-# Trampoline for flightdeck-core TypeScript port.
-# Dispatches to either the TS implementation under
-# lib/flightdeck-core/src/bin/ or the legacy bash sibling (.bash).
-#
-# Selection (default flipped to TS as of post-review-round-6):
-#   FLIGHTDECK_USE_TS_<NAME>=0 (per-script override) — legacy bash path
-#   FLIGHTDECK_USE_TS=0        (global override)     — legacy bash path
-#   default                                          — TS path
-#
-# The .bash sibling stays as fallback until at least one stable
-# production cycle on TS; once stable it gets deleted and this
-# trampoline becomes a thin `exec bun ...`.
+# Trampoline for flightdeck-core TypeScript implementation under
+# skills/flightdeck/lib/flightdeck-core/src/bin/. `bun` is a hard
+# runtime dependency.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAME="$(basename "${BASH_SOURCE[0]}")"
-SHOUT="$(echo "$NAME" | tr '[:lower:]-' '[:upper:]_')"
-USE_TS_VAR="FLIGHTDECK_USE_TS_${SHOUT}"
-if [[ "${!USE_TS_VAR:-${FLIGHTDECK_USE_TS:-1}}" == "0" ]]; then
-  exec "$SCRIPT_DIR/${NAME}.bash" "$@"
-fi
 exec bun "$SCRIPT_DIR/../lib/flightdeck-core/src/bin/${NAME}.ts" "$@"

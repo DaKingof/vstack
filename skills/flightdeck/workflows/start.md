@@ -2,7 +2,7 @@
 
 Initialize development session, display status, select work, evaluate research, create worktree, and hand off to worktree session.
 
-This is the legacy issue-mode start workflow. For ad-hoc or workflow sessions that are not tied to an issue/worktree, use `scripts/flightdeck-session start` or `flightdeck session start`, then supervise with `workflows/session-watch.md` and `workflows/session-handle-prompt.md`.
+This is the issue-mode start workflow. For ad-hoc or workflow sessions that are not tied to an issue/worktree, use `scripts/flightdeck-session start` or `flightdeck session start`, then supervise with `workflows/session-watch.md` and `workflows/session-handle-prompt.md`.
 
 ## 1. Initialize Session
 
@@ -16,7 +16,7 @@ This is the legacy issue-mode start workflow. For ad-hoc or workflow sessions th
 
 1. **Run**: `FLIGHTDECK_PREFLIGHT=1 .agents/skills/orchestration/scripts/session-init`
 
-   The `FLIGHTDECK_PREFLIGHT=1` signal tells session-init to also check the runtime deps flightdeck itself needs (currently: `bun`, the runtime for every trampolined script on the default TS path plus the claude-channel and codex-bridge transports). If bun is missing the dashboard adds a hard warning — trampolines fail without it. Only setups that have explicitly opted out via `FLIGHTDECK_USE_TS=0` (legacy bash path) can proceed without bun, and channel transports there still fall back to tmux keystrokes.
+   The `FLIGHTDECK_PREFLIGHT=1` signal tells session-init to also check the runtime deps flightdeck itself needs (currently: `bun`, the runtime for every trampolined script plus the claude-channel and codex-bridge transports). If bun is missing the dashboard adds a hard warning — trampolines fail without it.
 
 2. **Output the result exactly as shown** — no reformatting, no additions, no commentary before/after the dashboard. The script output IS the dashboard. Script output uses backticks and markdown syntax.
 

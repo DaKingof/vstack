@@ -192,10 +192,9 @@ Inner pane's shell is dead because the worktree was removed mid-session. Subsequ
 
 To add an adapter for a new harness:
 1. Verify the actual contract by inspecting the harness in interactive use (server endpoints, socket protocol, or keystroke mechanic).
-2. Add a `<harness>_*_*` function in the bash body (`scripts/pane-respond`, `scripts/pane-poll`, `scripts/flightdeck-daemon`).
-3. Mirror the same logic in the TS port under `lib/flightdeck-core/src/bin/<script>.ts` (and any helper module under `src/adapters/`, `src/paths/`, etc.) — the trampoline runs TS by default, so the TS path is the production code.
-4. Register the new adapter in both dispatch sites (bash + TS).
-5. Update both tables above with the mechanic.
-6. Add a parity test under `lib/flightdeck-core/tests/parity/` that runs both implementations against the same input and asserts equivalent output.
-7. Add a smoke test under `skills/flightdeck/tests/<harness>-smoke` and update `tests/live-wake.sh` if the wake path is affected.
-8. Reflect any new env var in `skills/flightdeck/README.md` (operator-facing table) and `skills/flightdeck/SKILL.md` (Configuration section).
+2. Implement the adapter in `lib/flightdeck-core/src/bin/<script>.ts` plus any helper modules under `src/adapters/`, `src/paths/`, etc.
+3. Register the new adapter in the corresponding dispatch site.
+4. Update both tables above with the mechanic.
+5. Add a functional test under `lib/flightdeck-core/tests/parity/`.
+6. Add a smoke test under `skills/flightdeck/tests/<harness>-smoke` and update `tests/live-wake.sh` if the wake path is affected.
+7. Reflect any new env var in `skills/flightdeck/README.md` (operator-facing table) and `skills/flightdeck/SKILL.md` (Configuration section).

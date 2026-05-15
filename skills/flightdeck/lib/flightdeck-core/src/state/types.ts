@@ -1,5 +1,18 @@
-export type IssueState = "waiting" | "prompting" | "submitting" | "merge-ready" | "merged" | "aborted" | "dead";
-export type TrackedEntryState = IssueState | "ready" | "complete" | "cancelled" | string;
+export type TrackedEntryState =
+	| "waiting"
+	| "prompting"
+	| "submitting"
+	| "ready"
+	| "complete"
+	| "cancelled"
+	| "dead"
+	// Issue-mode lifecycle states (issue-mode workflows tag kind=issue
+	// entries with these; renderers and handlers treat them as terminal
+	// or near-terminal alongside the generic enum).
+	| "merge-ready"
+	| "merged"
+	| "aborted"
+	| string;
 export type TrackedEntryKind = "adhoc" | "issue" | "workflow" | string;
 
 export interface DecisionLogEntry {
@@ -72,45 +85,7 @@ export interface TrackedEntry {
 	[key: string]: unknown;
 }
 
-export interface LegacyIssueRecord {
-	issue?: string;
-	window?: string | null;
-	pane_target?: string | null;
-	pane_id?: string | null;
-	harness?: string | null;
-	launch?: TrackedEntryLaunch | null;
-	worktree?: string | null;
-	cwd?: string | null;
-	pr_number?: number | null;
-	oc_url?: string | null;
-	oc_session_id?: string | null;
-	oc_port?: number | null;
-	cc_url?: string | null;
-	cc_session_uuid?: string | null;
-	cc_port?: number | null;
-	cc_transcript?: string | null;
-	pi_bridge_pid?: number | null;
-	pi_bridge_socket?: string | null;
-	pi_session_id?: string | null;
-	cx_ws?: string | null;
-	cx_thread_id?: string | null;
-	state?: IssueState | string | null;
-	substate?: string | null;
-	unknown_since?: string | null;
-	last_capture_hash?: string | null;
-	last_response_at?: string | null;
-	spawned_at?: string | null;
-	last_polled_at?: string | null;
-	orchestration_started?: boolean | null;
-	scope_files_declared?: number | null;
-	scope_files_actual?: number | null;
-	decisions_log?: DecisionLogEntry[];
-	merge_commit?: string | null;
-	[key: string]: unknown;
-}
-
 export interface FlightdeckStateLike {
 	entries?: unknown;
-	issues?: unknown;
 	[key: string]: unknown;
 }

@@ -13,7 +13,7 @@ metadata:
 
 # Flightdeck
 
-> If you're modifying flightdeck scripts, the daemon, or `lib/flightdeck-core/` — read [`DEVELOPMENT.md`](./DEVELOPMENT.md) first. It has the TS port status, parity-test workflow, debugging entry points, and operational caveats.
+> If you're modifying flightdeck scripts, the daemon, or `lib/flightdeck-core/` — read [`DEVELOPMENT.md`](./DEVELOPMENT.md) first for the test workflow, debugging entry points, and operational caveats.
 
 ## STOP — Required Setup
 
@@ -68,8 +68,8 @@ Generic tmux-window session tracking. These commands do not require a fake issue
 | `session attach` | `--pane <%PANE_ID> --harness pi --title <T> [--session-id <ID>] [--kind adhoc]` | `scripts/flightdeck-session attach` | Attaches an existing pane without launching a new window. For Pi, probes `pi-bridge` by pane pid and records `pi_session_id`/socket metadata when available. |
 | `session watch` | `[ENTRY_ID...]` | `workflows/session-watch.md` | Generic daemon/poll/handler loop for tracked entries. Routes only generic handlers and guards issue-only tags as `domain-mismatch`; no GitHub/Linear/worktree dependency. |
 | `session prompt routing` | nested from `session watch` | `workflows/session-handle-prompt.md` | Generic prompt handlers for structured questions, bash permission prompts, safe bounded choices, terminal completion, `pi-bg-task-exit`, and `domain-mismatch`. |
-| `session status` | — | inline / `flightdeck-state tracked-entries` | Read-only normalized `.entries`/legacy `.issues` snapshot. |
-| `session stop` / `session remove` | `<ENTRY_ID>` | `pane-registry teardown-entry` / `pane-registry remove` | Teardown uses stable `pane_id` and accepts legacy (`merged|aborted|dead`) plus generic (`complete|cancelled`) terminal states. `remove` drops both legacy `.issues` and generic `.entries` rows in one call. |
+| `session status` | — | inline / `flightdeck-state tracked-entries` | Read-only normalized `.entries` snapshot. |
+| `session stop` / `session remove` | `<ENTRY_ID>` | `pane-registry teardown-entry` / `pane-registry remove` | Teardown uses stable `pane_id` and accepts the issue-mode lifecycle (`merged|aborted|dead`) plus the generic lifecycle (`complete|cancelled`) as terminal states. `remove` drops the `.entries` row. |
 
 ### Issue workflows
 
@@ -150,12 +150,7 @@ Decision rules grouped by domain. Each pattern doc under `patterns/` has the ful
 **Implementation:** All scripts are TypeScript under
 `skills/flightdeck/lib/flightdeck-core/`. Trampolines under `scripts/`
 exec `bun .../src/bin/<script>.ts`. `bun` is a hard runtime dependency.
-A few `.bash` siblings remain alongside the trampolines for the
-`flightdeck-daemon start` run-loop, which still defaults to the bash
-implementation pending one production cycle on the TS port (opt in
-via `FLIGHTDECK_USE_TS_DAEMON_START=1`). All other actions are TS
-by default with no opt-out. Parity tests live under
-`lib/flightdeck-core/tests/parity/`.
+Functional + integration tests live under `lib/flightdeck-core/tests/`.
 
 | Script | Purpose |
 |--------|---------|
@@ -165,7 +160,7 @@ by default with no opt-out. Parity tests live under
 | `flightdeck-state` | Atomic CRUD on `tmp/flightdeck-state-<TMUX_SESSION>.json` (`init`/`get`/`set`/`append`/`increment`/`tracked-entries`/`write-entry`/`archive`) and master-busy lock (`master-busy lock\|unlock\|check`). See `workflows/session-watch.md` § 1 for lock semantics. |
 | `flightdeck-daemon` | External wake driver. Polls inner panes, normalizes turn-end events, wakes master with a per-harness payload. Actions: `start \| stop \| status \| health \| events \| ack`. `start` exits `4` for stale `--master` (distinct from usage/missing dependency exit `2`). Master respawn trigger: `status --session <S>` says `no daemon` while live entries exist; source panes via `pane-registry list --format inner-panes-live` / `inner-harnesses-live`, re-resolve `$TMUX_PANE` and retry once on exit `4`, and do not yield on unresolved start failure. Full contract: `workflows/session-watch.md` § 1 / § 6; adapter freshness: `patterns/tmux-monitoring.md`. |
 | `codex-app-server-spawn` / `-stop` | Idempotent bring-up/teardown of the per-session codex `app-server --listen ws://...` shared by all `codex --remote` panes. |
-| `pane-registry` | TrackedEntry↔pane mapping CRUD. `init-entry` writes `.entries[id]` and dual-writes `.issues[id]` for `kind=issue`; legacy `init <ISSUE>` remains an issue-mode alias. `find-by-pane` emits `{id,kind}` JSON. `list --format json\|inner-panes\|inner-harnesses\|inner-panes-live\|inner-harnesses-live` feeds `pane-poll --batch -` and `flightdeck-daemon start`; use the `*-live` pair for daemon respawn. |
+| `pane-registry` | TrackedEntry↔pane mapping CRUD. `init-entry` writes `.entries[id]`; `init <ISSUE>` is an alias for `init-entry --kind issue`. `find-by-pane` emits `{id,kind}` JSON. `list --format json\|inner-panes\|inner-harnesses\|inner-panes-live\|inner-harnesses-live` feeds `pane-poll --batch -` and `flightdeck-daemon start`; use the `*-live` pair for daemon respawn. |
 | `pane-poll` | Pane state read. Preferred: `--batch -` from `pane-registry list --format json` (one JSONL object per tracked entry). Passes `kind` to `prompt-classify` so issue-only tags on ad-hoc entries become `domain-mismatch`. Legacy single-pane mode for drift re-polls / manual debug. See `patterns/tmux-monitoring.md` for per-harness adapter routes. |
 | `pane-respond` | Send response to a pane. Modes: free-text payload, `--option N`, `--option-multi`, `--keys` (rejected without `--keys-allow-tmux`), `--question <reqID> --answer\|--answer-multi\|--answer-text\|--answers-json\|--reject`. Validates rebase-multi-choice payloads for the preserve/apply/verify triplet. See `patterns/prompt-handlers.md` for mode selection and `patterns/opencode-questions.md` / `patterns/pi-questions.md` for question routing. |
 | `pane-clear-bell` | Atomic chained-command bell clear (no flicker). |
@@ -178,7 +173,7 @@ by default with no opt-out. Parity tests live under
 {"ts":"<iso>","pane_id":"%18","harness":"pi","event_type":"bg-task-exit","task":{"id":"bg-3","status":"failed","exitCode":null,"command":"...","outputBytes":89},"classifier_tag":"pi-bg-task-exit","hash":"<12hex>"}
 ```
 
-The daemon (`scripts/flightdeck-daemon.bash` + `lib/flightdeck-core/src/daemon/loop.ts`) treats the tag as canonical, appends to the per-session events file via `appendEvent`, extends `WAKE_PENDING.in_flight`, and wakes master. Master routes through `workflows/session-watch.md` § 2 → `workflows/session-handle-prompt.md` § 7; issue mode may then resume `workflows/handle-prompt.md` § 4 for PR/CI/bot-review recovery. The classifier never sees these messages — they are system-role customType messages, not assistant text — so `prompt-classify` has no matching tag and only the daemon path produces them.
+The daemon (`lib/flightdeck-core/src/daemon/loop.ts`) treats the tag as canonical, appends to the per-session events file via `appendEvent`, extends `WAKE_PENDING.in_flight`, and wakes master. Master routes through `workflows/session-watch.md` § 2 → `workflows/session-handle-prompt.md` § 7; issue mode may then resume `workflows/handle-prompt.md` § 4 for PR/CI/bot-review recovery. The classifier never sees these messages — they are system-role customType messages, not assistant text — so `prompt-classify` has no matching tag and only the daemon path produces them.
 
 `daemon-exited`: the daemon emits this lifecycle row during cleanup when it exits for `master-gone`, `signal-term`, `signal-int`, or another recorded reason. It writes directly to the per-session `EVENTS_FILE` under `SESSION_LOCK` (not `WAKE_EVENTS_LOG`), with `pane_id` set to the master pane id so pane-keyed drains include it:
 
@@ -194,7 +189,7 @@ Master state lives at `<project-root>/<FLIGHTDECK_STATE_DIR>/flightdeck-state-<T
 
 Auto-archive on session start: `flightdeck-session start` rolls the live file to a `.json.archive` sibling before fresh init when (a) `terminated == true` or (b) the file has tracked entries but ZERO `pane_id` is currently alive in tmux. Removes the need to manually prune leftover state from prior tmux sessions or crashed masters.
 
-Readers call `readTrackedEntries(state)` to get the canonical `TrackedEntry` map. Malformed non-object entry values are skipped with a stderr warning; malformed internal `entry.id` values warn and fall back to the map key. `writeTrackedEntry(state, id, entry)` validates non-empty ids (including `entry.domain.issue.id` when present) and writes `.entries[id]`; `kind: "issue"` entries also get projected into `.issues[issueId]` so issue-mode workflows keep working until the `.issues` map is collapsed entirely.
+Readers call `readTrackedEntries(state)` to get the canonical `TrackedEntry` map. Malformed non-object entry values are skipped with a stderr warning; malformed internal `entry.id` values warn and fall back to the map key. `writeTrackedEntry(state, id, entry)` validates non-empty ids (including `entry.domain.issue.id` when present) and writes `.entries[id]`. Issue-mode metadata lives under `entry.domain.issue` (`pr_number`, `worktree`, `merge_commit`, etc.); the pi-flightdeck renderer surfaces that nested view alongside the top-level tracked-entry state.
 
 ```json
 {
@@ -247,35 +242,6 @@ Readers call `readTrackedEntries(state)` to get the canonical `TrackedEntry` map
       "decisions_log": []
     }
   },
-  "issues": {
-    "<ISSUE_ID>": {
-      "window": "<window-name>",
-      "pane_target": "<TMUX_SESSION>:<window>.0",
-      "pane_id": "%403",
-      "harness": "claude|opencode|codex|pi",
-      "launch": { "model": "<model-or-null>", "effort": "<effort-or-null>" },
-      "worktree": "<absolute path>",
-      "pr_number": 0,
-      "oc_url":  "<server-url-or-null>",  "oc_session_id": "<id-or-null>",  "oc_port": 0,
-      "cc_url":  "<server-url-or-null>",  "cc_session_uuid": "<uuid-or-null>",  "cc_port": 0,  "cc_transcript": "<path-or-null>",
-      "pi_bridge_pid": 0,  "pi_bridge_socket": "<path-or-null>",  "pi_session_id": "<id-or-null>",
-      "cx_ws":   "<ws-url-or-null>",  "cx_thread_id": "<id-or-null>",
-      "state": "prompting",
-      "substate": "merge-ready-but-unknown",
-      "unknown_since": "<ISO8601>",
-      "last_capture_hash": "sha256:...",
-      "last_response_at": "<ISO8601>",
-      "spawned_at": "<ISO8601>",
-      "last_polled_at": "<ISO8601>",
-      "orchestration_started": true,
-      "scope_files_declared": 5,
-      "scope_files_actual": 27,
-      "decisions_log": [
-        {"ts": "<ISO8601>", "prompt_tag": "cleanup-prompt", "answer": "yes-own-only"}
-      ],
-      "merge_commit": "<git-sha-or-null>"
-    }
-  },
   "merge_queue": ["<ISSUE_ID>", "<ISSUE_ID>"],
   "conflict_graph": {
     "edges": [["<ISSUE_A>", "<ISSUE_B>"]],
@@ -309,12 +275,11 @@ caps each adapter read subprocess so one stale adapter cannot dominate
 a tick, and `FD_ADAPTER_FRESHNESS_TTL` (default `5`) gates freshness
 probe caching.
 
-TS-port toggles:
+Additional tuning:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `FLIGHTDECK_USE_TS_DAEMON_START` | unset (treated as `0`) | Opt-in for the TS daemon `start` run-loop. Pending one production cycle on the TS port; all other actions are TS-only. |
-| `FD_ADAPTER_READ_TIMEOUT_SEC` | `2` | Bounds per-adapter read subprocesses in TS `pane-poll` (fractional values honored). Stale adapters fall through to tmux capture rather than wedging the tick. |
+| `FD_ADAPTER_READ_TIMEOUT_SEC` | `2` | Bounds per-adapter read subprocesses in `pane-poll` (fractional values honored). Stale adapters fall through to tmux capture rather than wedging the tick. |
 
 ## Workflows
 

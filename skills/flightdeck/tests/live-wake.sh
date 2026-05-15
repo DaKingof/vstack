@@ -26,13 +26,6 @@ Shape mode:
   --no-tmux    Validate script paths, GNU bash/date, and bash syntax only.
                Does not require tmux, pi, or a daemon spawn.
 
-TS port mode:
-  --use-ts     Run the full live-wake test under the TS daemon trampoline
-               (FLIGHTDECK_USE_TS_FLIGHTDECK_DAEMON=1 +
-                FLIGHTDECK_USE_TS_DAEMON_START=1). The bash daemon body is
-               not exercised. Use this to validate the TS run-loop end-
-               to-end before flipping per-script defaults.
-
 Environment overrides:
   FD_LIVE_TMUX_SESSION   tmux session to use (default: current tmux session, or VS)
   PI_BIN                 pi binary path
@@ -43,21 +36,15 @@ USAGE
 }
 
 NO_TMUX=0
-USE_TS=0
 while (($#)); do
   case "$1" in
     --no-tmux) NO_TMUX=1; shift ;;
-    --use-ts) USE_TS=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
 
-if (( USE_TS )); then
-  export FLIGHTDECK_USE_TS_FLIGHTDECK_DAEMON=1
-  export FLIGHTDECK_USE_TS_DAEMON_START=1
-  command -v bun >/dev/null 2>&1 || fail "--use-ts requires bun on PATH"
-fi
+command -v bun >/dev/null 2>&1 || fail "flightdeck requires bun on PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -146,8 +133,6 @@ cleanup() {
   tmux set-environment -t "$VS_SESSION" -u FD_GRACE_SEC 2>/dev/null
   tmux set-environment -t "$VS_SESSION" -u FD_POLL_SEC 2>/dev/null
   tmux set-environment -t "$VS_SESSION" -u FD_HEARTBEAT_TICKS 2>/dev/null
-  tmux set-environment -t "$VS_SESSION" -u FLIGHTDECK_USE_TS_FLIGHTDECK_DAEMON 2>/dev/null
-  tmux set-environment -t "$VS_SESSION" -u FLIGHTDECK_USE_TS_DAEMON_START 2>/dev/null
   [[ -n "$MASTER_PANE" ]] && tmux kill-pane -t "$MASTER_PANE" 2>/dev/null
   [[ -n "$INNER_PANE" ]] && tmux kill-pane -t "$INNER_PANE" 2>/dev/null
   [[ -n "$DAEMON_WINDOW" ]] && tmux kill-window -t "$DAEMON_WINDOW" 2>/dev/null
@@ -208,15 +193,6 @@ section "start daemon"
 tmux set-environment -t "$VS_SESSION" FD_GRACE_SEC 0
 tmux set-environment -t "$VS_SESSION" FD_POLL_SEC 1
 tmux set-environment -t "$VS_SESSION" FD_HEARTBEAT_TICKS 5
-if (( USE_TS )); then
-  # Propagate the TS gates into the tmux session env so the daemon
-  # child window (spawned by --in-tmux-window via 'tmux new-window')
-  # inherits them. Without this the trampoline inside the daemon
-  # window falls back to the bash body.
-  tmux set-environment -t "$VS_SESSION" FLIGHTDECK_USE_TS_FLIGHTDECK_DAEMON 1
-  tmux set-environment -t "$VS_SESSION" FLIGHTDECK_USE_TS_DAEMON_START 1
-  note "running daemon under TS trampoline (FLIGHTDECK_USE_TS_DAEMON_START=1)"
-fi
 "$DAEMON" start \
   --session "$SESSION_ID" \
   --master "$MASTER_PANE" \
@@ -225,11 +201,7 @@ fi
   --inner-harnesses bash \
   --in-tmux-window
 DAEMON_WINDOW="$VS_SESSION:[fd] daemon-$SESSION_KEY"
-if (( USE_TS )); then
-  pass "TS daemon started for $SESSION_KEY"
-else
-  pass "daemon started for $SESSION_KEY"
-fi
+pass "daemon started for $SESSION_KEY"
 
 section "ring inner bell"
 tmux send-keys -t "$INNER_PANE" "printf '\\a'; echo fdlive-bell" Enter

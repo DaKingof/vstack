@@ -77,8 +77,8 @@ export interface TrackedSession {
 	worktree?: string;
 	pr_number?: number | null;
 	// Immutable tmux pane id (`%N`) captured by `pane-registry init`.
-	// Optional for legacy registry entries written before pane_id support;
-	// `pane-registry reconcile` backfills these opportunistically.
+	// `pane-registry reconcile` backfills it when an older entry is
+	// missing the field.
 	pane_id?: string | null;
 	launch?: TrackedSessionLaunch | null;
 	adapter?: TrackedSessionAdapter | null;
@@ -415,31 +415,29 @@ function nullableBoolean(value: unknown): boolean | null | undefined {
 	return typeof value === "boolean" ? value : undefined;
 }
 
-function normalizeIssueDomain(raw: unknown, fallbackId: string | undefined, legacy: Record<string, unknown>): TrackedIssueDomain | undefined {
+function normalizeIssueDomain(raw: unknown, fallbackId: string | undefined): TrackedIssueDomain | undefined {
 	const source = isRecord(raw) ? raw : {};
 	const id = stringValue(source.id) ?? fallbackId;
 	if (!id) return undefined;
 	return {
 		...source,
 		id,
-		merge_commit: nullableString(source.merge_commit) ?? nullableString(legacy.merge_commit),
-		orchestration_started: nullableBoolean(source.orchestration_started) ?? nullableBoolean(legacy.orchestration_started),
-		pr_number: nullableNumber(source.pr_number) ?? nullableNumber(legacy.pr_number),
-		scope_files_actual: nullableNumber(source.scope_files_actual) ?? nullableNumber(legacy.scope_files_actual),
-		scope_files_declared: nullableNumber(source.scope_files_declared) ?? nullableNumber(legacy.scope_files_declared),
-		worktree: nullableString(source.worktree) ?? nullableString(legacy.worktree),
+		merge_commit: nullableString(source.merge_commit),
+		orchestration_started: nullableBoolean(source.orchestration_started),
+		pr_number: nullableNumber(source.pr_number),
+		scope_files_actual: nullableNumber(source.scope_files_actual),
+		scope_files_declared: nullableNumber(source.scope_files_declared),
+		worktree: nullableString(source.worktree),
 	};
 }
 
-function normalizeTrackedSession(key: string, value: Record<string, unknown>, legacyIssueId?: string): TrackedSession {
+function normalizeTrackedSession(key: string, value: Record<string, unknown>): TrackedSession {
 	const id = stringValue(value.id) ?? key;
 	const domainSource = isRecord(value.domain) ? value.domain : {};
-	const hasRawIssueDomain = isRecord(domainSource.issue);
-	const legacyId = legacyIssueId ?? (hasRawIssueDomain ? stringValue(value.issue) : undefined);
-	const issueDomain = normalizeIssueDomain(domainSource.issue, legacyId, value);
+	const issueDomain = normalizeIssueDomain(domainSource.issue, undefined);
 	const domain = issueDomain ? { ...domainSource, issue: issueDomain } : Object.keys(domainSource).length > 0 ? domainSource : undefined;
 	const kind = issueDomain ? "issue" : stringValue(value.kind) ?? "adhoc";
-	const issue = issueDomain?.id ?? stringValue(value.issue) ?? legacyId ?? id;
+	const issue = issueDomain?.id ?? id;
 	const record: TrackedSession = {
 		...value,
 		decisions_log: normalizeDecisionsLog(value.decisions_log),
@@ -479,41 +477,18 @@ function readEntriesRecord(raw: unknown): Record<string, TrackedSession> {
 	return out;
 }
 
-function readLegacyIssues(raw: unknown): Record<string, TrackedSession> {
-	const issues: Record<string, TrackedSession> = {};
-	if (!isRecord(raw)) return issues;
-	for (const [issue, value] of Object.entries(raw)) {
-		if (isRecord(value)) issues[issue] = normalizeTrackedSession(issue, value, issue);
-	}
-	return issues;
-}
-
-function normalizeSessionMap(raw: Record<string, TrackedSession> | undefined, legacyIssue = false): Record<string, TrackedSession> {
+function normalizeSessionMap(raw: Record<string, TrackedSession> | undefined): Record<string, TrackedSession> {
 	const out: Record<string, TrackedSession> = {};
 	for (const [id, value] of Object.entries(raw ?? {})) {
-		if (isRecord(value)) out[id] = normalizeTrackedSession(id, value, legacyIssue ? id : undefined);
+		if (isRecord(value)) out[id] = normalizeTrackedSession(id, value);
 	}
 	return out;
 }
 
-function issueDomainId(session: TrackedSession): string | undefined {
-	return session.domain?.issue?.id;
-}
-
-function mergeLegacyIssuesIntoEntries(entries: Record<string, TrackedSession>, issues: Record<string, TrackedSession>): Record<string, TrackedSession> {
-	const merged = { ...entries };
-	const issueIds = new Set(Object.values(merged).map((entry) => issueDomainId(entry) ?? entry.issue).filter((id): id is string => Boolean(id)));
-	for (const [id, issue] of Object.entries(issues)) {
-		if (merged[id] || issueIds.has(id)) continue;
-		merged[id] = issue;
-	}
-	return merged;
-}
-
-function projectIssuesFromEntries(entries: Record<string, TrackedSession>, legacyIssues: Record<string, TrackedSession>): Record<string, TrackedSession> {
-	const issues = { ...legacyIssues };
+function projectIssuesFromEntries(entries: Record<string, TrackedSession>): Record<string, TrackedSession> {
+	const issues: Record<string, TrackedSession> = {};
 	for (const entry of Object.values(entries)) {
-		const issueId = issueDomainId(entry);
+		const issueId = entry.domain?.issue?.id;
 		if (issueId && !issues[issueId]) issues[issueId] = entry;
 	}
 	return issues;
@@ -527,10 +502,15 @@ export function readMasterState(path: string): { state?: MasterState; error?: st
 		const parsed = JSON.parse(text);
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { error: "master state JSON is not an object" };
 		const raw = parsed as Partial<MasterState> & { entries?: unknown; issues?: unknown };
-		const legacyIssues = readLegacyIssues(raw.issues);
-		const rawEntries = readEntriesRecord(raw.entries);
-		const entries = mergeLegacyIssuesIntoEntries(rawEntries, legacyIssues);
-		const issues = projectIssuesFromEntries(entries, legacyIssues);
+		const entries = readEntriesRecord(raw.entries);
+		// Pre-purge state files only have `.issues` (no `.entries`). Fail
+		// loud rather than rendering an empty dashboard: the operator needs
+		// to archive the file and let `flightdeck-session start` rewrite it
+		// in the canonical shape.
+		if (Object.keys(entries).length === 0 && isRecord(raw.issues) && Object.keys(raw.issues).length > 0) {
+			return { error: "state file uses pre-purge `.issues` schema with no `.entries`; archive it manually and rerun `flightdeck session start`" };
+		}
+		const issues = projectIssuesFromEntries(entries);
 		return {
 			state: {
 				conflict_graph: normalizeConflictGraph(raw.conflict_graph),
@@ -875,9 +855,8 @@ export function buildSnapshot(cwd: string, settings: SettingsLike, options?: { l
 	return buildSnapshotFromInputs({ projectRoot, stateDir, tmux }, settings, options);
 }
 
-// Normalization seam. The dashboard / render code reads tracked sessions via
-// this helper instead of touching `.issues` directly. It prefers schema-1.1
-// `.entries`, then folds in legacy `.issues` that are not already represented.
+// Normalization seam. The dashboard / render code reads tracked sessions
+// via this helper instead of reaching into `state.entries` directly.
 export function readTrackedEntries(state: MasterState | undefined): TrackedSession[] {
 	return sortedTrackedEntries(state);
 }
@@ -944,8 +923,8 @@ export function mostRecentPollMs(snapshot: FlightdeckSnapshot | undefined): numb
 // most recent poll is older than `staleAfterMin` minutes — past that
 // window the daemon is not coming back on its own and the dashboard would
 // otherwise render leftover data from a prior session. Pass
-// `staleAfterMin: 0` to disable the staleness check entirely (legacy
-// `isFlightdeckActive` behavior).
+// `staleAfterMin: 0` to disable the staleness check entirely
+// (matches `isFlightdeckActive` behavior, leftover-data tolerant).
 export function flightdeckSessionStatus(
 	snapshot: FlightdeckSnapshot | undefined,
 	options?: { staleAfterMin?: number; now?: number },
@@ -960,7 +939,7 @@ export function flightdeckSessionStatus(
 	const hasAnySessions = readTrackedEntries(master).length > 0;
 	// terminated + sessions preserved → read-only completion view. Issue #17
 	// was the regression where `pane-registry remove-merged` ran inside
-	// `terminate.md § 5` and left `.issues == {}` on a terminated file, so
+	// `terminate.md § 5` and left `.entries == {}` on a terminated file, so
 	// this branch was unreachable and the dashboard collapsed.
 	if (master?.terminated && hasAnySessions) return "terminated";
 	const hasLiveSessions = !!master && !master.terminated && hasAnySessions;
@@ -996,11 +975,7 @@ export function mergedIssueHistory(state: MasterState | undefined): TrackedSessi
 
 export function sortedTrackedEntries(state: MasterState | undefined): TrackedSession[] {
 	if (!state) return [];
-	const normalizedEntries = normalizeSessionMap(state.entries);
-	const normalizedIssues = normalizeSessionMap(state.issues, true);
-	const entries = Object.keys(normalizedEntries).length > 0
-		? mergeLegacyIssuesIntoEntries(normalizedEntries, normalizedIssues)
-		: normalizedIssues;
+	const entries = normalizeSessionMap(state.entries);
 	return Object.values(entries).sort((a, b) => {
 		const aTs = a.spawned_at ?? "";
 		const bTs = b.spawned_at ?? "";

@@ -27,7 +27,7 @@ Partition tracked entries by kind:
 - `ISSUE_ENTRIES`: entries with `kind == "issue"`, `domain.issue.id`, or issue-shaped markers.
 - `GENERIC_ENTRIES`: entries with `kind == "adhoc"`, `kind == "workflow"`, or a future non-issue kind and **no** issue-shaped markers.
 
-Issue-shaped markers are: legacy/top-level `pr_number`, `worktree`, `merge_commit`, issue-domain `pr_number`, `worktree`, `merge_commit`, `scope_files_declared`, `scope_files_actual`, `orchestration_started`, issue-only states (`merge-ready`, `merged`, `aborted`), or issue-only substates (`merge-now`, `audit-relation-prompt`, `bot-review-wait-stuck`, `rebase-multi-choice`, `force-push-prompt`, `cleanup-prompt`, `stale-no-pr-branch`, `stale-orphan-worktree`, `descope-related`, `scope-creep-detected`, fix-suggestion tags). If any marker appears without `kind == "issue"` / `domain.issue.id`, emit a warning naming the entry id and markers, then route through `ISSUE_ENTRIES`. This fails closed so malformed issue-shaped entries cannot silently skip merge/new-issue history.
+Issue-shaped markers are: issue-domain `pr_number`, `worktree`, `merge_commit`, `scope_files_declared`, `scope_files_actual`, `orchestration_started`; issue-only states (`merge-ready`, `merged`, `aborted`); or issue-only substates (`merge-now`, `audit-relation-prompt`, `bot-review-wait-stuck`, `rebase-multi-choice`, `force-push-prompt`, `cleanup-prompt`, `stale-no-pr-branch`, `stale-orphan-worktree`, `descope-related`, `scope-creep-detected`, fix-suggestion tags). If any marker appears without `kind == "issue"` / `domain.issue.id`, emit a warning naming the entry id and markers, then route through `ISSUE_ENTRIES`. This fails closed so malformed issue-shaped entries cannot silently skip merge/new-issue history.
 
 Routing rules:
 
@@ -68,14 +68,14 @@ For each issue entry, gather:
 
 | Field | Source |
 |-------|--------|
-| `id` | `domain.issue.id` or legacy registry key |
+| `id` | `domain.issue.id` or entry id |
 | `state` | `merged | aborted | dead` |
-| `pr_number` | `domain.issue.pr_number` / legacy registry |
-| `merge_commit` | cached `domain.issue.merge_commit` / legacy `merge_commit`; if missing and `state == merged`, `gh pr view <PR> --json mergeCommit` |
+| `pr_number` | `domain.issue.pr_number` |
+| `merge_commit` | cached `domain.issue.merge_commit`; if missing and `state == merged`, `gh pr view <PR> --json mergeCommit` |
 | `time_elapsed` | `now - spawned_at` per issue, fallback session elapsed |
 | `decisions_count` | length of `decisions_log` |
-| `scope_files_declared` | `domain.issue.scope_files_declared` / legacy registry |
-| `scope_files_actual` | `domain.issue.scope_files_actual` / legacy registry; if missing and PR exists, fetch from `gh pr view --json files` |
+| `scope_files_declared` | `domain.issue.scope_files_declared` |
+| `scope_files_actual` | `domain.issue.scope_files_actual`; if missing and PR exists, fetch from `gh pr view --json files` |
 
 Issue-mode lookups may use `github`, `linear`, `worktree`, and `project-management` because § 0 already proved at least one tracked issue exists.
 
@@ -195,7 +195,7 @@ flightdeck-state archive
 
 Do NOT call `pane-registry remove-merged` here. Earlier revisions did, but `close-issue.md § 4` has already killed every terminal-state issue's tmux window by the time terminate runs, so `remove-merged` would unconditionally delete every `merged|aborted|dead` issue's history — including `decisions_log`, `pr_number`, and `merge_commit` — from the file that is about to be archived. The pi-flightdeck dashboard depends on those records to render the post-completion `Overview`, `Decisions`, and `Conflicts & merges` tabs; deleting them collapses the dashboard to an empty `0 issues` state immediately after a successful session. The archive's value is precisely the full session history (see [[issue-17]]).
 
-`flightdeck-daemon stop` terminates the external wake daemon (validates PID + flock holder before killing; refuses on stale PID file). `archive` rotates the live state file to `tmp/flightdeck-state-<SESSION>-<terminated_at>.json.archive` so the next session in the same tmux name (e.g. `HT`) starts clean instead of inheriting this session's entries, issue map, merge queue, and `terminated` flag. The archive preserves the full `.entries` map and full `.issues` map for post-mortem inspection and dashboard rendering.
+`flightdeck-daemon stop` terminates the external wake daemon (validates PID + flock holder before killing; refuses on stale PID file). `archive` rotates the live state file to `tmp/flightdeck-state-<SESSION>-<terminated_at>.json.archive` so the next session in the same tmux name (e.g. `HT`) starts clean instead of inheriting this session's entries, merge queue, and `terminated` flag. The archive preserves the full `.entries` map for post-mortem inspection and dashboard rendering.
 
 ---
 

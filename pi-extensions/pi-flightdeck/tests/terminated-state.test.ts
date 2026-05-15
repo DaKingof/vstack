@@ -1,15 +1,15 @@
 // Regression coverage for issue #17. The dashboard previously collapsed
 // after `terminate.md` finished a session:
-//   1) `pane-registry remove-merged` emptied `.issues` before `archive`,
-//      so the rotated file carried no history (round 1 fix); AND
+//   1) `pane-registry remove-merged` emptied tracked entries before
+//      `archive`, so the rotated file carried no history; AND
 //   2) `flightdeck-state archive` renames the live file out of the way,
 //      so `pi-flightdeck` read a missing live path and fell through to
 //      `inactive` even when the archive carried the full session
-//      history (round 2 BLOCKER).
+//      history.
 //
 // After the full fix:
 //   * `terminate.md` no longer calls `remove-merged`, so the archive
-//     preserves `.issues` (decisions_log, pr_number, merge_commit).
+//     preserves the entries map (decisions_log, pr_number, merge_commit).
 //   * `buildSnapshotFromInputs` falls back to the newest terminated
 //     archive when the live file is missing.
 //   * `flightdeckSessionStatus` returns the new `terminated` arm,
@@ -75,28 +75,47 @@ function simulateTerminateArchive(stateDir: string, sessionName: string, payload
 	return { archive, live };
 }
 
-function makeMergedIssueRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+interface MergedRecordOverrides {
+	state?: string;
+	last_polled_at?: string;
+	pr_number?: number;
+	merge_commit?: string;
+	decisions_log?: Array<Record<string, unknown>>;
+}
+
+function makeMergedIssueRecord(id = "CC-503", overrides: MergedRecordOverrides = {}): Record<string, unknown> {
+	// Tracked entry shape for a kind=issue entry. Issue-mode metadata
+	// lives under domain.issue; overrides may set top-level state /
+	// last_polled_at and the most-common domain.issue fields.
 	return {
-		decisions_log: [
+		decisions_log: overrides.decisions_log ?? [
 			{ answer: "apply", prompt_tag: "review-fix", ts: "2026-05-13T00:00:01Z" },
 			{ answer: "yes", prompt_tag: "merge-now", ts: "2026-05-13T00:10:00Z" },
 			{ answer: "merged", prompt_tag: "terminal-state-reached", ts: "2026-05-13T00:15:35Z" },
 		],
+		domain: {
+			issue: {
+				id,
+				merge_commit: overrides.merge_commit ?? "156d9df02ce8fb3a798f233c73e489338db969f9",
+				pr_number: overrides.pr_number ?? 81,
+				worktree: `/repo/trees/${id}`,
+			},
+		},
 		harness: "claude",
-		last_polled_at: "2026-05-13T00:15:35Z",
-		merge_commit: "156d9df02ce8fb3a798f233c73e489338db969f9",
-		pr_number: 81,
+		id,
+		kind: "issue",
+		last_polled_at: overrides.last_polled_at ?? "2026-05-13T00:15:35Z",
 		spawned_at: "2026-05-12T23:00:00Z",
-		state: "merged",
-		window: "CC-503",
-		...overrides,
+		state: overrides.state ?? "merged",
+		title: id,
+		window: id,
 	};
 }
 
-function terminatedPayload(issues: Record<string, Record<string, unknown>>, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function terminatedPayload(entries: Record<string, Record<string, unknown>>, overrides: Record<string, unknown> = {}): Record<string, unknown> {
 	return {
 		conflict_graph: { computed_at: null, edges: [] },
-		issues,
+		entries,
 		merge_queue: [],
 		paused_for_user: null,
 		started_at: "2026-05-12T22:00:00Z",
@@ -130,13 +149,19 @@ test("readMasterState normalizes malformed conflict_graph and decisions_log with
 	try {
 		const corrupt = writeLive(tmpDir, "HT", {
 			conflict_graph: { edges: "not-an-array", computed_at: 42 },
-			issues: {
+			entries: {
 				"CC-001": {
+					id: "CC-001",
+					kind: "issue",
 					state: "merged",
+					domain: { issue: { id: "CC-001" } },
 					decisions_log: "this should be an array but isn't",
 				},
 				"CC-002": {
+					id: "CC-002",
+					kind: "issue",
 					state: "merged",
+					domain: { issue: { id: "CC-002" } },
 					decisions_log: [
 						{ ts: "2026-05-13T00:00:00Z", prompt_tag: "x", answer: "y" },
 						"junk",
@@ -152,9 +177,9 @@ test("readMasterState normalizes malformed conflict_graph and decisions_log with
 		assert.equal(error, undefined);
 		assert.deepEqual(state?.conflict_graph?.edges, []);
 		assert.equal(state?.conflict_graph?.computed_at, null);
-		assert.deepEqual(state?.issues["CC-001"]?.decisions_log, []);
-		assert.equal(state?.issues["CC-002"]?.decisions_log?.length, 1);
-		assert.equal(state?.issues["CC-002"]?.decisions_log?.[0]?.prompt_tag, "x");
+		assert.deepEqual(state?.entries["CC-001"]?.decisions_log, []);
+		assert.equal(state?.entries["CC-002"]?.decisions_log?.length, 1);
+		assert.equal(state?.entries["CC-002"]?.decisions_log?.[0]?.prompt_tag, "x");
 	} finally {
 		cleanup();
 	}
@@ -176,9 +201,10 @@ test("flightdeckSessionStatus returns 'terminated' when terminated AND issues pr
 	}
 });
 
-test("flightdeckSessionStatus is 'inactive' when terminated and issues were wiped (legacy regression shape)", () => {
+test("flightdeckSessionStatus is 'inactive' when terminated and entries were wiped", () => {
 	const snapshot = makeSnapshot({
 		conflict_graph: { computed_at: null, edges: [] },
+		entries: {},
 		issues: {},
 		merge_queue: [],
 		paused_for_user: null,
@@ -192,10 +218,9 @@ test("mergedIssueHistory orders by last_polled_at desc and filters to merged onl
 	const { tmpDir, cleanup } = makeProject();
 	try {
 		const { archive } = simulateTerminateArchive(tmpDir, "HT", terminatedPayload({
-			"A-1": makeMergedIssueRecord({ last_polled_at: "2026-05-13T00:10:00Z", pr_number: 1 }),
-			"A-2": makeMergedIssueRecord({ last_polled_at: "2026-05-13T00:20:00Z", pr_number: 2 }),
-			"A-3": { ...makeMergedIssueRecord(), state: "aborted" },
-			"A-4": { ...makeMergedIssueRecord(), state: "waiting" },
+			"A-1": makeMergedIssueRecord("A-1", { last_polled_at: "2026-05-13T00:10:00Z" }),
+			"A-2": makeMergedIssueRecord("A-2", { last_polled_at: "2026-05-13T00:20:00Z" }),
+			"A-3": { ...makeMergedIssueRecord("A-3"), state: "aborted" },
 		}));
 		const { state } = readMasterState(archive);
 		const history = mergedIssueHistory(state);
@@ -211,12 +236,12 @@ test("readTrackedEntries returns the same set regardless of terminal state (norm
 	const { tmpDir, cleanup } = makeProject();
 	try {
 		const { archive } = simulateTerminateArchive(tmpDir, "HT", terminatedPayload({
-			"A-1": makeMergedIssueRecord(),
-			"A-2": { ...makeMergedIssueRecord(), state: "aborted" },
+			"A-1": makeMergedIssueRecord("A-1"),
+			"A-2": { ...makeMergedIssueRecord("A-2"), state: "aborted" },
 		}));
 		const { state } = readMasterState(archive);
 		const entries = readTrackedEntries(state);
-		assert.deepEqual(entries.map((e) => e.issue), ["A-1", "A-2"]);
+		assert.deepEqual(entries.map((e) => e.id).sort(), ["A-1", "A-2"]);
 	} finally {
 		cleanup();
 	}
@@ -271,13 +296,20 @@ test("buildSnapshotFromInputs prefers live file over archive when both exist (no
 	const { projectRoot, stateDir, tmpDir, cleanup } = makeProject();
 	try {
 		simulateTerminateArchive(tmpDir, "HT", terminatedPayload({
-			"OLD-1": makeMergedIssueRecord({ pr_number: 1 }),
+			"OLD-1": makeMergedIssueRecord("OLD-1"),
 		}, { terminated_at: "2026-05-01T00:00:00Z" }));
 		const nowIso = new Date().toISOString();
 		writeLive(tmpDir, "HT", {
 			conflict_graph: { computed_at: null, edges: [] },
-			issues: {
-				"NEW-1": { state: "waiting", harness: "claude", pr_number: 99, last_polled_at: nowIso },
+			entries: {
+				"NEW-1": {
+					id: "NEW-1",
+					kind: "issue",
+					state: "waiting",
+					harness: "claude",
+					last_polled_at: nowIso,
+					domain: { issue: { id: "NEW-1", pr_number: 99 } },
+				},
 			},
 			merge_queue: [],
 			paused_for_user: null,
@@ -333,10 +365,10 @@ test("edge case: mixed merged/aborted/dead outcomes all preserved", () => {
 	const { projectRoot, stateDir, tmpDir, cleanup } = makeProject();
 	try {
 		simulateTerminateArchive(tmpDir, "HT", terminatedPayload({
-			"M-1": makeMergedIssueRecord({ pr_number: 1, last_polled_at: "2026-05-13T00:05:00Z" }),
-			"A-1": { ...makeMergedIssueRecord({ pr_number: 2 }), state: "aborted" },
-			"D-1": { ...makeMergedIssueRecord({ pr_number: 3 }), state: "dead" },
-			"M-2": makeMergedIssueRecord({ pr_number: 4, last_polled_at: "2026-05-13T00:20:00Z" }),
+			"M-1": makeMergedIssueRecord("M-1", { last_polled_at: "2026-05-13T00:05:00Z" }),
+			"A-1": { ...makeMergedIssueRecord("A-1"), state: "aborted" },
+			"D-1": { ...makeMergedIssueRecord("D-1"), state: "dead" },
+			"M-2": makeMergedIssueRecord("M-2", { last_polled_at: "2026-05-13T00:20:00Z" }),
 		}));
 		const snapshot = buildSnapshotFromInputs({ projectRoot, stateDir, tmux: TMUX }, SETTINGS);
 		assert.equal(flightdeckSessionStatus(snapshot), "terminated");
@@ -409,7 +441,7 @@ test("buildSnapshotFromInputs: malformed newest + valid older archive → falls 
 	try {
 		writeFileSync(join(tmpDir, "flightdeck-state-HT-20260513T002128Z.json.archive"), "{corrupt", "utf8");
 		writeFileSync(join(tmpDir, "flightdeck-state-HT-20260101T000000Z.json.archive"), JSON.stringify(terminatedPayload({
-			"OLD-1": makeMergedIssueRecord({ pr_number: 99 }),
+			"OLD-1": makeMergedIssueRecord("OLD-1", { pr_number: 99 }),
 		}, { terminated_at: "2026-01-01T00:00:00Z" })), "utf8");
 		const snapshot = buildSnapshotFromInputs({ projectRoot, stateDir, tmux: TMUX }, SETTINGS);
 		assert.equal(snapshot.master?.terminated, true);
@@ -539,13 +571,13 @@ test("readdir EACCES → archives:[], error propagated with code+path", { skip: 
 function makeSnapshot(masterShape: unknown): FlightdeckSnapshot {
 	// Hand-crafted snapshot for tests that need to assert behavior
 	// directly against a shape without involving the on-disk fallback
-	// path. Used for legacy-regression shape (terminated + empty issues)
-	// and bare-state policy checks.
+	// path.
 	let master: FlightdeckSnapshot["master"];
 	if (masterShape && typeof masterShape === "object") {
 		const wire = masterShape as Record<string, unknown>;
 		master = {
 			conflict_graph: (wire.conflict_graph as { edges?: Array<[string, string]>; computed_at?: string | null }) ?? { computed_at: null, edges: [] },
+			entries: (wire.entries as Record<string, never>) ?? {},
 			issues: (wire.issues as Record<string, never>) ?? {},
 			merge_queue: Array.isArray(wire.merge_queue) ? (wire.merge_queue as string[]) : [],
 			paused_for_user: (wire.paused_for_user as null) ?? null,

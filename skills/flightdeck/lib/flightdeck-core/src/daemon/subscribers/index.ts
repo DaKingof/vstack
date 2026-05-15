@@ -9,14 +9,13 @@
 //   2. Spawns `bash -c <body>` with the relevant args as positional
 //      params and env vars exported (FD_STATE_DIR, SESSION_LOCK,
 //      WAKE_EVENTS_LOG, LOG, CLASSIFIER, OC_POLL_SEC, OC_BACKOFF_MAX_SEC).
-//   3. Detaches the child so it survives the parent's exit (matches
-//      bash's `& disown` shape).
+//   3. Detaches the child so it survives the parent's exit
+//      (`spawn(...).unref()` + `setsid`).
 //   4. Records the child pid into the pid file.
 //
-// The subscriber body is loaded from a constant string in each file —
-// a verbatim copy of the bash function body. When the .bash sibling
-// is updated, the constant must be kept in sync. Parity tests assert
-// byte equivalence with the bash function via a regex extract.
+// The subscriber body is sourced from scripts/lib/subscribers.bash via
+// `bash -c "source subscribers.bash; <harness>_subscriber_loop ..."`,
+// so this file only owns the spawn + detach + pidfile contract.
 
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";

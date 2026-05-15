@@ -12,22 +12,16 @@ Activates only inside tmux and only when you ask for it (`flightdeck session sta
 
 ## How it works
 
-Flightdeck launches generic sessions with `flightdeck-session` or issue agents with `open-terminal`, always into their own tmux windows, then watches them in parallel. For each tracked pane it picks the cleanest available communication channel:
+Flightdeck launches generic sessions with `flightdeck session start` (or `attach`) or issue agents with `flightdeck start`, always into their own tmux windows, then watches them in parallel. Each agent talks to flightdeck through its native channel (Claude Code MCP, OpenCode HTTP, Pi bridge, Codex app-server) and falls back to tmux when a channel isn't available.
 
-| Harness | How flightdeck talks to that agent |
-| --- | --- |
-| Claude Code | Localhost HTTP channel server (MCP push) + transcript tailing |
-| OpenCode | Direct HTTP session API |
-| Pi | Unix-socket bridge speaking JSON line by line |
-| Codex | JSON-RPC over WebSocket against `codex app-server` |
+A background daemon detects when an agent has a question, the master agent classifies the prompt, auto-answers when there's a learned default, and pauses for the human when there isn't.
 
-When a channel isn't available, flightdeck falls back to reading the agent's terminal text via tmux and typing replies as keystrokes. It works, but native channels are always preferred.
+There are two modes per tracked entry:
 
-A small background daemon polls the agent panes a few times a second, detects when an agent has something to ask, classifies the prompt against a library of known shapes, and wakes the master agent. The master either auto-answers (most prompts have a learned default) or pauses for the human.
+- **Generic session mode** — structured questions, bash permission prompts, safe bounded choices, Pi background-task exits.
+- **Issue mode** — adds GitHub/Linear/worktree decisions: cleanup, rebase, force-push, bot-review/CI recovery, merge planning, scope creep.
 
-The watch layer runs in one of two modes per tracked entry. **Generic session mode** handles structured questions, bash permission prompts, safe bounded choices, and Pi background-task exits. **Issue mode** extends that with GitHub/Linear/worktree decisions: cleanup, rebase, force-push, bot-review/CI recovery, merge planning, scope creep. Mismatched prompts (issue-only tags on a generic session) pause for the user rather than acting.
-
-When tracked entries are terminal, Flightdeck writes a summary and hands control back. Generic-only sessions get a local session summary. Sessions with any issue entries keep the issue/PR/new-issue recommendation summary; mixed sessions include both.
+When all tracked entries are terminal, flightdeck writes a summary and hands control back.
 
 ## Activation and termination
 
@@ -78,20 +72,6 @@ Most users never touch these. The ones that occasionally matter:
 Daemon-private files live outside your project under `$XDG_RUNTIME_DIR/flightdeck` (fallback `/tmp/flightdeck-$UID`) so they don't show up in commits.
 
 Daemon tuning (`FD_*` env vars) is documented in [`DEVELOPMENT.md`](./DEVELOPMENT.md). Defaults work for normal use.
-
-## Patterns
-
-The `patterns/` directory documents the decisions the master agent makes — *when* to skip a bot review, *how* to handle a rebase prompt, *when* to force-merge — so future maintainers (human or AI) understand the reasoning, not just the code.
-
-| Pattern | What it covers |
-| --- | --- |
-| `tmux-monitoring.md` | How flightdeck reads panes and the per-harness native channels. |
-| `prompt-handlers.md` | The library of prompt shapes and how each gets answered. |
-| `conflict-detection.md` | How merge order is planned around file-level conflicts. |
-| `decision-biases.md` | Judgment heuristics: smaller-first, scope creep detection, rule of three. |
-| `claude-channels.md` | Claude Code's MCP channel adapter. |
-| `opencode-questions.md` | OpenCode's structured question API. |
-| `pi-questions.md` | Pi's structured question API. |
 
 ## Out of scope
 

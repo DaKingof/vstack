@@ -74,8 +74,7 @@ function runDaemon(action: string, extra: string[] = [], useTs = true): { status
 }
 
 function daemonEnv(useTs = true): Record<string, string> {
-	const env: Record<string, string> = { ...(process.env as Record<string, string>), FD_STATE_DIR: stateDir, FLIGHTDECK_USE_TS_FLIGHTDECK_DAEMON: useTs ? "1" : "0", FLIGHTDECK_USE_TS_DAEMON_START: "1", FD_POLL_SEC: "1", FD_HEARTBEAT_TICKS: "2" };
-	delete env.FLIGHTDECK_USE_TS;
+	const env: Record<string, string> = { ...(process.env as Record<string, string>), FD_STATE_DIR: stateDir, FD_POLL_SEC: "1", FD_HEARTBEAT_TICKS: "2" };
 	return env;
 }
 
@@ -86,7 +85,7 @@ describe("daemon run-loop (TS)", () => {
 	}
 
 	test("start refuses a stale master pane before entering the run loop", () => {
-		for (const useTs of [false, true]) {
+		for (const useTs of [true]) {
 			const r = runDaemon("start", ["--master", "%999999", "--inner", innerPaneId, "--foreground"], useTs);
 			expect(r.status).toBe(4);
 			expect(r.stderr).toContain("error: master pane '%999999' does not exist; pass --master \"$TMUX_PANE\" or run 'tmux list-panes -a'");
@@ -96,8 +95,8 @@ describe("daemon run-loop (TS)", () => {
 	});
 
 	test("daemon writes daemon-exited event when the master pane disappears", async () => {
-		for (const useTs of [false, true]) {
-			const masterPane = tmuxNewWindow(SESSION, `fd-master-gone-${Date.now()}-${useTs ? "ts" : "bash"}`);
+		for (const useTs of [true]) {
+			const masterPane = tmuxNewWindow(SESSION, `fd-master-gone-${Date.now()}`);
 			try {
 				const r = runDaemon("start", ["--master", masterPane, "--inner", innerPaneId], useTs);
 				expect(r.status).toBe(0);
@@ -120,8 +119,8 @@ describe("daemon run-loop (TS)", () => {
 	});
 
 	test("daemon-exited emit failure is observable in stderr and daemon log", async () => {
-		for (const useTs of [false, true]) {
-			const masterPane = tmuxNewWindow(SESSION, `fd-emit-fail-${Date.now()}-${useTs ? "ts" : "bash"}`);
+		for (const useTs of [true]) {
+			const masterPane = tmuxNewWindow(SESSION, `fd-emit-fail-${Date.now()}`);
 			const logFile = join(stateDir, `fd-daemon-${SESSION_KEY}.log`);
 			rmSync(logFile, { force: true });
 			let stderr = "";
@@ -208,9 +207,8 @@ describe("daemon run-loop (TS)", () => {
 		const holder = spawn("flock", ["-n", pidLock, "sleep", "30"], { stdio: "ignore" });
 		await sleep(200);
 		try {
-			const env = { ...(process.env as Record<string, string>), FD_STATE_DIR: stateDir, FLIGHTDECK_USE_TS_FLIGHTDECK_DAEMON: "1", FLIGHTDECK_USE_TS_DAEMON_START: "1" } as Record<string, string>;
-			delete env.FLIGHTDECK_USE_TS;
-			const t0 = Date.now();
+			const env = { ...(process.env as Record<string, string>), FD_STATE_DIR: stateDir } as Record<string, string>;
+					const t0 = Date.now();
 			const child = spawn(SCRIPT, ["start", "--session", SESSION_NAME, "--master", MASTER_PANE, "--inner", innerPaneId, "--foreground"], { env, stdio: ["ignore", "pipe", "pipe"] });
 			let stderr = "";
 			child.stderr!.on("data", (b: Buffer) => { stderr += b.toString(); });
@@ -230,12 +228,11 @@ describe("daemon run-loop (TS)", () => {
 	}, 15000);
 
 	test("tmux-window mode propagates env to the child window (round-4 #4)", async () => {
-		// Pre-fix: tmux new-window dispatch built 'scriptPath + args'
-		// without env. tmux server doesn't inherit caller env, so under
-		// isolated FD_STATE_DIR + TS gates the child wrote state to the
-		// default dir (not stateDir) and ran the bash sibling (no TS
-		// gate). Result: caller's stateDir never received a pid file and
-		// dispatch timed out after 10s.
+		// Regression: tmux new-window dispatch must explicitly pass
+		// FD_STATE_DIR into the child env. tmux server doesn't inherit
+		// caller env; without the explicit env wiring the child wrote
+		// state to the default dir (not our isolated stateDir) and the
+		// caller's dispatch timed out after 10s waiting for a pid file.
 		const r = runDaemon("start", ["--master", MASTER_PANE, "--inner", innerPaneId, "--in-tmux-window"]);
 		expect(r.status).toBe(0);
 		expect(r.stdout).toContain("mode=tmux-window");
@@ -245,9 +242,6 @@ describe("daemon run-loop (TS)", () => {
 		expect(existsSync(pidFile)).toBe(true);
 		const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
 		expect(pidAlive(pid)).toBe(true);
-		// Log must mention 'master-harness' / 'start' lines — proves the
-		// TS daemon (not the bash sibling) ran. Bash sibling produces
-		// the same format but the [install]-less startup is TS-specific.
 		const logFile = join(stateDir, `fd-daemon-${SESSION_KEY}.log`);
 		await sleep(500);
 		expect(existsSync(logFile)).toBe(true);
@@ -277,9 +271,8 @@ describe("daemon run-loop (TS)", () => {
 		// This test seeds all three state files BEFORE the rollover
 		// and asserts they still exist with their seeded content
 		// AFTER the handoff completes.
-		const env = { ...(process.env as Record<string, string>), FD_STATE_DIR: stateDir, FLIGHTDECK_USE_TS_FLIGHTDECK_DAEMON: "1", FLIGHTDECK_USE_TS_DAEMON_START: "1", FD_MAX_LIFETIME: "2", FD_POLL_SEC: "1", FD_HEARTBEAT_TICKS: "5" } as Record<string, string>;
-		delete env.FLIGHTDECK_USE_TS;
-		const r = spawnSync(SCRIPT, ["start", "--session", SESSION_NAME, "--master", MASTER_PANE, "--inner", innerPaneId], { encoding: "utf8", env });
+		const env = { ...(process.env as Record<string, string>), FD_STATE_DIR: stateDir, FD_MAX_LIFETIME: "2", FD_POLL_SEC: "1", FD_HEARTBEAT_TICKS: "5" } as Record<string, string>;
+			const r = spawnSync(SCRIPT, ["start", "--session", SESSION_NAME, "--master", MASTER_PANE, "--inner", innerPaneId], { encoding: "utf8", env });
 		expect(r.status).toBe(0);
 		const pidFile = join(stateDir, `fd-daemon-${SESSION_KEY}.pid`);
 		const hbFile = join(stateDir, `fd-daemon-${SESSION_KEY}.heartbeat`);

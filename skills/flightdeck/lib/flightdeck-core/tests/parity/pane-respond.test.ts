@@ -16,61 +16,58 @@ if (!process.env.TMUX) {
 	test.skip("pane-respond parity requires tmux", () => undefined);
 }
 
-function run(useTs: boolean, args: string[]): { stdout: string; stderr: string; status: number | null } {
+function run(args: string[]): { stdout: string; stderr: string; status: number | null } {
 	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-	if (useTs) env.FLIGHTDECK_USE_TS_PANE_RESPOND = "1";
-	else delete env.FLIGHTDECK_USE_TS_PANE_RESPOND;
-	delete env.FLIGHTDECK_USE_TS;
 	const r = spawnSync(SCRIPT, args, { encoding: "utf8", env });
 	return { status: r.status, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
 }
 
 describe("pane-respond parity (validation)", () => {
 	test("missing target → usage error", () => {
-		const a = run(false, []);
-		const b = run(true, []);
+		const a = run([]);
+		const b = run([]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(2);
 	});
 
 	test("target without pane index → error", () => {
-		const a = run(false, ["session:window", "hello"]);
-		const b = run(true, ["session:window", "hello"]);
+		const a = run(["session:window", "hello"]);
+		const b = run(["session:window", "hello"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(2);
 	});
 
 	test("--option with non-integer rejects", () => {
-		const a = run(false, ["s:w.0", "--option", "abc"]);
-		const b = run(true, ["s:w.0", "--option", "abc"]);
+		const a = run(["s:w.0", "--option", "abc"]);
+		const b = run(["s:w.0", "--option", "abc"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(2);
 	});
 
 	test("--option with positional payload rejects", () => {
-		const a = run(false, ["s:w.0", "hi", "--option", "1"]);
-		const b = run(true, ["s:w.0", "hi", "--option", "1"]);
+		const a = run(["s:w.0", "hi", "--option", "1"]);
+		const b = run(["s:w.0", "hi", "--option", "1"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(2);
 	});
 
 	test("--option with tag multi-select-tabbed rejects", () => {
-		const a = run(false, ["s:w.0", "--option", "1", "--tag", "multi-select-tabbed"]);
-		const b = run(true, ["s:w.0", "--option", "1", "--tag", "multi-select-tabbed"]);
+		const a = run(["s:w.0", "--option", "1", "--tag", "multi-select-tabbed"]);
+		const b = run(["s:w.0", "--option", "1", "--tag", "multi-select-tabbed"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(1);
 	});
 
 	test("--option-multi with non-CSV rejects", () => {
-		const a = run(false, ["s:w.0", "--option-multi", "1,a,3"]);
-		const b = run(true, ["s:w.0", "--option-multi", "1,a,3"]);
+		const a = run(["s:w.0", "--option-multi", "1,a,3"]);
+		const b = run(["s:w.0", "--option-multi", "1,a,3"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(2);
 	});
 
 	test("rebase-multi-choice payload missing sections rejects", () => {
-		const a = run(false, ["s:w.0", "just a rebase", "--tag", "rebase-multi-choice"]);
-		const b = run(true, ["s:w.0", "just a rebase", "--tag", "rebase-multi-choice"]);
+		const a = run(["s:w.0", "just a rebase", "--tag", "rebase-multi-choice"]);
+		const b = run(["s:w.0", "just a rebase", "--tag", "rebase-multi-choice"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(1);
 		// Both should mention the missing sections
@@ -79,43 +76,43 @@ describe("pane-respond parity (validation)", () => {
 	});
 
 	test("--question on wrong harness rejects", () => {
-		const a = run(false, ["s:w.0", "--harness", "claude", "--question", "que_x", "--answer", "Yes"]);
-		const b = run(true, ["s:w.0", "--harness", "claude", "--question", "que_x", "--answer", "Yes"]);
+		const a = run(["s:w.0", "--harness", "claude", "--question", "que_x", "--answer", "Yes"]);
+		const b = run(["s:w.0", "--harness", "claude", "--question", "que_x", "--answer", "Yes"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(1);
 	});
 
 	test("--question with conflicting answer flags rejects", () => {
-		const a = run(false, ["s:w.0", "--harness", "opencode", "--question", "que_x", "--answer", "A", "--answer-multi", "B,C"]);
-		const b = run(true, ["s:w.0", "--harness", "opencode", "--question", "que_x", "--answer", "A", "--answer-multi", "B,C"]);
+		const a = run(["s:w.0", "--harness", "opencode", "--question", "que_x", "--answer", "A", "--answer-multi", "B,C"]);
+		const b = run(["s:w.0", "--harness", "opencode", "--question", "que_x", "--answer", "A", "--answer-multi", "B,C"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(2);
 	});
 
 	test("--reject + --answer combo rejects", () => {
-		const a = run(false, ["s:w.0", "--harness", "opencode", "--question", "que_x", "--reject", "--answer", "Yes"]);
-		const b = run(true, ["s:w.0", "--harness", "opencode", "--question", "que_x", "--reject", "--answer", "Yes"]);
+		const a = run(["s:w.0", "--harness", "opencode", "--question", "que_x", "--reject", "--answer", "Yes"]);
+		const b = run(["s:w.0", "--harness", "opencode", "--question", "que_x", "--reject", "--answer", "Yes"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(2);
 	});
 
 	test("--answers-json with non-array rejects", () => {
-		const a = run(false, ["s:w.0", "--harness", "opencode", "--question", "que_x", "--answers-json", '"hi"']);
-		const b = run(true, ["s:w.0", "--harness", "opencode", "--question", "que_x", "--answers-json", '"hi"']);
+		const a = run(["s:w.0", "--harness", "opencode", "--question", "que_x", "--answers-json", '"hi"']);
+		const b = run(["s:w.0", "--harness", "opencode", "--question", "que_x", "--answers-json", '"hi"']);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(2);
 	});
 
 	test("--answer-text on opencode rejects", () => {
-		const a = run(false, ["s:w.0", "--harness", "opencode", "--question", "que_x", "--answer-text", "free text"]);
-		const b = run(true, ["s:w.0", "--harness", "opencode", "--question", "que_x", "--answer-text", "free text"]);
+		const a = run(["s:w.0", "--harness", "opencode", "--question", "que_x", "--answer-text", "free text"]);
+		const b = run(["s:w.0", "--harness", "opencode", "--question", "que_x", "--answer-text", "free text"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(1);
 	});
 
 	test("unknown flag rejects", () => {
-		const a = run(false, ["s:w.0", "hi", "--bogus-flag"]);
-		const b = run(true, ["s:w.0", "hi", "--bogus-flag"]);
+		const a = run(["s:w.0", "hi", "--bogus-flag"]);
+		const b = run(["s:w.0", "hi", "--bogus-flag"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(2);
 	});
@@ -124,8 +121,8 @@ describe("pane-respond parity (validation)", () => {
 	// failures must emit specific, byte-identical error text in both
 	// implementations so the caller knows which recovery path applies.
 	test("%pane_id not registered → specific not-registered error", () => {
-		const a = run(false, ["%999999", "hi"]);
-		const b = run(true, ["%999999", "hi"]);
+		const a = run(["%999999", "hi"]);
+		const b = run(["%999999", "hi"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(2);
 		const expected = "pane-respond: pane '%999999' is not registered as a flightdeck-tracked pane; pass the explicit pane target (e.g. <session>:<window>.<idx>) or register the pane first";
@@ -154,7 +151,7 @@ describe("pane-respond parity (validation)", () => {
 		const path = require("node:path") as typeof import("node:path");
 		const PANE_REGISTRY = resolve(HERE, "../../../../scripts/pane-registry");
 		const FLIGHTDECK_STATE = resolve(HERE, "../../../../scripts/flightdeck-state");
-		for (const useTs of [false, true]) {
+		for (const useTs of [true]) {
 			const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "fd-pr-drift-"));
 			try {
 				const envBase: Record<string, string> = { ...(process.env as Record<string, string>), FLIGHTDECK_STATE_DIR: stateDir };
@@ -164,10 +161,7 @@ describe("pane-respond parity (validation)", () => {
 				// stomp it to null to simulate registry drift.
 				spawnSync(PANE_REGISTRY, ["set", "DRIFT-PT", "pane_target", "null"], { encoding: "utf8", env: envBase });
 				const env: Record<string, string> = { ...envBase };
-				if (useTs) env.FLIGHTDECK_USE_TS_PANE_RESPOND = "1";
-				else delete env.FLIGHTDECK_USE_TS_PANE_RESPOND;
-				delete env.FLIGHTDECK_USE_TS;
-				const r = spawnSync(SCRIPT, [tmuxPane, "hi"], { encoding: "utf8", env });
+													const r = spawnSync(SCRIPT, [tmuxPane, "hi"], { encoding: "utf8", env });
 				expect(r.status).toBe(2);
 				const expected = `pane-respond: registry entry for '${tmuxPane}' is missing pane_target (registry drift); recover via pane-registry reconcile`;
 				expect((r.stderr ?? "")).toContain(expected);

@@ -8,7 +8,6 @@ import { ISSUE_ONLY_TAGS } from "../../src/classifier/rules.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = resolve(HERE, "../fixtures/prompt-classify");
-const BASH_SCRIPT = resolve(HERE, "../../../../scripts/prompt-classify.bash");
 const TS_SCRIPT = resolve(HERE, "../../src/bin/prompt-classify.ts");
 
 const GENERIC_PROMPT = `Choose the next action.
@@ -19,14 +18,6 @@ const GENERIC_PROMPT = `Choose the next action.
 Enter to select
 `;
 
-// Planned review terms map to current canonical tags as follows:
-// - merge-ready / merge-prompt: merge-now, merge-ready-but-unknown, force-merge-confirm
-// - cleanup-worktree: cleanup-prompt
-// - bot-review: bot-review-wait-stuck
-// - rebase: rebase-multi-choice
-// - review-fix: external-fix-suggestions and cycle-fix-suggestions
-// - scope-creep: scope-creep-detected is computed outside prompt-classify, so
-//   it is asserted in the guard sets below rather than via a buffer fixture.
 const ISSUE_ONLY_CASES: Array<{ tag: string; fixture: string }> = [
 	{ tag: "force-merge-confirm", fixture: "12-force-merge-confirm.buffer" },
 	{ tag: "merge-ready-but-unknown", fixture: "13-merge-ready-but-unknown.buffer" },
@@ -48,65 +39,46 @@ function fixture(file: string): string {
 	return readFileSync(join(FIXTURES, file), "utf8");
 }
 
-function runBash(input: string, args: string[] = []): { stdout: string; stderr: string; status: number | null } {
-	const r = spawnSync(BASH_SCRIPT, args, { encoding: "utf8", input });
-	return { status: r.status, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
-}
-
-function runTs(input: string, args: string[] = []): { stdout: string; stderr: string; status: number | null } {
+function runClassify(input: string, args: string[] = []): { stdout: string; stderr: string; status: number | null } {
 	const r = spawnSync("bun", ["run", TS_SCRIPT, ...args], { encoding: "utf8", input });
 	return { status: r.status, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
 }
 
-function runBoth(input: string, args: string[] = []): { bash: ReturnType<typeof runBash>; ts: ReturnType<typeof runTs> } {
-	return { bash: runBash(input, args), ts: runTs(input, args) };
-}
-
-function expectBoth(input: string, args: string[], expected: string): ReturnType<typeof runBoth> {
-	const result = runBoth(input, args);
-	expect(result.bash.status).toBe(0);
-	expect(result.ts.status).toBe(0);
-	expect(result.ts.stdout.trim()).toBe(result.bash.stdout.trim());
-	expect(result.ts.stdout.trim()).toBe(expected);
+function expectTag(input: string, args: string[], expected: string): ReturnType<typeof runClassify> {
+	const result = runClassify(input, args);
+	expect(result.status).toBe(0);
+	expect(result.stdout.trim()).toBe(expected);
 	return result;
-}
-
-function expectWarning(result: ReturnType<typeof runBoth>, expected: string): void {
-	expect(result.bash.stderr).toContain(expected);
-	expect(result.ts.stderr).toContain(expected);
 }
 
 describe("handler domain guards", () => {
 	for (const { tag, fixture: fixtureName } of ISSUE_ONLY_CASES) {
 		test(`${tag} on adhoc escalates, on issue routes normally`, () => {
 			const input = fixture(fixtureName);
-			const adhoc = expectBoth(input, ["--entry-kind", "adhoc"], "domain-mismatch");
-			expectWarning(adhoc, `issue-only prompt tag ${tag}`);
+			const adhoc = expectTag(input, ["--entry-kind", "adhoc"], "domain-mismatch");
+			expect(adhoc.stderr).toContain(`issue-only prompt tag ${tag}`);
 
-			const issue = expectBoth(input, ["--entry-kind", "issue"], tag);
-			expect(issue.bash.stderr).toBe("");
-			expect(issue.ts.stderr).toBe("");
+			const issue = expectTag(input, ["--entry-kind", "issue"], tag);
+			expect(issue.stderr).toBe("");
 		});
 	}
 
 	test("entry kind unknown sentinel escalates issue-only prompt as domain-mismatch", () => {
-		const result = expectBoth(fixture("14-merge-now.buffer"), ["--entry-kind-unknown"], "domain-mismatch");
-		expectWarning(result, "issue-only prompt tag merge-now");
+		const result = expectTag(fixture("14-merge-now.buffer"), ["--entry-kind-unknown"], "domain-mismatch");
+		expect(result.stderr).toContain("issue-only prompt tag merge-now");
 	});
 
 	test("missing entry kind fails closed by default", () => {
-		const result = expectBoth(fixture("14-merge-now.buffer"), [], "domain-mismatch");
-		expectWarning(result, "classified without --entry-kind");
-		expectWarning(result, "routing as domain-mismatch");
+		const result = expectTag(fixture("14-merge-now.buffer"), [], "domain-mismatch");
+		expect(result.stderr).toContain("classified without --entry-kind");
+		expect(result.stderr).toContain("routing as domain-mismatch");
 	});
 
 	test("generic tag on issue entry remains generic for the generic handler", () => {
-		expectBoth(GENERIC_PROMPT, ["--entry-kind", "issue"], "generic-multi-choice");
+		expectTag(GENERIC_PROMPT, ["--entry-kind", "issue"], "generic-multi-choice");
 	});
 
-	test("computed issue-only tags are present in both guard sets", () => {
+	test("computed issue-only tags are present in the guard set", () => {
 		expect(ISSUE_ONLY_TAGS.has("scope-creep-detected")).toBe(true);
-		const bashSource = readFileSync(BASH_SCRIPT, "utf8");
-		expect(bashSource).toContain("scope-creep-detected");
 	});
 });

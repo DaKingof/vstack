@@ -1,4 +1,4 @@
-// Port of flightdeck-daemon.bash `start` action body.
+// flightdeck-daemon `start` action body.
 //
 // Two phases:
 //   A. Spawn dispatch (caller side, when --foreground is not set):
@@ -93,15 +93,6 @@ async function dispatchSpawn(opts: StartOpts): Promise<never> {
 			"FD_ADAPTER_READ_TIMEOUT_SEC",
 			"FD_CODEX_RPC_TIMEOUT_MS",
 			"FD_SPAWN_MODE",
-			"FLIGHTDECK_USE_TS",
-			"FLIGHTDECK_USE_TS_FLIGHTDECK_DAEMON",
-			"FLIGHTDECK_USE_TS_DAEMON_START",
-			"FLIGHTDECK_USE_TS_PROMPT_CLASSIFY",
-			"FLIGHTDECK_USE_TS_PANE_POLL",
-			"FLIGHTDECK_USE_TS_PANE_RESPOND",
-			"FLIGHTDECK_USE_TS_PANE_REGISTRY",
-			"FLIGHTDECK_USE_TS_FLIGHTDECK_STATE",
-			"FLIGHTDECK_USE_TS_PARALLEL_GROUPS",
 			"PI_BIN",
 			"PI_BRIDGE_BIN",
 			"XDG_RUNTIME_DIR",

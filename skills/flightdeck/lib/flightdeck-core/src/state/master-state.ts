@@ -10,7 +10,6 @@ import {
 	readdirSync,
 	statSync,
 	unlinkSync,
-	writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { resolveProjectRoot, loadDotEnvIntoProcess } from "../shared/project.ts";
@@ -199,10 +198,8 @@ export function shouldAutoArchiveAtSessionStart(file: string): { archive: boolea
 	const raw = parsed as Record<string, unknown>;
 	if (raw.terminated === true) return { archive: true, reason: "terminated" };
 	const entries = isRecord(raw.entries) ? raw.entries : {};
-	const issues = isRecord(raw.issues) ? raw.issues : {};
 	const paneIds: string[] = [];
 	for (const e of Object.values(entries)) if (isRecord(e) && typeof e.pane_id === "string" && e.pane_id) paneIds.push(e.pane_id);
-	for (const i of Object.values(issues)) if (isRecord(i) && typeof i.pane_id === "string" && i.pane_id) paneIds.push(i.pane_id);
 	if (paneIds.length === 0) return { archive: false, reason: null };
 	const alive = livePaneIds();
 	for (const pid of paneIds) if (alive.has(pid)) return { archive: false, reason: null };
@@ -237,7 +234,6 @@ export function initState(file: string): void {
 	const initJson = JSON.stringify({
 		conflict_graph: { computed_at: null, edges: [] },
 		entries: {},
-		issues: {},
 		merge_queue: [],
 		owner,
 		paused_for_user: null,
@@ -266,7 +262,7 @@ export function initState(file: string): void {
 		return;
 	}
 	// jq filter that prefers an existing object over the synthesized init.
-	const initFilter = `if ((. // {}) | type == "object" and (.issues // null) != null) then (if .owner? == null then . + {owner: ${ownerJson}} else . end) | (if .entries? == null then . + {entries: {}} else . end) else ${initJson} end`;
+	const initFilter = `if ((. // {}) | type == "object" and (.entries // null) != null) then (if .owner? == null then . + {owner: ${ownerJson}} else . end) else ${initJson} end`;
 	const r = lockedJqUpdate(lock, file, initFilter);
 	if (r.status !== 0) {
 		process.stderr.write(r.stderr || "");

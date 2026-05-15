@@ -139,10 +139,9 @@ export function loadDotEnvIntoProcess(projectRoot: string): void {
 	// originals exactly: assignments auto-export (-a), any failing
 	// command aborts (-e), unbound variable references fail loud (-u),
 	// and broken pipelines fail rather than silently masking errors
-	// (pipefail). `.env` with `FD_STATE_DIR=$MISPELLED_VAR` will exit
-	// nonzero just as the bash flightdeck-state.bash entry does;
-	// silently defaulting the state dir would route state to a
-	// different directory than the bash sibling.
+	// (pipefail). A `.env` with `FD_STATE_DIR=$MISPELLED_VAR` exits
+	// nonzero rather than silently defaulting the state directory to
+	// the wrong place.
 	const script = `
 		set -euo pipefail
 		set -a

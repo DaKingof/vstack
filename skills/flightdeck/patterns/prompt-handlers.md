@@ -126,7 +126,7 @@ After any agent claims a structural change is complete, verify before advancing 
 | `--option N` | Numeric option pick | `pane-respond <pane> --option 2` |
 | `--keys k1,k2,...` | Multi-step forms | `pane-respond <pane> --keys Space,Right,Enter` |
 
-`pane-respond --option N` is harness-aware. Claude Code prompts do not treat number keys as shortcuts; the adapter sends arrow navigation plus Enter. When adding adapters, update both `lib/flightdeck-core/src/bin/pane-respond.ts` and `scripts/pane-respond.bash`, plus parity tests.
+`pane-respond --option N` is harness-aware. Claude Code prompts do not treat number keys as shortcuts; the adapter sends arrow navigation plus Enter. When adding adapters, update `lib/flightdeck-core/src/bin/pane-respond.ts` plus the corresponding tests.
 
 ---
 

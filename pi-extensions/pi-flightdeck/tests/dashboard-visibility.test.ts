@@ -90,17 +90,21 @@ function snapshot(currentPaneId: string, ownerPaneId: string): FlightdeckSnapsho
 		},
 		master: {
 			conflict_graph: { computed_at: null, edges: [] },
-			issues: {
+			entries: {
 				"CC-001": {
+					domain: { issue: { id: "CC-001", pr_number: 101 } },
 					harness: "pi",
+					id: "CC-001",
 					issue: "CC-001",
+					kind: "issue",
 					last_polled_at: "2026-05-13T00:00:00Z",
 					pane_id: "%33",
-					pr_number: 101,
 					spawned_at: "2026-05-13T00:00:00Z",
 					state: "waiting",
+					title: "CC-001",
 				},
 			},
+			issues: {},
 			merge_queue: [],
 			owner: {
 				cwd: "/repo",

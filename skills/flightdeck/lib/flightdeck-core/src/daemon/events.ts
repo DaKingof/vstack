@@ -1,10 +1,9 @@
-// Port of flightdeck-daemon.bash::append_event + recover_stranded_drains.
+// Daemon event ingestion + stranded-drain recovery.
 //
-// drain_events and ack_and_drain are already implemented via
-// src/state/locking.ts::lockedEventsDrain — same flock-held mv + cat
-// pattern as bash. recover_stranded_drains runs inside lockedEventsDrain
-// (the bash script handles orphan .draining.<pid> sweeps under the
-// same SESSION_LOCK).
+// drain_events and ack_and_drain run via src/state/locking.ts::
+// lockedEventsDrain (flock-held mv + cat). recover_stranded_drains
+// runs inside lockedEventsDrain so orphan .draining.<pid> sweeps stay
+// under the same SESSION_LOCK.
 //
 // Dedup contract (bash daemon):
 //   key = "${pane_id}|${hash}|${tag}"
@@ -90,7 +89,7 @@ export function appendEvent(opts: AppendEventOpts): boolean {
 // only fire when the classifier tag matches one of these; non-canonical
 // tags are recorded as "notified" so the daemon stops re-classifying
 // the same hash but does not deliver a wake.
-// Byte-equivalent to the bash CANONICAL_TAGS array (flightdeck-daemon.bash
+// Canonical wake-event tag allowlist for the daemon ack contract
 // line 130). Order doesn't matter for set membership.
 const CANONICAL_TAGS = new Set<string>([
 	"terminal-state-reached",

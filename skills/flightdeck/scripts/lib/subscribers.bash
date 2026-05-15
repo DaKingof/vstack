@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Subscriber loop bodies extracted from flightdeck-daemon.bash so the
-# TS daemon can spawn them without re-implementing the long-running
-# cooperative async streams. Bodies are verbatim copies; the parity
-# test in lib/flightdeck-core/tests/parity/subscriber-bodies.test.ts
-# enforces byte equivalence with the bash daemon source.
+# Subscriber loop bodies. The flightdeck daemon spawns one of these
+# per tracked pane to follow the harness adapter's long-running
+# cooperative async stream and translate it into wake-events the
+# daemon can act on.
 #
 # Usage:
 #   bash subscribers.bash oc <pane_id> <oc_url> <session_id> <parent_pid>

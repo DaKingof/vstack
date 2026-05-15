@@ -30,7 +30,7 @@ Use `pane_target`, `pane_id`, `worktree`, `domain.issue.pr_number`, and adapter 
 Some agents propose cleanup of multiple worktrees. Issue mode may clean only the asking issue's own worktree.
 
 1. Extract the target worktree path from the prompt buffer.
-2. Compare it to `domain.issue.worktree` / legacy `worktree` from the registry.
+2. Compare it to `domain.issue.worktree` from the registry.
 3. Equal → answer the affirmative option (usually `--option 1`).
 4. Not equal → answer the negative/keep option or send a scope-to-self payload.
 5. Log `cleanup-prompt <answer>`.

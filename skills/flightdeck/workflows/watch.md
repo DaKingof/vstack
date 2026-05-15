@@ -1,6 +1,6 @@
 # Workflow: `watch` — Issue-Mode Extension
 
-Issue-mode master loop. It extends the generic `session-watch.md` loop with PR/Linear/worktree decisions, merge planning, issue dashboards, and legacy issue state compatibility.
+Issue-mode master loop. It extends the generic `session-watch.md` loop with PR/Linear/worktree decisions, merge planning, issue dashboards, and the issue-specific lifecycle states.
 
 **Inputs**: `[ISSUE_IDS]` from `start.md` or an existing Flightdeck state file on compaction recovery.
 
@@ -40,17 +40,17 @@ For each `ISSUE_ID` in the spawn batch, ensure a `kind="issue"` entry exists. Le
    .agents/skills/flightdeck/scripts/pane-registry init <ISSUE_ID> \
      --window <window-name> --harness <h> --worktree <path> --pane-index <N>
    ```
-   This writes `.entries[ISSUE_ID]` with `kind="issue"`, projects compatibility fields to `.issues[ISSUE_ID]`, and preserves legacy consumers.
+   This writes `.entries[ISSUE_ID]` with `kind="issue"` and the issue metadata under `domain.issue`.
 4. If resuming, do not overwrite existing decisions or domain fields; reconcile only liveness and pane metadata.
 
 ---
 
 ## § 2: Issue state mapping
 
-The generic states are canonical for the session manager. Issue mode keeps legacy state names until all issue workflows are updated.
+The generic state enum is canonical. Issue-mode entries may carry one of the issue-specific lifecycle states directly in `state`; renderers and merge planning treat them as terminal/near-terminal alongside the generic enum.
 
-| Legacy issue state | Generic state | Domain fields |
-|--------------------|---------------|---------------|
+| Issue-mode state | Generic equivalent | Domain fields |
+|------------------|--------------------|---------------|
 | `waiting` | `waiting` | unchanged |
 | `prompting` | `prompting` | `substate=<tag>` |
 | `submitting` | `submitting` | orchestration in progress |
@@ -59,7 +59,7 @@ The generic states are canonical for the session manager. Issue mode keeps legac
 | `aborted` | `cancelled` | `domain.issue.outcome = "aborted"` |
 | `dead` | `dead` | pane/window lost |
 
-When writing through legacy helpers, keep the legacy `state` value so existing issue workflows continue to work. When writing generic `.entries`, also set the domain fields above. New generic readers should treat `domain.issue.phase/outcome` as the issue-specific extension.
+Issue workflows write `state` as `merge-ready` / `merged` / `aborted` and set the matching `domain.issue.phase` or `domain.issue.outcome`. Generic readers treat `domain.issue.phase / outcome` as the issue-specific extension.
 
 ---
 
@@ -124,12 +124,12 @@ The issue handler surface is limited to PR/Linear/worktree workflow logic: clean
 
 ## § 5: Merge planning
 
-When at least one issue reaches legacy `merge-ready` (generic `ready` + `domain.issue.phase="merge-ready"`):
+When at least one issue reaches `merge-ready` (`state = "merge-ready"` plus `domain.issue.phase = "merge-ready"`):
 
 1. Invoke `⤵ workflows/merge-plan.md`.
 2. Build/rebuild `pr-conflict-graph` from live PR file lists.
 3. Merge the next safe PR using smallest-scope-first conflict ordering.
-4. After a merge, set legacy `state="merged"`, set generic outcome `domain.issue.outcome="merged"`, and remove it from the active merge queue.
+4. After a merge, set `state = "merged"`, `domain.issue.outcome = "merged"`, and remove the entry from the active merge queue.
 5. If a remaining PR becomes `BEHIND`, transition it back to `submitting` so its pane can rebase.
 
 ---
@@ -143,7 +143,7 @@ For each tracked issue, gather:
 - **Phase** — `flightdeck-state phase <ISSUE>` from orchestration workflow state, falling back to `fd:<state>`.
 - **Last prompt** — most recent `decisions_log[-1].prompt_tag` plus a short prompt excerpt.
 - **Answer** — most recent `decisions_log[-1].answer`.
-- **PR** — `domain.issue.pr_number` / legacy `pr_number`.
+- **PR** — `domain.issue.pr_number`.
 
 <output_format>
 ### ✈️ Flightdeck cycle [N] · [SESSION] · [ISO8601]

@@ -142,35 +142,33 @@ function isolatedCwd(): string {
 	return ENV_CWD;
 }
 
+function mergedIssueEntry(id: string, prNumber: number, mergeCommit: string, lastPolledAt: string, decisionsLog: Array<Record<string, unknown>>): Record<string, unknown> {
+	return {
+		decisions_log: decisionsLog,
+		domain: { issue: { id, merge_commit: mergeCommit, pr_number: prNumber } },
+		harness: "claude",
+		id,
+		kind: "issue",
+		last_polled_at: lastPolledAt,
+		spawned_at: "2026-05-12T23:00:00Z",
+		state: "merged",
+		title: id,
+		window: id,
+	};
+}
+
 function simulateTerminate(tmpDir: string): string {
 	const payload = {
 		conflict_graph: { computed_at: null, edges: [] },
-		issues: {
-			"CC-503": {
-				decisions_log: [
-					{ answer: "apply", prompt_tag: "review-fix", ts: "2026-05-13T00:00:01Z" },
-					{ answer: "yes", prompt_tag: "merge-now", ts: "2026-05-13T00:10:00Z" },
-					{ answer: "merged", prompt_tag: "terminal-state-reached", ts: "2026-05-13T00:15:35Z" },
-				],
-				harness: "claude",
-				last_polled_at: "2026-05-13T00:15:35Z",
-				merge_commit: "156d9df02ce8fb3a798f233c73e489338db969f9",
-				pr_number: 81,
-				spawned_at: "2026-05-12T23:00:00Z",
-				state: "merged",
-				window: "CC-503",
-			},
-			"CC-510": {
-				decisions_log: [
-					{ answer: "merged", prompt_tag: "terminal-state-reached", ts: "2026-05-13T00:08:00Z" },
-				],
-				harness: "claude",
-				last_polled_at: "2026-05-13T00:08:00Z",
-				merge_commit: "abcdef1234567890abcdef1234567890abcdef12",
-				pr_number: 82,
-				state: "merged",
-				window: "CC-510",
-			},
+		entries: {
+			"CC-503": mergedIssueEntry("CC-503", 81, "156d9df02ce8fb3a798f233c73e489338db969f9", "2026-05-13T00:15:35Z", [
+				{ answer: "apply", prompt_tag: "review-fix", ts: "2026-05-13T00:00:01Z" },
+				{ answer: "yes", prompt_tag: "merge-now", ts: "2026-05-13T00:10:00Z" },
+				{ answer: "merged", prompt_tag: "terminal-state-reached", ts: "2026-05-13T00:15:35Z" },
+			]),
+			"CC-510": mergedIssueEntry("CC-510", 82, "abcdef1234567890abcdef1234567890abcdef12", "2026-05-13T00:08:00Z", [
+				{ answer: "merged", prompt_tag: "terminal-state-reached", ts: "2026-05-13T00:08:00Z" },
+			]),
 		},
 		merge_queue: [],
 		paused_for_user: null,
@@ -301,7 +299,7 @@ test("Conflicts & merges tab renders gracefully when no merges recorded", () => 
 	try {
 		const payload = {
 			conflict_graph: { computed_at: null, edges: [] },
-			issues: { "X-1": { state: "aborted", harness: "claude" } },
+			entries: { "X-1": { id: "X-1", kind: "issue", state: "aborted", harness: "claude", domain: { issue: { id: "X-1" } } } },
 			merge_queue: [],
 			paused_for_user: null,
 			started_at: "2026-05-12T22:00:00Z",
@@ -346,12 +344,16 @@ test("Overview tab renders gracefully when terminated archive lacks summary_path
 	try {
 		const payload = {
 			conflict_graph: { computed_at: null, edges: [] },
-			issues: {
+			entries: {
 				"CC-503": {
-					decisions_log: [],
-					harness: "claude",
-					pr_number: 81,
+					id: "CC-503",
+					kind: "issue",
 					state: "merged",
+					harness: "claude",
+					title: "CC-503",
+					window: "CC-503",
+					decisions_log: [],
+					domain: { issue: { id: "CC-503", pr_number: 81 } },
 				},
 			},
 			merge_queue: [],

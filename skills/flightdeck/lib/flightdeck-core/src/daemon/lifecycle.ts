@@ -1,4 +1,4 @@
-// Port of flightdeck-daemon.bash lifecycle pieces: heartbeat writer,
+// Daemon lifecycle pieces: heartbeat writer,
 // signal-trap installation, max-lifetime self-exec, startup-cleanup
 // helpers. The pieces that compose the daemon lifecycle outside the
 // run-loop body itself.

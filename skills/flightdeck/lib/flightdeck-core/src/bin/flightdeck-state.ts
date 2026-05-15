@@ -133,9 +133,7 @@ switch (action) {
 function writeTrackedEntryFilter(id: string, entry: TrackedEntry): string {
 	const idJson = JSON.stringify(id);
 	const entryJson = JSON.stringify(entry);
-	// NOTE: projection jq is intentionally duplicated with the bash sibling for parity;
-	// next size increase here should move it to a shared jq fixture/heredoc.
-	return `(${idJson}) as $id | (${entryJson}) as $entry | def s($v): if ($v | type) == "string" then $v else null end; def n($v): if ($v | type) == "number" then $v else null end; def b($v): if ($v | type) == "boolean" then $v else null end; def arr($v): if ($v | type) == "array" then $v else [] end; .entries = ((.entries // {}) + {($id): $entry}) | (($entry.domain.issue.id // (if $entry.kind == "issue" then $entry.id else null end)) as $issue_id | if $issue_id == null then . else .issues = ((.issues // {}) + {($issue_id): ((.issues[$issue_id] // {}) + {window: s($entry.window), pane_target: s($entry.pane_target), pane_id: s($entry.pane_id), harness: s($entry.harness), launch: (if ($entry.launch | type) == "object" then $entry.launch else null end), worktree: (s($entry.domain.issue.worktree) // s($entry.cwd)), pr_number: n($entry.domain.issue.pr_number), oc_url: s($entry.adapter.oc_url), oc_session_id: s($entry.adapter.oc_session_id), oc_port: n($entry.adapter.oc_port), cc_url: s($entry.adapter.cc_url), cc_session_uuid: s($entry.adapter.cc_session_uuid), cc_port: n($entry.adapter.cc_port), cc_transcript: s($entry.adapter.cc_transcript), pi_bridge_pid: n($entry.adapter.pi_bridge_pid), pi_bridge_socket: s($entry.adapter.pi_bridge_socket), pi_session_id: s($entry.adapter.pi_session_id), cx_ws: s($entry.adapter.cx_ws), cx_thread_id: s($entry.adapter.cx_thread_id), state: s($entry.state), substate: s($entry.substate), unknown_since: s($entry.unknown_since), last_capture_hash: s($entry.last_capture_hash), last_response_at: s($entry.last_response_at), spawned_at: s($entry.spawned_at), last_polled_at: s($entry.last_polled_at), orchestration_started: b($entry.domain.issue.orchestration_started), scope_files_declared: n($entry.domain.issue.scope_files_declared), scope_files_actual: n($entry.domain.issue.scope_files_actual), decisions_log: arr($entry.decisions_log), merge_commit: (s($entry.merge_commit) // s($entry.domain.issue.merge_commit))})}) end)`;
+	return `.entries = ((.entries // {}) + {(${idJson}): ${entryJson}})`;
 }
 
 function readStateJson(): FlightdeckStateLike {
@@ -184,7 +182,7 @@ function runPhase(issue: string): void {
 		return;
 	}
 	if (existsSync(file)) {
-		const fd = getField(file, `.issues["${issue}"].state // empty`).trim();
+		const fd = getField(file, `.entries["${issue}"].state // empty`).trim();
 		if (fd) {
 			process.stdout.write(`fd:${fd}\n`);
 			return;

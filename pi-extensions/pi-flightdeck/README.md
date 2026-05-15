@@ -65,7 +65,7 @@ Open `/extensions:settings`; settings appear under the **Flightdeck Dashboard** 
 | Setting | What it does |
 | --- | --- |
 | Show dashboard widget | Render the persistent dashboard above the editor. |
-| Dashboard visibility | Where the persistent dashboard may render: `owner` (default), `tmux-session` (legacy same-session behavior), or `always`. Child panes remain suppressed in all modes. |
+| Dashboard visibility | Where the persistent dashboard may render: `owner` (default), `tmux-session` (any pane in the same tmux session), or `always`. Child panes remain suppressed in all modes. |
 | Dashboard default state | Initial state: `hidden`, `compact`, or `expanded`. |
 | Dashboard max sessions | Max tracked-session rows shown. The stored key remains `dashboardMaxItems`; old settings migrate automatically because only the label changed. |
 | Dashboard stale-after (min) | Suppress the session tree with a one-line hint when the daemon is dead and the last poll is older than N minutes. `0` disables. |

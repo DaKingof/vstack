@@ -52,21 +52,13 @@ function stateFile(repo: string): string {
 	return join(repo, "tmp", "flightdeck-state-test-session.json");
 }
 
-function run(repo: string, statePath: string, args: string[], useTs: boolean, extraEnv: Record<string, string> = {}): { stdout: string; stderr: string; status: number | null } {
+function run(repo: string, statePath: string, args: string[], extraEnv: Record<string, string> = {}): { stdout: string; stderr: string; status: number | null } {
 	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
 	env.TMUX = "/tmp/tmux-test";
 	env.TMUX_SHIM_STATE = statePath;
 	env.TMUX_PARITY_SESSION = "test-session";
 	env.PATH = `${SHIM_DIR}:${env.PATH ?? ""}`;
 	env.FLIGHTDECK_STATE_DIR = "tmp";
-	if (useTs) {
-		env.FLIGHTDECK_USE_TS_PANE_REGISTRY = "1";
-		env.FLIGHTDECK_USE_TS_FLIGHTDECK_STATE = "1";
-	} else {
-		env.FLIGHTDECK_USE_TS_PANE_REGISTRY = "0";
-		env.FLIGHTDECK_USE_TS_FLIGHTDECK_STATE = "0";
-	}
-	delete env.FLIGHTDECK_USE_TS;
 	Object.assign(env, extraEnv);
 	const r = spawnSync(SCRIPT, args, { cwd: repo, encoding: "utf8", env });
 	return { status: r.status, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
@@ -252,8 +244,8 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 		]);
 	});
 
-	for (const useTs of [false, true]) {
-		test(`start --prompt launches Pi through a tempfile without ANSI-C shell quoting (${useTs ? "ts registry" : "bash registry"})`, () => {
+	for (const useTs of [true]) {
+		test(`start --prompt launches Pi through a tempfile without ANSI-C shell quoting`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const runtimeDir = join(repo, "runtime");
@@ -266,7 +258,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--cwd", repo,
 				"--harness", "pi",
 				"--prompt", prompt,
-			], useTs, { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makePromptLaunchPiBridgeShim(repo), XDG_RUNTIME_DIR: runtimeDir });
+			], { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makePromptLaunchPiBridgeShim(repo), XDG_RUNTIME_DIR: runtimeDir });
 			expect(r.status).toBe(0);
 			const shimState = readShimState(shim);
 			const launchLine = shimState.panes["%1"]!.sent_keys!.find((line) => line.includes("bash") && line.includes("pi-shim"))!;
@@ -288,7 +280,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 			expect(existsSync(promptFile)).toBe(false);
 		});
 
-		test(`start creates tmux window and registers entry (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`start creates tmux window and registers entry`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const shim = writeShimState(repo, { panes: {}, session: "test-session", windows: {} });
@@ -300,7 +292,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--cwd", repo,
 				"--harness", "pi",
 				"--cmd", "printf ok",
-			], useTs);
+			]);
 			expect(r.status).toBe(0);
 			const shimState = readShimState(shim);
 			const pane = shimState.panes["%1"]!;
@@ -315,7 +307,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 			expect(state.entries["adhoc-start"].cwd).toBe(repo);
 		});
 
-		test(`start reports tmux new-window failure without registering entry (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`start reports tmux new-window failure without registering entry`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const shim = writeShimState(repo, { panes: {}, session: "test-session", windows: {} });
@@ -326,14 +318,14 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--cwd", repo,
 				"--harness", "pi",
 				"--cmd", "printf ok",
-			], useTs, { TMUX_SHIM_FAIL_NEW_WINDOW: "1" });
+			], { TMUX_SHIM_FAIL_NEW_WINDOW: "1" });
 			expect(r.status).not.toBe(0);
 			expect(r.stderr).toContain("tmux new-window failed");
 			expect(existsSync(stateFile(repo))).toBe(false);
 			expect(Object.keys(readShimState(shim).panes)).toHaveLength(0);
 		});
 
-		test(`start --prompt cleans tempfile when tmux new-window fails (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`start --prompt cleans tempfile when tmux new-window fails`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const runtimeDir = join(repo, "runtime-cleanup");
@@ -345,14 +337,14 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--cwd", repo,
 				"--harness", "pi",
 				"--prompt", "cleanup me",
-			], useTs, { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makeFailingPiBridgeShim(repo), XDG_RUNTIME_DIR: runtimeDir, TMUX_SHIM_FAIL_NEW_WINDOW: "1" });
+			], { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makeFailingPiBridgeShim(repo), XDG_RUNTIME_DIR: runtimeDir, TMUX_SHIM_FAIL_NEW_WINDOW: "1" });
 			expect(r.status).not.toBe(0);
 			expect(r.stderr).toContain("tmux new-window failed");
 			expect(promptFiles(runtimeDir)).toEqual([]);
 			expect(Object.keys(readShimState(shim).panes)).toHaveLength(0);
 		});
 
-		test(`start --prompt surfaces mkdir failure before tmux mutation (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`start --prompt surfaces mkdir failure before tmux mutation`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const runtimeFile = join(repo, "runtime-file");
@@ -365,13 +357,13 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--cwd", repo,
 				"--harness", "pi",
 				"--prompt", "mkdir fail",
-			], useTs, { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makeFailingPiBridgeShim(repo), XDG_RUNTIME_DIR: runtimeFile });
+			], { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makeFailingPiBridgeShim(repo), XDG_RUNTIME_DIR: runtimeFile });
 			expect(r.status).not.toBe(0);
 			expect(r.stderr).toContain("failed to create Pi prompt temp dir");
 			expect(Object.keys(readShimState(shim).panes)).toHaveLength(0);
 		});
 
-		test(`start --prompt surfaces mktemp failure before tmux mutation (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`start --prompt surfaces mktemp failure before tmux mutation`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const runtimeDir = join(repo, "runtime-mktemp-fails");
@@ -384,14 +376,14 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--cwd", repo,
 				"--harness", "pi",
 				"--prompt", "mktemp fail",
-			], useTs, { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makeFailingPiBridgeShim(repo), XDG_RUNTIME_DIR: runtimeDir, PATH: `${failingMktempDir}:${SHIM_DIR}:${process.env.PATH ?? ""}` });
+			], { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makeFailingPiBridgeShim(repo), XDG_RUNTIME_DIR: runtimeDir, PATH: `${failingMktempDir}:${SHIM_DIR}:${process.env.PATH ?? ""}` });
 			expect(r.status).not.toBe(0);
 			expect(r.stderr).toContain("failed to create Pi prompt temp file");
 			expect(promptFiles(runtimeDir)).toEqual([]);
 			expect(Object.keys(readShimState(shim).panes)).toHaveLength(0);
 		});
 
-		test(`start --prompt surfaces write failure and removes tempfile (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`start --prompt surfaces write failure and removes tempfile`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const runtimeDir = join(repo, "runtime-write-fails");
@@ -403,7 +395,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--cwd", repo,
 				"--harness", "pi",
 				"--prompt", "force-write-fail",
-			], useTs, {
+			], {
 				PI_BIN: makePiBinShim(repo),
 				PI_BRIDGE_BIN: makeFailingPiBridgeShim(repo),
 				XDG_RUNTIME_DIR: runtimeDir,
@@ -415,7 +407,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 			expect(Object.keys(readShimState(shim).panes)).toHaveLength(0);
 		});
 
-		test(`start records Pi discovery_error when bridge discovery times out (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`start records Pi discovery_error when bridge discovery times out`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const shim = writeShimState(repo, { panes: {}, session: "test-session", windows: {} });
@@ -427,7 +419,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--cwd", repo,
 				"--harness", "pi",
 				"--prompt", "say hi",
-			], useTs, { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makeStartListTimeoutPiBridgeShim(repo), PI_BRIDGE_CALL_TIMEOUT_SEC: "1", PI_BRIDGE_DISCOVERY_TIMEOUT: "5" });
+			], { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makeStartListTimeoutPiBridgeShim(repo), PI_BRIDGE_CALL_TIMEOUT_SEC: "1", PI_BRIDGE_DISCOVERY_TIMEOUT: "5" });
 			expect(Date.now() - started).toBeLessThan(4000);
 			expect(r.status).toBe(0);
 			expect(r.stderr).toContain("Warning: pi-bridge metadata discovery failed during start");
@@ -436,7 +428,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 			expect(state.entries["pi-timeout"].adapter.pi_bridge_socket).toBeNull();
 		});
 
-		test(`start surfaces pre-launch snapshot failure (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`start surfaces pre-launch snapshot failure`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const shim = writeShimState(repo, { panes: {}, session: "test-session", windows: {} });
@@ -447,7 +439,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--cwd", repo,
 				"--harness", "pi",
 				"--prompt", "say hi",
-			], useTs, { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makeSnapshotFailThenSuccessPiBridgeShim(repo), PI_BRIDGE_CALL_TIMEOUT_SEC: "1", PI_BRIDGE_DISCOVERY_TIMEOUT: "2" });
+			], { PI_BIN: makePiBinShim(repo), PI_BRIDGE_BIN: makeSnapshotFailThenSuccessPiBridgeShim(repo), PI_BRIDGE_CALL_TIMEOUT_SEC: "1", PI_BRIDGE_DISCOVERY_TIMEOUT: "2" });
 			expect(r.status).toBe(0);
 			expect(r.stderr).toContain("Warning: pre-launch pi snapshot failed");
 			const state = JSON.parse(readFileSync(stateFile(repo), "utf8"));
@@ -455,7 +447,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 			expect(state.entries["pi-snapshot-failed"].adapter.pi_bridge_socket).toBe("/tmp/pi-snapshot.sock");
 		});
 
-		test(`start --strict-discovery refuses pre-launch snapshot failure (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`start --strict-discovery refuses pre-launch snapshot failure`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const shim = writeShimState(repo, { panes: {}, session: "test-session", windows: {} });
@@ -467,7 +459,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--harness", "pi",
 				"--prompt", "say hi",
 				"--strict-discovery",
-			], useTs, { PI_BRIDGE_BIN: makeFailingPiBridgeShim(repo) });
+			], { PI_BRIDGE_BIN: makeFailingPiBridgeShim(repo) });
 			expect(r.status).not.toBe(0);
 			expect(r.stderr).toContain("Warning: pre-launch pi snapshot failed");
 			expect(r.stderr).toContain("--strict-discovery refusing Pi launch");
@@ -475,7 +467,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 			expect(existsSync(stateFile(repo))).toBe(false);
 		});
 
-		test(`attach records existing pi pane metadata (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`attach records existing pi pane metadata`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const shim = writeShimState(repo, {
@@ -491,7 +483,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--pane", "%77",
 				"--harness", "pi",
 				"--title", "Manual Pi",
-			], useTs, { PI_BRIDGE_BIN: bridge });
+			], { PI_BRIDGE_BIN: bridge });
 			expect(r.status).toBe(0);
 			const state = JSON.parse(readFileSync(stateFile(repo), "utf8"));
 			expect(state.entries["pi-session-77"].pane_id).toBe("%77");
@@ -500,7 +492,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 			expect(state.entries["pi-session-77"].adapter.pi_session_id).toBe("pi-session-77");
 		});
 
-		test(`attach records Pi discovery_error when bridge metadata is unavailable (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`attach records Pi discovery_error when bridge metadata is unavailable`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const shim = writeShimState(repo, {
@@ -515,7 +507,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--pane", "%88",
 				"--harness", "pi",
 				"--title", "Manual Missing Pi",
-			], useTs, { PI_BRIDGE_BIN: makeFailingPiBridgeShim(repo) });
+			], { PI_BRIDGE_BIN: makeFailingPiBridgeShim(repo) });
 			expect(r.status).toBe(0);
 			expect(r.stderr).toContain("Warning: pi-bridge metadata discovery failed during attach");
 			const state = JSON.parse(readFileSync(stateFile(repo), "utf8"));
@@ -523,7 +515,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 			expect(state.entries["pane-88"].discovery_error).toBe("pi_bridge_list_failed");
 		});
 
-		test(`attach records Pi discovery_error when bridge call times out (${useTs ? "ts registry" : "bash registry"})`, () => {
+		test(`attach records Pi discovery_error when bridge call times out`, () => {
 			const repo = makeRepo();
 			repos.push(repo);
 			const shim = writeShimState(repo, {
@@ -539,7 +531,7 @@ for arg in "$@"; do printf '<%s>\n' "$arg"; done
 				"--pane", "%89",
 				"--harness", "pi",
 				"--title", "Manual Timeout Pi",
-			], useTs, { PI_BRIDGE_BIN: makeHangingPiBridgeShim(repo), PI_BRIDGE_CALL_TIMEOUT_SEC: "1" });
+			], { PI_BRIDGE_BIN: makeHangingPiBridgeShim(repo), PI_BRIDGE_CALL_TIMEOUT_SEC: "1" });
 			expect(Date.now() - started).toBeLessThan(4000);
 			expect(r.status).toBe(0);
 			expect(r.stderr).toContain("Warning: pi-bridge metadata discovery failed during attach");

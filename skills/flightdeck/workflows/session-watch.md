@@ -25,7 +25,7 @@ Generic Flightdeck loop for tracked tmux-window sessions. It owns session state 
 | `cancelled` | Entry was intentionally stopped or declined. |
 | `dead` | Pane/window disappeared unexpectedly. |
 
-Issue mode may keep legacy states for compatibility, but the issue workflow maps them onto these generic states in `watch.md`.
+Issue mode adds `merge-ready`, `merged`, and `aborted` for the PR lifecycle; `watch.md` maps them onto the generic states via `domain.issue.phase` / `domain.issue.outcome`.
 
 ---
 
@@ -47,7 +47,7 @@ Issue mode may keep legacy states for compatibility, but the issue workflow maps
    .agents/skills/flightdeck/scripts/pane-registry reconcile
    REGISTRY_JSON=$(.agents/skills/flightdeck/scripts/pane-registry list --format json)
    ```
-   Do not read `.issues` directly in this workflow. `pane-registry list --format json` is backed by `flightdeck-state tracked-entries`, overlays `.entries` over legacy `.issues`, and preserves `kind` for domain routing.
+   `pane-registry list --format json` is backed by `flightdeck-state tracked-entries` (canonical `.entries` view) and preserves `kind` for domain routing.
 4. Spawn or attach the daemon idempotently after checking daemon status for live work:
    ```bash
    MASTER_PANE="${TMUX_PANE:-$(tmux display-message -p '#{pane_id}')}"
@@ -89,7 +89,7 @@ Issue mode may keep legacy states for compatibility, but the issue workflow maps
      fi
    fi
    ```
-   On every watch tick with live tracked entries, master MUST check `flightdeck-daemon status --session "$SESSION"`. If it reports `no daemon`, master MUST respawn with the current alive inner pane list from `pane-registry list --format inner-panes-live` / `inner-harnesses-live`, capture the `flightdeck-daemon start` exit code + stderr, and log the respawn in the cycle notes. Exit `4` means stale `--master`: re-resolve from `$TMUX_PANE` and retry once. Exit `1` may be a lock race: if `flightdeck-daemon status` then reports running, log `daemon-respawn-raced` and continue. Any remaining non-zero exit must surface `daemon-respawn-failed` to the user; do NOT yield/end the turn because the master loop is not armed for wakes. `flightdeck-daemon start` remains bash-default unless its opt-in TS gate is set; other daemon actions may run through the TS port.
+   On every watch tick with live tracked entries, master MUST check `flightdeck-daemon status --session "$SESSION"`. If it reports `no daemon`, master MUST respawn with the current alive inner pane list from `pane-registry list --format inner-panes-live` / `inner-harnesses-live`, capture the `flightdeck-daemon start` exit code + stderr, and log the respawn in the cycle notes. Exit `4` means stale `--master`: re-resolve from `$TMUX_PANE` and retry once. Exit `1` may be a lock race: if `flightdeck-daemon status` then reports running, log `daemon-respawn-raced` and continue. Any remaining non-zero exit must surface `daemon-respawn-failed` to the user; do NOT yield/end the turn because the master loop is not armed for wakes.
 5. Acquire the master-busy lock before processing:
    ```bash
    .agents/skills/flightdeck/scripts/flightdeck-state master-busy lock --owner-pid "$MASTER_OWNER_PID"

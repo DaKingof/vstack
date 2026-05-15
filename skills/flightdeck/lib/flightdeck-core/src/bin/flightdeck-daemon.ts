@@ -16,14 +16,10 @@ for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
 
 // Full TS port of skills/flightdeck/scripts/flightdeck-daemon.
 //
-// Ported actions: status / events / ack / find-window / health / stop /
-// start. The start action routes through src/daemon/start.ts →
-// foregroundStart → runLoop when FLIGHTDECK_USE_TS_DAEMON_START=1 (or
-// FLIGHTDECK_USE_TS=1) is set. Default falls back to the bash sibling
-// (scripts/flightdeck-daemon.bash) until per-script TS defaults flip.
-//
-// Bash daemon body is preserved for fallback; subscriber loop bodies
-// are shared between bash and TS daemons via scripts/lib/subscribers.bash.
+// Actions: status / events / ack / find-window / health / stop / start.
+// `start` routes through src/daemon/start.ts → foregroundStart → runLoop.
+// Subscriber loop bodies live in scripts/lib/subscribers.bash and are
+// invoked by the daemon as one bash subprocess per harness pane.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -80,7 +76,7 @@ if (_stateOnlyAction && !_needsTmuxResolve) {
 onShutdown(() => { /* placeholder — daemon-start will register its own cleanups */ });
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BASH_FALLBACK = resolve(HERE, "../../../../scripts/flightdeck-daemon.bash");
+const SCRIPT_PATH = resolve(HERE, "../../../../scripts/flightdeck-daemon");
 
 function die(msg: string, code = 2): never {
 	process.stderr.write(`${msg}\n`);
@@ -119,7 +115,7 @@ for (let i = 0; i < argv.length; i += 1) {
 }
 if (!sessionName) die("--session required");
 
-const USE_TS_START = process.env.FLIGHTDECK_USE_TS_DAEMON_START === "1" || process.env.FLIGHTDECK_USE_TS === "1";
+
 
 // Resolve tmux session_id + session_key from either a session name or a
 // raw tmux session_id ($N). Mirrors bash resolve_session_pair.
@@ -148,14 +144,10 @@ sessionName = resolvedSessionName;
 
 const stateDir = fdResolveStateDir();
 
-// start: route to the TS daemon when FLIGHTDECK_USE_TS_DAEMON_START=1
-// (or FLIGHTDECK_USE_TS=1). Otherwise forward to the bash daemon so
-// the canonical production path stays unchanged until live-test
-// green flips the default. The TS run-loop is byte-equivalent in
-// observable behavior to bash (state files, locking, wake payload,
-// subscriber pid files).
+// start: run the TS daemon. The run-loop owns wake delivery, subscriber
+// lifecycle, and state-file mutations under the per-session lock.
 if (action === "start") {
-	if (USE_TS_START) {
+	{
 		const { start } = await import("../daemon/start.ts");
 		// Parse start args inline.
 		let masterTarget = "";
@@ -201,7 +193,7 @@ if (action === "start") {
 		const verbose = process.env.FD_VERBOSE === "1";
 
 		const { dirname, resolve } = await import("node:path");
-		const scriptsDir = dirname(BASH_FALLBACK);
+		const scriptsDir = dirname(SCRIPT_PATH);
 		const classifierCandidate = process.env.FD_CLASSIFIER ?? resolve(scriptsDir, "prompt-classify");
 		const { statSync } = await import("node:fs");
 		let classifierBin = "";
@@ -226,14 +218,12 @@ if (action === "start") {
 			spawnMode,
 			foreground,
 			fromHandoff,
-			scriptPath: BASH_FALLBACK.replace(/\.bash$/, ""),
+			scriptPath: SCRIPT_PATH,
 			origArgs: argv,
 			paneRegistryBin,
 		});
 		process.exit(0);
 	}
-	const r = spawnSync(BASH_FALLBACK, ["start", "--session", sessionName, ...rest], { stdio: "inherit" });
-	process.exit(r.status ?? 1);
 }
 const pidFile = sessionKey ? fdPidFile(stateDir, sessionKey) : "";
 const pidLock = sessionKey ? fdPidLock(stateDir, sessionKey) : "";

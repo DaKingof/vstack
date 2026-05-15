@@ -12,7 +12,7 @@ Routes a single generic prompt/event for one tracked entry. This file is deliber
 
 ## § 1: Look up entry and guard domain
 
-Read the normalized tracked entry, not only the legacy issue projection:
+Read the normalized tracked entry:
 
 ```bash
 ENTRY_JSON=$(.agents/skills/flightdeck/scripts/pane-registry list --format json \

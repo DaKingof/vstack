@@ -18,11 +18,8 @@ function makeRepo(): string {
 	return dir;
 }
 
-function run(useTs: boolean, cwd: string, args: string[]): { stdout: string; stderr: string; status: number | null } {
+function run(cwd: string, args: string[]): { stdout: string; stderr: string; status: number | null } {
 	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-	if (useTs) env.FLIGHTDECK_USE_TS_PARALLEL_GROUPS = "1";
-	else delete env.FLIGHTDECK_USE_TS_PARALLEL_GROUPS;
-	delete env.FLIGHTDECK_USE_TS;
 	// Bash resolves project root from script location; explicit ORCH_CACHE_DIR
 	// pins both implementations to the test's isolated repo.
 	env.ORCH_CACHE_DIR = join(cwd, ".cache/orchestration");
@@ -40,36 +37,31 @@ function readGroupsFile(repo: string): unknown {
 	return JSON.parse(readFileSync(join(repo, ".cache/orchestration/parallel-groups.json"), "utf8"));
 }
 
-let bashRepo = "";
 let tsRepo = "";
 
 beforeEach(() => {
-	bashRepo = makeRepo();
 	tsRepo = makeRepo();
 });
 
 afterEach(() => {
-	for (const d of [bashRepo, tsRepo]) {
-		if (d && existsSync(d)) rmSync(d, { force: true, recursive: true });
-	}
+	if (tsRepo && existsSync(tsRepo)) rmSync(tsRepo, { force: true, recursive: true });
 });
 
 describe("parallel-groups parity", () => {
 	test("read on empty cache returns []", () => {
-		const a = run(false, bashRepo, ["read"]);
-		const b = run(true, tsRepo, ["read"]);
+		const a = run(tsRepo, ["read"]);
+		const b = run(tsRepo, ["read"]);
 		expect(b.stdout).toBe(a.stdout);
 		expect(a.stdout.trim()).toBe("[]");
 	});
 
 	test("write assigns sequential group ids", () => {
-		for (const repo of [bashRepo, tsRepo]) {
-			const useTs = repo === tsRepo;
+		for (const repo of [tsRepo]) {
 			seedIssues(repo, [
 				{ identifier: "CC-001", updatedAt: "2026-05-01T00:00:00Z" },
 				{ identifier: "CC-002", updatedAt: "2026-05-01T00:00:00Z" },
 			]);
-			const r1 = run(useTs, repo, ["write", JSON.stringify({
+			const r1 = run(repo, ["write", JSON.stringify({
 				children_fingerprints: {},
 				issue_fingerprints: { "CC-001": "2026-05-01T00:00:00Z", "CC-002": "2026-05-01T00:00:00Z" },
 				issues: ["CC-001", "CC-002"],
@@ -77,7 +69,7 @@ describe("parallel-groups parity", () => {
 			})]);
 			expect(r1.status).toBe(0);
 			expect(r1.stdout.trim()).toBe("1");
-			const r2 = run(useTs, repo, ["write", JSON.stringify({
+			const r2 = run(repo, ["write", JSON.stringify({
 				children_fingerprints: {},
 				issue_fingerprints: { "CC-001": "2026-05-01T00:00:00Z" },
 				issues: ["CC-001"],
@@ -85,54 +77,52 @@ describe("parallel-groups parity", () => {
 			})]);
 			expect(r2.stdout.trim()).toBe("2");
 		}
-		const a = run(false, bashRepo, ["read"]);
-		const b = run(true, tsRepo, ["read"]);
+		const a = run(tsRepo, ["read"]);
+		const b = run(tsRepo, ["read"]);
 		expect(JSON.parse(b.stdout)).toEqual(JSON.parse(a.stdout));
 	});
 
 	test("lookup finds the right group", () => {
-		for (const repo of [bashRepo, tsRepo]) {
-			const useTs = repo === tsRepo;
+		for (const repo of [tsRepo]) {
 			seedIssues(repo, [{ identifier: "CC-001", updatedAt: "ts" }, { identifier: "CC-002", updatedAt: "ts" }]);
-			run(useTs, repo, ["write", JSON.stringify({
+			run(repo, ["write", JSON.stringify({
 				issue_fingerprints: { "CC-001": "ts", "CC-002": "ts" },
 				issues: ["CC-001", "CC-002"],
 				verdict: "safe",
 			})]);
 		}
-		const a = run(false, bashRepo, ["lookup", "CC-001"]);
-		const b = run(true, tsRepo, ["lookup", "CC-001"]);
+		const a = run(tsRepo, ["lookup", "CC-001"]);
+		const b = run(tsRepo, ["lookup", "CC-001"]);
 		expect(b.stdout.trim()).toBe(a.stdout.trim());
 		expect(a.stdout.trim()).toBe("1");
 	});
 
 	test("needs-refresh: fewer than 2 → exit 1", () => {
-		const a = run(false, bashRepo, ["needs-refresh", "CC-001"]);
-		const b = run(true, tsRepo, ["needs-refresh", "CC-001"]);
+		const a = run(tsRepo, ["needs-refresh", "CC-001"]);
+		const b = run(tsRepo, ["needs-refresh", "CC-001"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(1);
 		expect(b.stdout).toBe(a.stdout);
 	});
 
 	test("needs-refresh: fresh covered → exit 1", () => {
-		for (const repo of [bashRepo, tsRepo]) {
-			const useTs = repo === tsRepo;
+		for (const repo of [tsRepo]) {
 			seedIssues(repo, [{ identifier: "CC-001", updatedAt: "ts" }, { identifier: "CC-002", updatedAt: "ts" }]);
-			run(useTs, repo, ["write", JSON.stringify({
+			run(repo, ["write", JSON.stringify({
 				issue_fingerprints: { "CC-001": "ts", "CC-002": "ts" },
 				issues: ["CC-001", "CC-002"],
 				verdict: "safe",
 			})]);
 		}
-		const a = run(false, bashRepo, ["needs-refresh", "CC-001", "CC-002"]);
-		const b = run(true, tsRepo, ["needs-refresh", "CC-001", "CC-002"]);
+		const a = run(tsRepo, ["needs-refresh", "CC-001", "CC-002"]);
+		const b = run(tsRepo, ["needs-refresh", "CC-001", "CC-002"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(1);
 	});
 
 	test("needs-refresh: new issue → exit 0", () => {
-		const a = run(false, bashRepo, ["needs-refresh", "CC-001", "CC-NEW"]);
-		const b = run(true, tsRepo, ["needs-refresh", "CC-001", "CC-NEW"]);
+		const a = run(tsRepo, ["needs-refresh", "CC-001", "CC-NEW"]);
+		const b = run(tsRepo, ["needs-refresh", "CC-001", "CC-NEW"]);
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(0);
 		expect(b.stdout).toBe(a.stdout);
@@ -146,7 +136,7 @@ describe("parallel-groups parity", () => {
 		const { spawn } = await import("node:child_process");
 		const kids = await Promise.all(
 			Array.from({ length: 10 }, () => new Promise<{ stdout: string }>((res) => {
-				const env = { ...process.env, FLIGHTDECK_USE_TS_PARALLEL_GROUPS: "1", ORCH_CACHE_DIR: join(tsRepo, ".cache/orchestration") } as Record<string, string>;
+				const env = { ...process.env, ORCH_CACHE_DIR: join(tsRepo, ".cache/orchestration") } as Record<string, string>;
 				const p = spawn(SCRIPT, ["write", payload], { cwd: tsRepo, env });
 				let out = "";
 				p.stdout?.on("data", (b) => { out += b.toString(); });
@@ -160,34 +150,32 @@ describe("parallel-groups parity", () => {
 
 	test("clear --group N rejects non-numeric input (no mutation)", () => {
 		seedIssues(tsRepo, [{ identifier: "CC-001", updatedAt: "ts" }]);
-		seedIssues(bashRepo, [{ identifier: "CC-001", updatedAt: "ts" }]);
+		seedIssues(tsRepo, [{ identifier: "CC-001", updatedAt: "ts" }]);
 		const payload = JSON.stringify({ issue_fingerprints: { "CC-001": "ts" }, issues: ["CC-001"], verdict: "safe" });
-		for (const repo of [bashRepo, tsRepo]) {
-			const useTs = repo === tsRepo;
-			run(useTs, repo, ["write", payload]);
-			run(useTs, repo, ["write", payload]);
+		for (const repo of [tsRepo]) {
+			run(repo, ["write", payload]);
+			run(repo, ["write", payload]);
 		}
 		const beforeTs = JSON.stringify(readGroupsFile(tsRepo));
-		const beforeBash = JSON.stringify(readGroupsFile(bashRepo));
-		const a = run(false, bashRepo, ["clear", "--group", "1abc2"]);
-		const b = run(true, tsRepo, ["clear", "--group", "1abc2"]);
+		const beforeBash = JSON.stringify(readGroupsFile(tsRepo));
+		const a = run(tsRepo, ["clear", "--group", "1abc2"]);
+		const b = run(tsRepo, ["clear", "--group", "1abc2"]);
 		// Bash exits nonzero on jq parse error; TS exits 2 explicitly
 		// with a usage-error message. Both implementations must not
 		// mutate the file with a bogus id.
 		expect(a.status).not.toBe(0);
 		expect(b.status).toBe(2);
-		expect(JSON.stringify(readGroupsFile(bashRepo))).toBe(beforeBash);
+		expect(JSON.stringify(readGroupsFile(tsRepo))).toBe(beforeBash);
 		expect(JSON.stringify(readGroupsFile(tsRepo))).toBe(beforeTs);
 	});
 
 	test("clear --group removes only matching id", () => {
-		for (const repo of [bashRepo, tsRepo]) {
-			const useTs = repo === tsRepo;
+		for (const repo of [tsRepo]) {
 			seedIssues(repo, [{ identifier: "CC-001", updatedAt: "ts" }]);
-			run(useTs, repo, ["write", JSON.stringify({ issue_fingerprints: { "CC-001": "ts" }, issues: ["CC-001"], verdict: "safe" })]);
-			run(useTs, repo, ["write", JSON.stringify({ issue_fingerprints: { "CC-001": "ts" }, issues: ["CC-001"], verdict: "safe" })]);
-			run(useTs, repo, ["clear", "--group", "1"]);
+			run(repo, ["write", JSON.stringify({ issue_fingerprints: { "CC-001": "ts" }, issues: ["CC-001"], verdict: "safe" })]);
+			run(repo, ["write", JSON.stringify({ issue_fingerprints: { "CC-001": "ts" }, issues: ["CC-001"], verdict: "safe" })]);
+			run(repo, ["clear", "--group", "1"]);
 		}
-		expect(readGroupsFile(tsRepo)).toEqual(readGroupsFile(bashRepo));
+		expect(readGroupsFile(tsRepo)).toEqual(readGroupsFile(tsRepo));
 	});
 });

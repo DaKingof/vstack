@@ -16,11 +16,8 @@ if (!process.env.TMUX) {
 	test.skip("pane-poll parity requires tmux", () => undefined);
 }
 
-function run(useTs: boolean, args: string[], stdin?: string): { stdout: string; stderr: string; status: number | null } {
+function run(args: string[], stdin?: string): { stdout: string; stderr: string; status: number | null } {
 	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-	if (useTs) env.FLIGHTDECK_USE_TS_PANE_POLL = "1";
-	else delete env.FLIGHTDECK_USE_TS_PANE_POLL;
-	delete env.FLIGHTDECK_USE_TS;
 	const r = spawnSync(SCRIPT, args, { encoding: "utf8", env, input: stdin });
 	return { status: r.status, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
 }
@@ -28,23 +25,23 @@ function run(useTs: boolean, args: string[], stdin?: string): { stdout: string; 
 describe("pane-poll parity", () => {
 	test("dead pane (non-existent window)", () => {
 		const target = "no-such-session-XYZ:no-such-window.0";
-		const a = run(false, [target]);
-		const b = run(true, [target]);
+		const a = run([target]);
+		const b = run([target]);
 		expect(b.status).toBe(a.status);
 		expect(JSON.parse(b.stdout)).toEqual(JSON.parse(a.stdout));
 	});
 
 	test("dead pane via raw %pane-id", () => {
 		const target = "%999999";
-		const a = run(false, [target]);
-		const b = run(true, [target]);
+		const a = run([target]);
+		const b = run([target]);
 		expect(b.status).toBe(a.status);
 		expect(JSON.parse(b.stdout)).toEqual(JSON.parse(a.stdout));
 	});
 
 	test("batch mode empty array → no stdout", () => {
-		const a = run(false, ["--batch", "-"], "[]");
-		const b = run(true, ["--batch", "-"], "[]");
+		const a = run(["--batch", "-"], "[]");
+		const b = run(["--batch", "-"], "[]");
 		expect(b.status).toBe(a.status);
 		expect(b.stdout).toBe(a.stdout);
 		expect(a.stdout).toBe("");
@@ -54,16 +51,16 @@ describe("pane-poll parity", () => {
 		const arr = JSON.stringify([
 			{ harness: "claude", issue: "FAKE-001", pane_target: "no-such:nope.0" },
 		]);
-		const a = run(false, ["--batch", "-"], arr);
-		const b = run(true, ["--batch", "-"], arr);
+		const a = run(["--batch", "-"], arr);
+		const b = run(["--batch", "-"], arr);
 		const aParsed = a.stdout.trim().split("\n").map((s) => JSON.parse(s));
 		const bParsed = b.stdout.trim().split("\n").map((s) => JSON.parse(s));
 		expect(bParsed).toEqual(aParsed);
 	});
 
 	test("batch mode rejects non-array input", () => {
-		const a = run(false, ["--batch", "-"], '{"not":"an array"}');
-		const b = run(true, ["--batch", "-"], '{"not":"an array"}');
+		const a = run(["--batch", "-"], '{"not":"an array"}');
+		const b = run(["--batch", "-"], '{"not":"an array"}');
 		expect(b.status).toBe(a.status);
 		expect(a.status).toBe(2);
 	});
@@ -108,8 +105,7 @@ describe("pane-poll parity", () => {
 			FD_STATE_DIR: stateDir,
 			FD_ADAPTER_READ_TIMEOUT_SEC: "1",
 		};
-		delete env.FLIGHTDECK_USE_TS;
-		// Use batch mode with explicit oc_url/oc_session so the adapter
+			// Use batch mode with explicit oc_url/oc_session so the adapter
 		// path is forced regardless of registry contents.
 		const batch = JSON.stringify([{
 			harness: "opencode",

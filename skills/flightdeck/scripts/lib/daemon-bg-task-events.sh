@@ -1,22 +1,17 @@
 #!/usr/bin/env bash
 # vstack#15: emit canonical pi-bg-task-exit wake events.
 #
-# Extracted from flightdeck-daemon.bash + subscribers.bash so the new
-# pi-background-tasks event handling does not balloon either file. Both
-# the bash daemon's inline pi_subscriber_loop and the shared
-# subscribers.bash pi_subscriber_loop source this file and call
-# emit_pi_bg_task_exit_event when they see a vstack-background-tasks:event
-# message_end with details.eventType="exit".
+# Sourced by the Pi subscriber body in subscribers.bash. When the
+# subscriber sees a vstack-background-tasks:event message_end with
+# details.eventType="exit" it calls emit_pi_bg_task_exit_event from
+# this file.
 #
-# Required env (already set by both callers):
+# Required env (set by the subscriber):
 #   SESSION_LOCK     — flock target for the wake-events log
 #   WAKE_EVENTS_LOG  — append target for canonical wake rows
-#
-# Reviewer-structure (vstack#15 round 3, BLOCKER #1) target: keep
-# flightdeck-daemon.bash growth to zero on new event classes.
 
 # Canonical contract constants. Kept in sync with the TS port via
-# lib/flightdeck-core/src/events/bg-task-exit.ts; the parity test in
+# lib/flightdeck-core/src/events/bg-task-exit.ts; the contract test in
 # tests/unit/bg-task-exit-contract.test.ts asserts both match.
 export BG_TASK_EVENT_CUSTOM_TYPE="vstack-background-tasks:event"
 export BG_TASK_EXIT_EVENT_TYPE="exit"

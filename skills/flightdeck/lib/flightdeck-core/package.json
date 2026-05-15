@@ -2,7 +2,7 @@
   "name": "flightdeck-core",
   "private": true,
   "type": "module",
-  "description": "TypeScript port of the flightdeck skill scripts (daemon, state, registry, classifier, pane I/O, protocol adapters). Trampolined from skills/flightdeck/scripts/* via FLIGHTDECK_USE_TS.",
+  "description": "TypeScript implementation of the flightdeck skill scripts (daemon, state, registry, classifier, pane I/O, protocol adapters). Trampolined from skills/flightdeck/scripts/*.",
   "scripts": {
     "test": "bun test",
     "test:parity": "bun test tests/parity",

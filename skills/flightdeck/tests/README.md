@@ -9,17 +9,12 @@ These tests are local smoke tests for the `flightdeck` skill's harness adapters 
 - GNU bash 5+ (`bash --version`)
 - GNU date (`date --version` from coreutils)
 - `jq`, `git`, `sha256sum`/coreutils, and the relevant harness CLI for adapter-specific tests (`opencode`, `codex`, etc.)
-- `bun` (https://bun.sh) for the TS-port parity test suite and for
-  trampolined TS execution. `bun` is a hard runtime dependency on the
-  default TS path; only required-for-bash-only setups
-  (`FLIGHTDECK_USE_TS=0`) can omit it
+- `bun` (https://bun.sh) — hard runtime dependency for every flightdeck
+  script. Trampolines under `scripts/` exec `bun .../src/bin/<script>.ts`.
 
-## TS-port parity tests
+## Bun test suite
 
-The TS port under `skills/flightdeck/lib/flightdeck-core/` ships a Bun
-test suite that asserts byte-for-byte parity between each ported script
-and its bash sibling. Run it whenever the bash or TS body of a ported
-script changes:
+The TypeScript implementation under `skills/flightdeck/lib/flightdeck-core/` ships a Bun functional test suite:
 
 ```bash
 cd skills/flightdeck/lib/flightdeck-core
@@ -27,31 +22,11 @@ bun test
 bun run typecheck
 ```
 
-Parity is required — but not sufficient — before changing any
-`FLIGHTDECK_USE_TS*` default. The live wake suite below must also be
-green under the same configuration.
-
 ## `live-wake.sh`
 
 `./skills/flightdeck/tests/live-wake.sh` is the full daemon wake smoke test. Runtime is normally about 2 minutes.
 
-By default it exercises the **TS trampolines** — the same path that
-production uses. To validate the legacy bash sibling for a specific
-script, opt out of the TS default before invoking the test:
-
-```bash
-# Exercise the bash prompt-classify sibling in live-wake.
-FLIGHTDECK_USE_TS_PROMPT_CLASSIFY=0 skills/flightdeck/tests/live-wake.sh
-
-# Exercise every trampoline's bash sibling.
-FLIGHTDECK_USE_TS=0 skills/flightdeck/tests/live-wake.sh
-```
-
-The `--use-ts` flag is still available as an explicit opt-in for the
-daemon `start` sub-action (which keeps its own opt-in gate;
-`FLIGHTDECK_USE_TS_DAEMON_START=1` plus the trampoline default). The
-bash daemon body remains the default `start` runtime until one full
-production cycle on the TS run-loop.
+It exercises the production path end-to-end: pi-bridge registration, `pane-poll`, the daemon `start` run-loop, and the wake delivery into a Pi master.
 
 It asserts that:
 
@@ -60,14 +35,6 @@ It asserts that:
 3. `flightdeck-daemon start --in-tmux-window --master-harness pi` can launch against that master and a bash inner pane;
 4. a terminal bell in the inner pane is detected by the daemon fallback path; and
 5. the daemon wakes the Pi master through `pi-bridge send` with `/skill:flightdeck watch --from-daemon`, observable in `pi-bridge history`, with `harness=pi via=pi-bridge` in the daemon log. The test fails if that daemon log is absent.
-
-Note: step 3 (`flightdeck-daemon start`) defaults to the bash daemon
-body even when the other trampolines are on TS. The TS run-loop +
-subscriber lifecycle is complete and parity-tested, but its runtime
-default is gated on a separate opt-in (`FLIGHTDECK_USE_TS_DAEMON_START=1`
-or `FLIGHTDECK_USE_TS=1`) until one full production cycle confirms
-stability. Use `live-wake.sh --use-ts` to exercise the TS daemon run
-loop end-to-end.
 
 Run full mode from inside tmux:
 

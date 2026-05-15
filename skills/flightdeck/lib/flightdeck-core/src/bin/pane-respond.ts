@@ -10,7 +10,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ocAttachArgsFromSpawn, ocIssueFromPaneTarget, ocSpawnFile } from "../paths/oc.ts";
+import { ocAttachArgsFromSpawn, ocIssueFromPaneTarget } from "../paths/oc.ts";
 import { ccSpawnFile } from "../paths/cc.ts";
 import { piBridgeIsFresh, piResolveBridgeBin, piSpawnFile } from "../paths/pi.ts";
 import { cxBridgeRun, cxSpawnFile } from "../paths/codex.ts";
@@ -233,7 +233,7 @@ function resolvePaneTargetFromPaneId(paneId: string): PaneIdResolution {
 	}
 	if (!id) return { kind: "not_registered" };
 	const idJson = JSON.stringify(id);
-	const expr = `(.entries[${idJson}].pane_target // .issues[${idJson}].pane_target // empty)`;
+	const expr = `.entries[${idJson}].pane_target // empty`;
 	const sr = spawnSync(FLIGHTDECK_STATE, ["get", expr], { encoding: "utf8" });
 	if (sr.status !== 0) return { kind: "missing_pane_target" };
 	const target = (sr.stdout ?? "").trim().replace(/^"|"$/g, "");
