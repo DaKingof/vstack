@@ -177,7 +177,11 @@ fn is_archive_path(path: &Path) -> bool {
 pub enum ModalState {
     None,
     Help,
+    ThemePicker,
     DecisionDetail,
+    SessionDetail,
+    EventDetail,
+    FilterInput,
 }
 
 #[derive(Debug)]
@@ -201,6 +205,7 @@ pub struct Model {
     pub modal: ModalState,
     pub ui: UiFlags,
     pub feed_filter: FeedFilter,
+    pub event_detail: Option<usize>,
     pub current_pane_id: Option<String>,
     pub quit_requested: bool,
     pub error: Option<String>,
@@ -248,6 +253,7 @@ impl Model {
                 hide_noise: true,
             },
             feed_filter: FeedFilter::new(),
+            event_detail: None,
             current_pane_id: std::env::var("TMUX_PANE")
                 .ok()
                 .filter(|pane| !pane.is_empty()),

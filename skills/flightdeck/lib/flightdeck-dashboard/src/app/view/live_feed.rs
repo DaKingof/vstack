@@ -4,12 +4,19 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
+use crate::app::hitmap::{ClickAction, HitMap, ScrollSource};
 use crate::app::model::Model;
 use crate::app::motion::{Effect, EffectKind, EffectTarget};
 use crate::app::theme::Palette;
 use crate::state::snapshot::{Event, EventImportance};
 
-pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: &Palette) {
+pub fn render(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    theme: &Palette,
+    hitmap: &mut HitMap,
+) {
     let events = model.filtered_events();
     let hidden_noise = model.hidden_noise_count();
     let row_count = events.len().saturating_add(usize::from(hidden_noise > 0));
@@ -52,6 +59,19 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: &Palette)
         Cell::from("Message"),
     ])
     .style(theme.header());
+    hitmap.push(area, ClickAction::ScrollDown(ScrollSource::Activity), 0);
+    for idx in 0..model.live_feed_row_count() {
+        hitmap.push(
+            Rect::new(
+                area.x.saturating_add(1),
+                area.y.saturating_add(2 + idx as u16),
+                area.width.saturating_sub(2),
+                1,
+            ),
+            ClickAction::SelectRow(idx),
+            0,
+        );
+    }
     let table = Table::new(
         rows,
         [

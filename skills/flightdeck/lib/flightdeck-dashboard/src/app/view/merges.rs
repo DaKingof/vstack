@@ -3,11 +3,18 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
+use crate::app::hitmap::HitMap;
 use crate::app::model::Model;
 use crate::app::theme::Palette;
 use crate::state::snapshot::SessionKind;
 
-pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: &Palette) {
+pub fn render(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    theme: &Palette,
+    _hitmap: &mut HitMap,
+) {
     if !model.has_issue_sessions() {
         render_no_issue(frame, area, theme);
         return;

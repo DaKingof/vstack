@@ -16,6 +16,7 @@ pub enum Action {
     ToggleNoise,
     ToggleCompact,
     ToggleHelp,
+    OpenThemePicker,
     Quit,
     CloseModal,
 }
@@ -99,6 +100,11 @@ pub const BINDINGS: &[KeyBinding] = &[
         action: Action::ToggleHelp,
     },
     KeyBinding {
+        keys: "T",
+        description: "Choose dashboard theme",
+        action: Action::OpenThemePicker,
+    },
+    KeyBinding {
         keys: "q / Ctrl+C",
         description: "Quit",
         action: Action::Quit,
@@ -126,6 +132,7 @@ pub fn action_for(key: &KeyEvent) -> Option<Action> {
             Some(Action::ToggleCompact)
         }
         KeyCode::Char('?') => Some(Action::ToggleHelp),
+        KeyCode::Char('t') | KeyCode::Char('T') => Some(Action::OpenThemePicker),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::CloseModal),

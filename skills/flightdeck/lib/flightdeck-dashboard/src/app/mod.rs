@@ -1,6 +1,8 @@
 pub mod command;
 pub mod effects;
+pub mod hitmap;
 pub mod keymap;
+pub mod labels;
 pub mod model;
 pub mod motion;
 pub mod msg;

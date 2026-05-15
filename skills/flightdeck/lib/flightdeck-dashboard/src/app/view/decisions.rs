@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
+use crate::app::hitmap::{ClickAction, HitMap, ScrollSource};
 use crate::app::model::Model;
 use crate::app::theme::Palette;
 
@@ -16,7 +17,13 @@ pub struct DecisionRow {
     pub answer: String,
 }
 
-pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: &Palette) {
+pub fn render(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    theme: &Palette,
+    hitmap: &mut HitMap,
+) {
     let rows = decision_rows(model);
     if rows.is_empty() {
         let block = Block::default()
@@ -67,6 +74,19 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: &Palette)
             Span::styled(" decisions ", theme.title()),
             Span::styled("Enter opens answer detail", theme.muted()),
         ]));
+    hitmap.push(area, ClickAction::ScrollDown(ScrollSource::Decisions), 0);
+    for idx in 0..rows.len() {
+        hitmap.push(
+            Rect::new(
+                area.x.saturating_add(1),
+                area.y.saturating_add(2 + idx as u16),
+                area.width.saturating_sub(2),
+                1,
+            ),
+            ClickAction::SelectRow(idx),
+            0,
+        );
+    }
     let table = Table::new(
         table_rows,
         [

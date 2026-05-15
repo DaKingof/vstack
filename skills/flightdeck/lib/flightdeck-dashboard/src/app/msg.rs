@@ -1,5 +1,6 @@
 use crossterm::event::KeyEvent;
 
+use crate::app::hitmap::ClickAction;
 use crate::app::model::ReadSourceState;
 use crate::daemon::rpc::DaemonStatus as RuntimeDaemonStatus;
 use crate::state::snapshot::{DashboardSnapshot, Event};
@@ -10,6 +11,7 @@ pub enum Msg {
     Tick,
     AnimateTick,
     KeyPressed(KeyEvent),
+    Click(ClickAction),
     Resize(u16, u16),
     SnapshotUpdated {
         snapshot: Box<DashboardSnapshot>,

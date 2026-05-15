@@ -5,10 +5,17 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::command::SnapshotSource;
+use crate::app::hitmap::HitMap;
 use crate::app::model::{Model, ReadSourceState};
 use crate::app::theme::Palette;
 
-pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: &Palette) {
+pub fn render(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    theme: &Palette,
+    _hitmap: &mut HitMap,
+) {
     if !matches!(model.snapshot_source, SnapshotSource::Socket(_)) {
         render_file_mode(frame, area, model, theme);
         return;

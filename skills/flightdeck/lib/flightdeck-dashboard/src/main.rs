@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use clap::Parser;
 use color_eyre::eyre::Result;
-use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyEventKind, MouseButton, MouseEventKind};
 use flightdeck_dashboard::app::command::SnapshotSource;
 use flightdeck_dashboard::app::effects::Effects;
+use flightdeck_dashboard::app::hitmap::{ClickAction, HitMap};
 use flightdeck_dashboard::app::model::{utc_now, Model, ReadSourceState};
 use flightdeck_dashboard::app::motion::{self, MotionLevel};
 use flightdeck_dashboard::app::msg::Msg;
@@ -453,8 +454,9 @@ async fn run_app_loop(
     anim.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut clock = tokio::time::interval(Duration::from_millis(CLOCK_TICK_MS));
     clock.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut hitmap = HitMap::default();
 
-    terminal.draw(|frame| view::render(frame, model))?;
+    terminal.draw(|frame| view::render_with_hitmap(frame, model, &mut hitmap))?;
     loop {
         tokio::select! {
             biased;
@@ -467,7 +469,7 @@ async fn run_app_loop(
                 effects.run_commands(commands);
             }
             maybe_event = events.next() => {
-                if let Some(msg) = event_to_msg(maybe_event) {
+                if let Some(msg) = event_to_msg(maybe_event, &hitmap) {
                     let commands = update(model, msg);
                     effects.run_commands(commands);
                 }
@@ -485,7 +487,7 @@ async fn run_app_loop(
                 effects.run_commands(commands);
             }
         }
-        terminal.draw(|frame| view::render(frame, model))?;
+        terminal.draw(|frame| view::render_with_hitmap(frame, model, &mut hitmap))?;
         if model.quit_requested {
             break;
         }
@@ -493,8 +495,34 @@ async fn run_app_loop(
     Ok(())
 }
 
+fn mouse_to_msg(
+    kind: MouseEventKind,
+    column: u16,
+    row: u16,
+    hitmap: &HitMap,
+) -> Option<flightdeck_dashboard::app::msg::Msg> {
+    let action = match kind {
+        MouseEventKind::Down(MouseButton::Left) => hitmap.hit(column, row),
+        MouseEventKind::ScrollUp => hitmap.hit(column, row).and_then(|action| match action {
+            ClickAction::ScrollUp(source) | ClickAction::ScrollDown(source) => {
+                Some(ClickAction::ScrollUp(source))
+            }
+            _ => None,
+        }),
+        MouseEventKind::ScrollDown => hitmap.hit(column, row).and_then(|action| match action {
+            ClickAction::ScrollUp(source) | ClickAction::ScrollDown(source) => {
+                Some(ClickAction::ScrollDown(source))
+            }
+            _ => None,
+        }),
+        _ => None,
+    }?;
+    Some(flightdeck_dashboard::app::msg::Msg::Click(action))
+}
+
 fn event_to_msg(
     event: Option<std::io::Result<Event>>,
+    hitmap: &HitMap,
 ) -> Option<flightdeck_dashboard::app::msg::Msg> {
     match event {
         Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
@@ -503,6 +531,7 @@ fn event_to_msg(
         Some(Ok(Event::Resize(width, height))) => {
             Some(flightdeck_dashboard::app::msg::Msg::Resize(width, height))
         }
+        Some(Ok(Event::Mouse(mouse))) => mouse_to_msg(mouse.kind, mouse.column, mouse.row, hitmap),
         Some(Ok(_)) | None => None,
         Some(Err(error)) => Some(flightdeck_dashboard::app::msg::Msg::Error(
             error.to_string(),

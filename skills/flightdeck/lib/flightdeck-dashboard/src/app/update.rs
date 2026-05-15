@@ -5,8 +5,9 @@ use crate::state::snapshot::{DaemonStatus as SnapshotDaemonStatus, EventImportan
 use crate::watcher::WatcherEvent;
 
 use super::command::Cmd;
+use super::hitmap::{ClickAction, ScrollSource};
 use super::keymap::{self, Action};
-use super::model::{ModalState, Model};
+use super::model::{ModalState, Model, Tab};
 use super::motion::{self, EffectKind, EffectTarget};
 use super::msg::Msg;
 
@@ -24,6 +25,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             vec![Cmd::Render]
         }
         Msg::KeyPressed(key) => handle_key(model, &key),
+        Msg::Click(action) => handle_click(model, action),
         Msg::Resize(_, _) => vec![Cmd::Render],
         Msg::SnapshotUpdated {
             snapshot,
@@ -111,10 +113,16 @@ fn handle_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
         return Vec::new();
     };
 
-    if model.show_help
+    if model.modal != ModalState::None
         && !matches!(
             action,
-            Action::ToggleHelp | Action::Quit | Action::CloseModal
+            Action::MoveDown
+                | Action::MoveUp
+                | Action::OpenDetail
+                | Action::ToggleHelp
+                | Action::OpenThemePicker
+                | Action::Quit
+                | Action::CloseModal
         )
     {
         return Vec::new();
@@ -163,25 +171,8 @@ fn handle_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
             push_effect(model, EffectKind::SelectionHalo, target);
             vec![Cmd::Render]
         }
-        Action::OpenDetail => {
-            if model.current_tab == super::model::Tab::Decisions && model.decision_count() > 0 {
-                model.modal = ModalState::DecisionDetail;
-                return vec![Cmd::Render];
-            }
-            vec![Cmd::LogAction(format!(
-                "detail requested for tab={} row={}",
-                model.current_tab.label(),
-                model.selected_index()
-            ))]
-        }
-        Action::OpenFilter => {
-            model.feed_filter.begin_edit();
-            model.ui.filter_open = true;
-            vec![
-                Cmd::LogAction(String::from("filter input opened")),
-                Cmd::Render,
-            ]
-        }
+        Action::OpenDetail => open_detail(model),
+        Action::OpenFilter => open_filter(model),
         Action::Reload => request_reload(model),
         Action::ToggleNoise => {
             model.ui.hide_noise = !model.ui.hide_noise;
@@ -192,13 +183,17 @@ fn handle_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
             vec![Cmd::Render]
         }
         Action::ToggleHelp => {
-            model.show_help = !model.show_help;
-            model.modal = if model.show_help {
-                ModalState::Help
+            if model.modal == ModalState::Help {
+                close_overlay(model);
             } else {
-                ModalState::None
-            };
-            push_effect(model, EffectKind::HelpOverlay, EffectTarget::Global);
+                model.show_help = true;
+                model.modal = ModalState::Help;
+                push_effect(model, EffectKind::HelpOverlay, EffectTarget::Global);
+            }
+            vec![Cmd::Render]
+        }
+        Action::OpenThemePicker => {
+            model.modal = ModalState::ThemePicker;
             vec![Cmd::Render]
         }
         Action::Quit => {
@@ -206,11 +201,144 @@ fn handle_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
             vec![Cmd::Render]
         }
         Action::CloseModal => {
-            model.show_help = false;
-            model.modal = ModalState::None;
-            model.ui.filter_open = false;
+            if model.modal == ModalState::None {
+                model.feed_filter.clear();
+            } else {
+                close_overlay(model);
+            }
             vec![Cmd::Render]
         }
+    }
+}
+
+fn handle_click(model: &mut Model, action: ClickAction) -> Vec<Cmd> {
+    match action {
+        ClickAction::SelectTab(tab) => {
+            if model.tabs_enabled.contains(&tab) {
+                model.current_tab = tab;
+                close_overlay(model);
+            }
+            vec![Cmd::Render]
+        }
+        ClickAction::SelectRow(index) => {
+            let was_selected = index == model.selected_index();
+            model.set_selected_index(index);
+            model.mark_overview_selection_initialized();
+            if was_selected && !matches!(model.modal, ModalState::FilterInput) {
+                return open_detail(model);
+            }
+            vec![Cmd::Render]
+        }
+        ClickAction::OpenDetail => open_detail(model),
+        ClickAction::JumpToPaused => {
+            if let Some(entry_id) = model
+                .snapshot
+                .paused_for_user
+                .as_ref()
+                .and_then(|pause| pause.entry_id.as_deref())
+            {
+                if let Some(index) = model
+                    .snapshot
+                    .sessions
+                    .iter()
+                    .position(|session| session.id == entry_id)
+                {
+                    model.current_tab = Tab::Overview;
+                    model.set_selected_index(index);
+                    model.mark_overview_selection_initialized();
+                    model.modal = ModalState::SessionDetail;
+                }
+            }
+            vec![Cmd::Render]
+        }
+        ClickAction::ToggleNoiseFilter => {
+            model.ui.hide_noise = !model.ui.hide_noise;
+            vec![Cmd::Render]
+        }
+        ClickAction::ToggleCompact => {
+            model.ui.compact = !model.ui.compact;
+            vec![Cmd::Render]
+        }
+        ClickAction::OpenFilter => open_filter(model),
+        ClickAction::ClearFilter => {
+            model.feed_filter.clear();
+            model.ui.filter_open = false;
+            model.modal = ModalState::None;
+            vec![Cmd::Render]
+        }
+        ClickAction::OpenHelp | ClickAction::OpenLegend => {
+            model.show_help = true;
+            model.modal = ModalState::Help;
+            vec![Cmd::Render]
+        }
+        ClickAction::OpenThemePicker => {
+            model.modal = ModalState::ThemePicker;
+            vec![Cmd::Render]
+        }
+        ClickAction::SelectTheme(theme) => {
+            model.theme = theme;
+            vec![Cmd::Render]
+        }
+        ClickAction::CloseOverlay => {
+            close_overlay(model);
+            vec![Cmd::Render]
+        }
+        ClickAction::Quit => {
+            model.quit_requested = true;
+            vec![Cmd::Render]
+        }
+        ClickAction::ScrollUp(source) => {
+            handle_scroll(model, source, -1);
+            vec![Cmd::Render]
+        }
+        ClickAction::ScrollDown(source) => {
+            handle_scroll(model, source, 1);
+            vec![Cmd::Render]
+        }
+        ClickAction::NoOp => Vec::new(),
+    }
+}
+
+fn open_detail(model: &mut Model) -> Vec<Cmd> {
+    match model.current_tab {
+        Tab::Overview => model.modal = ModalState::SessionDetail,
+        Tab::Decisions if model.decision_count() > 0 => model.modal = ModalState::DecisionDetail,
+        Tab::LiveFeed if model.live_feed_row_count() > 0 => model.modal = ModalState::EventDetail,
+        _ => {
+            return vec![Cmd::LogAction(format!(
+                "detail requested for tab={} row={}",
+                model.current_tab.label(),
+                model.selected_index()
+            ))]
+        }
+    }
+    vec![Cmd::Render]
+}
+
+fn open_filter(model: &mut Model) -> Vec<Cmd> {
+    model.feed_filter.begin_edit();
+    model.ui.filter_open = true;
+    model.modal = ModalState::FilterInput;
+    vec![
+        Cmd::LogAction(String::from("filter input opened")),
+        Cmd::Render,
+    ]
+}
+
+fn close_overlay(model: &mut Model) {
+    model.show_help = false;
+    model.modal = ModalState::None;
+    model.ui.filter_open = false;
+    model.event_detail = None;
+}
+
+fn handle_scroll(model: &mut Model, source: ScrollSource, delta: isize) {
+    match (source, model.current_tab) {
+        (ScrollSource::Sessions | ScrollSource::DetailRail, Tab::Overview)
+        | (ScrollSource::Activity, Tab::LiveFeed)
+        | (ScrollSource::Decisions, Tab::Decisions)
+        | (ScrollSource::Conversations, Tab::Conversations) => move_selection(model, delta),
+        _ => {}
     }
 }
 
@@ -219,11 +347,12 @@ fn handle_filter_key(model: &mut Model, key: &KeyEvent) -> Vec<Cmd> {
         KeyCode::Enter => {
             if model.feed_filter.commit() {
                 model.ui.filter_open = false;
+                model.modal = ModalState::None;
             }
             vec![Cmd::Render]
         }
         KeyCode::Esc => {
-            model.ui.filter_open = false;
+            close_overlay(model);
             model.feed_filter.error = None;
             vec![Cmd::Render]
         }

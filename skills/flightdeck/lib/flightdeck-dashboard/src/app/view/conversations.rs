@@ -5,11 +5,18 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
 use crate::app::command::SnapshotSource;
+use crate::app::hitmap::{ClickAction, HitMap, ScrollSource};
 use crate::app::model::Model;
 use crate::app::theme::Palette;
 use crate::state::snapshot::ConversationStream;
 
-pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: &Palette) {
+pub fn render(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    theme: &Palette,
+    hitmap: &mut HitMap,
+) {
     if model.snapshot.conversations.is_empty() {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -73,6 +80,23 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: &Palette)
             Span::styled(" conversations ", theme.title()),
             Span::styled("newest first · pane ids hidden", theme.muted()),
         ]));
+    hitmap.push(
+        area,
+        ClickAction::ScrollDown(ScrollSource::Conversations),
+        0,
+    );
+    for idx in 0..model.snapshot.conversations.len() {
+        hitmap.push(
+            Rect::new(
+                area.x.saturating_add(1),
+                area.y.saturating_add(2 + idx as u16),
+                area.width.saturating_sub(2),
+                1,
+            ),
+            ClickAction::SelectRow(idx),
+            0,
+        );
+    }
     let table = Table::new(
         rows,
         [
