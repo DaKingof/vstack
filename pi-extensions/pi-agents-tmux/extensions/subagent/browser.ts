@@ -113,10 +113,6 @@ function agentPad(text: string, width: number): string {
 	return `${truncated}${" ".repeat(Math.max(0, safeWidth - visibleWidth(truncated)))}`;
 }
 
-function isAgentBrowserTextInput(data: string): boolean {
-	return data.length === 1 && data >= " " && data !== "\x7f";
-}
-
 function isAgentBrowserCancelInput(data: string): boolean {
 	// After terminal/tmux resize events, stdin can occasionally deliver raw control
 	// bytes in chunks that `matchesKey()` does not normalize. Always honor Ctrl+C
@@ -419,19 +415,6 @@ function updateAgentFileFrontmatter(raw: string, edit: AgentFrontmatterEdit): st
 	return `---\n${fm.replace(/\n*$/, "")}\n---\n\n${split.body.replace(/^\n+/, "")}`;
 }
 
-function agentSearchText(agent: AgentConfig, status?: AgentPaneStatus): string {
-	return [
-		agent.name,
-		agent.description,
-		agent.source,
-		agent.filePath,
-		agent.model ?? "",
-		agent.denyTools?.join(" ") ?? "",
-		agent.pane ? "pane persistent tmux" : "bg background one-shot oneshot",
-		status?.live ? "live running" : status?.entry ? "dead stopped" : "",
-	].join(" ").toLowerCase();
-}
-
 function tabNext(current: AgentBrowserTabId, delta: number): AgentBrowserTabId {
 	const tabs: AgentBrowserTabId[] = ["agents", "monitor"];
 	const index = Math.max(0, tabs.indexOf(current));
@@ -530,17 +513,8 @@ interface AgentBrowserRow {
 	label: string;
 }
 
-export function buildAgentRows(agents: AgentConfig[], query: string, statuses: Map<string, AgentPaneStatus>): AgentBrowserRow[] {
-	const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-	const rows: AgentBrowserRow[] = [];
-	const catalogAgents = sortAgentsForUnifiedView(agents, statuses);
-	for (const agent of catalogAgents) {
-		const agentSearch = agentSearchText(agent, statuses.get(agent.name));
-		const includeAgent = tokens.length === 0 || tokens.every((token) => agentSearch.includes(token));
-		if (!includeAgent) continue;
-		rows.push({ agent, label: agent.name });
-	}
-	return rows;
+export function buildAgentRows(agents: AgentConfig[], statuses: Map<string, AgentPaneStatus>): AgentBrowserRow[] {
+	return sortAgentsForUnifiedView(agents, statuses).map((agent) => ({ agent, label: agent.name }));
 }
 
 function unifiedAgentRank(agent: AgentConfig, status: AgentPaneStatus | undefined): number {
@@ -560,7 +534,7 @@ function sortAgentsForUnifiedView(agents: AgentConfig[], statuses: Map<string, A
 }
 
 function agentLegend(theme: Theme): string {
-	return `${theme.fg("muted", "Legend")}: ${theme.fg("success", ICONS.circleFilled)} live pane · ${theme.fg("dim", ICONS.circleOpen)} idle/static · ${theme.fg("muted", "P/U")} project/user`;
+	return `${theme.fg("muted", "Legend")}: ${theme.fg("success", ICONS.circleFilled)} live pane · ${theme.fg("dim", ICONS.circleOpen)} idle/static · pane/bg · project/user`;
 }
 
 function agentKindChip(agent: AgentConfig, theme: Theme): string {
@@ -568,7 +542,7 @@ function agentKindChip(agent: AgentConfig, theme: Theme): string {
 }
 
 function agentScopeChip(agent: AgentConfig, theme: Theme): string {
-	return theme.fg("muted", agent.source === "project" ? "P" : "U");
+	return theme.fg("muted", agent.source === "project" ? "project" : "user");
 }
 
 function agentLiveBadge(agent: AgentConfig, status: AgentPaneStatus | undefined, theme: Theme): string {
@@ -592,10 +566,10 @@ function recordRunModel(record: PaneTaskRecord, agentConfig: AgentConfig | undef
 	return modelWithoutEffortSuffix(record.model ?? agentConfig?.model);
 }
 
-function renderAgentList(rows: AgentBrowserRow[], statuses: Map<string, AgentPaneStatus>, ui: AgentBrowserUiState, width: number, theme: Theme, listRows: number): string[] {
+export function renderAgentList(rows: AgentBrowserRow[], statuses: Map<string, AgentPaneStatus>, ui: AgentBrowserUiState, width: number, theme: Theme, listRows: number): string[] {
 	const lines = [`${agentPaneTitle(theme, "Agents", ui.pane === "list")} ${theme.fg("dim", `(${rows.length})`)}`, ""];
 	if (rows.length === 0) {
-		lines.push(theme.fg("dim", "No matching agents."));
+		lines.push(theme.fg("dim", "No agents found."));
 		return lines;
 	}
 	if (ui.scroll > 0) lines.push(theme.fg("dim", `↑ ${ui.scroll} earlier`));
@@ -606,8 +580,7 @@ function renderAgentList(rows: AgentBrowserRow[], statuses: Map<string, AgentPan
 		const status = statuses.get(agent.name);
 		const marker = " ";
 		const name = ansiMagenta(selected ? theme.bold(rowInfo.label) : rowInfo.label);
-		const model = `${theme.fg("dim", " · ")}${theme.fg("muted", displayAgentModel(agent))}`;
-		const meta = `${theme.fg("dim", " · ")}${agentKindChip(agent, theme)}${model}${theme.fg("dim", " · ")}${agentScopeChip(agent, theme)}`;
+		const meta = `${theme.fg("dim", " · ")}${agentKindChip(agent, theme)}${theme.fg("dim", " · ")}${agentScopeChip(agent, theme)}`;
 		const row = truncateToWidth(`${marker}${agentLiveBadge(agent, status, theme)} ${name}${meta}`, width, "…");
 		lines.push(selected ? theme.bg("selectedBg", agentPad(row, width)) : row);
 	}
@@ -1332,11 +1305,9 @@ function renderAgentsBody(
 	const left = renderAgentList(rowsForList, statuses, ui, leftWidth, theme, layout.listRows);
 	const right = renderUnifiedAgentDetail(selectedRow, statuses, ui, rightWidth, bodyRows, theme);
 	const rows = bodyRows;
-	const searchLine = theme.bg("toolPendingBg", agentPad(` > ${ui.search}${theme.inverse(" ")}`, width));
 	const scopeLabel = ui.scope === "both" ? "all scopes" : `${ui.scope} scope`;
-	const filterLine = `${theme.fg("muted", scopeLabel)}: ${rowsForList.length} rows · ${discovery.agents.length} agents · ${paneCount} pane · ${liveCount} live`;
-	const filterLines = wrapTextWithAnsi(filterLine, width);
-	const lines = [searchLine, ...filterLines, agentDivider(width, theme)];
+	const overviewLine = `${theme.fg("muted", scopeLabel)} · ${discovery.agents.length} agents · ${paneCount} pane · ${liveCount} live`;
+	const lines = [...wrapTextWithAnsi(overviewLine, width), agentDivider(width, theme)];
 	for (let i = 0; i < rows; i += 1) {
 		lines.push(`${agentPad(left[i] ?? "", leftWidth)} ${theme.fg("dim", "│")} ${truncateToWidth(right[i] ?? "", rightWidth, "")}`);
 	}
@@ -1386,12 +1357,12 @@ function createAgentsBrowserComponent(
 		done(action);
 	};
 	process.on("SIGWINCH", scheduleResizeRender);
-	const filtered = () => buildAgentRows(discovery.agents, ui.search, statuses);
-	const selectedRow = () => filtered()[ui.selected];
+	const agentRows = () => buildAgentRows(discovery.agents, statuses);
+	const selectedRow = () => agentRows()[ui.selected];
 	const selectedAgent = () => selectedRow()?.agent;
 	const clamp = () => {
 		const layout = getLayout();
-		const list = filtered();
+		const list = agentRows();
 		ui.selected = Math.max(0, Math.min(ui.selected, Math.max(0, list.length - 1)));
 		if (ui.selected < ui.scroll) ui.scroll = ui.selected;
 		if (ui.selected >= ui.scroll + layout.listRows) ui.scroll = ui.selected - layout.listRows + 1;
@@ -1471,7 +1442,6 @@ function createAgentsBrowserComponent(
 	};
 	function handleInput(data: string): void {
 		if (isAgentBrowserCancelInput(data)) {
-			if (ui.search) { ui.search = ""; ui.selected = 0; ui.scroll = 0; requestRender(); return; }
 			finish({ type: "close" });
 			return;
 		}
@@ -1625,15 +1595,12 @@ function createAgentsBrowserComponent(
 			return;
 		}
 		if (matchesKey(data, "home")) { if (ui.pane === "inspector") ui.inspectorScroll = 0; else { ui.selected = 0; ui.scroll = 0; } requestRender(); return; }
-		if (matchesKey(data, "end")) { if (ui.pane === "inspector") ui.inspectorScroll = Number.MAX_SAFE_INTEGER; else { ui.selected = Math.max(0, filtered().length - 1); clamp(); } requestRender(); return; }
+		if (matchesKey(data, "end")) { if (ui.pane === "inspector") ui.inspectorScroll = Number.MAX_SAFE_INTEGER; else { ui.selected = Math.max(0, agentRows().length - 1); clamp(); } requestRender(); return; }
 		if (matchesKey(data, "enter") || matchesKey(data, "return")) return insertSelected();
 		if (matchesKey(data, "alt+m") || matchesKey(data, "ctrl+m")) return editFrontmatterSelected();
 		if (matchesKey(data, "alt+p") || matchesKey(data, "ctrl+p")) return startSelected();
 		if (matchesKey(data, "alt+o") || matchesKey(data, "ctrl+o")) return attachSelected();
 		if (matchesKey(data, "alt+x") || matchesKey(data, "ctrl+x")) return stopSelected();
-		if (matchesKey(data, "backspace")) { ui.search = ui.search.slice(0, -1); ui.selected = 0; ui.scroll = 0; ui.inspectorScroll = 0; clamp(); requestRender(); return; }
-		if (matchesKey(data, "ctrl+u")) { ui.search = ""; ui.selected = 0; ui.scroll = 0; ui.inspectorScroll = 0; requestRender(); return; }
-		if (isAgentBrowserTextInput(data)) { ui.search += data; ui.pane = "list"; ui.selected = 0; ui.scroll = 0; ui.inspectorScroll = 0; clamp(); requestRender(); }
 	}
 
 	function render(width: number): string[] {
@@ -1654,7 +1621,7 @@ function createAgentsBrowserComponent(
 		const lines = [
 			tabLine,
 			"",
-			...renderAgentsBody(discovery, filtered(), statuses, ui, bodyWidth, theme, layout),
+			...renderAgentsBody(discovery, agentRows(), statuses, ui, bodyWidth, theme, layout),
 			agentDivider(bodyWidth, theme),
 			...wrapTextWithAnsi(footer, bodyWidth),
 		];
@@ -1683,7 +1650,6 @@ export async function openAgentsBrowser(
 		pane: initialAgentName ? "inspector" : "list",
 		tab: "agents",
 		scope: initialScope,
-		search: "",
 		selected: 0,
 		scroll: 0,
 		monitorSelected: 0,

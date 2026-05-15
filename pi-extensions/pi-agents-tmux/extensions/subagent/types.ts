@@ -103,7 +103,6 @@ export interface AgentBrowserUiState {
 	pane: "list" | "inspector";
 	tab: AgentBrowserTabId;
 	scope: AgentScope;
-	search: string;
 	selected: number;
 	scroll: number;
 	monitorSelected: number;

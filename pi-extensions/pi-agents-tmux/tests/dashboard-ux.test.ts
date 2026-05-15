@@ -14,6 +14,7 @@ import {
 	renderMonitorDetail,
 	renderAgentBrowserTabs,
 	renderAgentInspector,
+	renderAgentList,
 	renderMonitorTree,
 	renderMonitorSessionDetail,
 	taskNumberById,
@@ -99,7 +100,6 @@ function uiState(patch: Partial<AgentBrowserUiState> = {}): AgentBrowserUiState 
 		pane: "inspector",
 		tab: "agents",
 		scope: "both",
-		search: "",
 		selected: 0,
 		scroll: 0,
 		monitorSelected: 0,
@@ -635,18 +635,21 @@ test("Monitor session selection shows aggregate detail", () => {
 });
 
 test("Agents tab rows are flat static catalog entries", () => {
-	const rows = buildAgentRows([agent("planner", true), agent("scout")], "", new Map());
+	const rows = buildAgentRows([agent("planner", true), agent("scout")], new Map());
 
 	assert.deepEqual(rows.map((row) => row.label), ["planner", "scout"]);
 });
 
-test("Agents tab search only matches static agent metadata", () => {
-	const config = agent("planner", true, { description: "Plans implementation work.", model: "openai-codex/gpt-5.5" });
+test("Agents tab list shows only kind and scope chips after agent name", () => {
+	const rows = buildAgentRows([
+		agent("planner", true, { model: "openai-codex/gpt-5.5", source: "project" }),
+		agent("scout", false, { model: "openai-codex/gpt-5.5", source: "user" }),
+	], new Map());
+	const rendered = stripAnsi(renderAgentList(rows, new Map(), uiState({ selected: 0 }), 160, theme as any, 20).join("\n"));
 
-	assert.equal(buildAgentRows([config], "", new Map()).length, 1);
-	assert.equal(buildAgentRows([config], "implementation", new Map()).length, 1);
-	assert.equal(buildAgentRows([config], "bbbbbbbb", new Map()).length, 0);
-	assert.equal(buildAgentRows([config], "completion summary", new Map()).length, 0);
+	assert.match(rendered, /planner · pane · project/);
+	assert.match(rendered, /scout · bg · user/);
+	assert.doesNotMatch(rendered, /gpt-5\.5|openai-codex| xhigh| default| · P| · U/);
 });
 
 test("Agents Inspector shows static config only for agent with active tasks", () => {

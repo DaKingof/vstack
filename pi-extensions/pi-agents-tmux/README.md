@@ -8,7 +8,7 @@ Delegate work to specialized agents from a running Pi session. Agents run either
 
 - `subagent` tool delegates one task, parallel tasks, or sequential chains.
 - Agents with `pane: true` open a visible tmux pane that persists across turns. Other agents run in the background.
-- `/agents` browser lists agents for the selected scope with search, static detail, Monitor task traces, and one-key launch.
+- `/agents` browser lists agents for the selected scope with static detail, Monitor task traces, and one-key launch.
 - Monitor groups tasks by session (pane, bg lane, bg one-shot) under expandable Active and Completed sections; repeated same-agent launches get session numbers and task numbers reset per session.
 - Chat completion rows show actual results, never a repeat of the original request.
 - Task detail shows Summary and Completion tabs; Summary contains run metadata, artifacts, and task text, while Completion contains result summary, files changed, and validation.

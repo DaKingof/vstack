@@ -110,13 +110,12 @@ Completed task records store the durable result summary in `PaneTaskRecord.summa
 
 ## Browser keys
 
-- Type to search by name, description, source, path, model, denied tools, or pane status.
 - `Tab` / `Shift+Tab` switches between **Agents** and **Monitor**.
 - `↑/↓`, `-/=`, `Home/End` navigate. `←/→` switches tree/detail focus and cycles task-detail subtabs. `Enter` expands/collapses Monitor Active/Completed/session rows or opens task detail.
 - `Enter` inserts `Use agent <name> to: ` into the editor.
 - `Alt+M` edits the selected agent's frontmatter.
 - Pane agents: `Alt+P`/`Ctrl+P` start or reuse, `Alt+O`/`Ctrl+O` attach, `Alt+X`/`Ctrl+X` stop.
-- `Esc` clears search or closes.
+- `Esc` closes.
 
 Status legend per row: live pane, startable, stale, background. Dashboard rows: queued, working, completed, needs completion, failed/blocked.
 
