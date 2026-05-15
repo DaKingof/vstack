@@ -112,14 +112,19 @@ function selectedSoft(theme: Theme, selected: boolean, text: string): string {
 	return theme.fg(selected ? "text" : "dim", text);
 }
 
-export function formatOverviewRow(session: TrackedSession, theme: Theme, width: number, stats: string | undefined, hasStats: boolean, hasPr: boolean, selected = false): string {
+export function paneGoneChip(theme: Theme): string {
+	return `${theme.fg("error", "●")} ${theme.fg("error", "pane gone")}`;
+}
+
+export function formatOverviewRow(session: TrackedSession, theme: Theme, width: number, stats: string | undefined, hasStats: boolean, hasPr: boolean, selected = false, paneGone = false): string {
 	const name = pad(theme.fg("text", sessionLabel(session)), 22);
 	const kind = pad(kindBadge(theme, session), 6);
 	const soft = (text: string): string => selectedSoft(theme, selected, text);
-	const stateAndPrompt = session.substate
+	const stateBase = session.substate
 		? `${stateBadge(theme, session.state)} ${soft("·")} ${tagBadge(theme, session.substate)}`
 		: stateBadge(theme, session.state);
-	const state = pad(stateAndPrompt, 32);
+	const stateAndPrompt = paneGone ? `${stateBase} ${soft("·")} ${paneGoneChip(theme)}` : stateBase;
+	const state = pad(stateAndPrompt, paneGone ? 44 : 32);
 	const harness = pad(harnessChip(theme, session.harness ?? undefined), 10);
 	const domain = issueDomain(session);
 	const pr = hasPr ? ` ${pad(domain?.pr_number ? theme.fg("accent", `#${domain.pr_number}`) : soft("—"), 8)}` : "";
@@ -128,17 +133,18 @@ export function formatOverviewRow(session: TrackedSession, theme: Theme, width: 
 	return truncateToWidth(`${name} ${kind} ${state} ${harness}${pr}${statsCell} ${soft(age)}`, width, "");
 }
 
-export function renderSessionLine(session: TrackedSession, theme: Theme, stats?: AgentsBridgeItem): string {
+export function renderSessionLine(session: TrackedSession, theme: Theme, stats?: AgentsBridgeItem, paneGone = false): string {
 	const domain = issueDomain(session);
 	const state = stateBadge(theme, session.state);
 	const harness = harnessChip(theme, session.harness ?? undefined);
 	const pr = domain?.pr_number ? ` ${theme.fg("dim", "·")} ${theme.fg("accent", `PR#${domain.pr_number}`)}` : "";
 	const sub = session.substate ? ` ${theme.fg("dim", "·")} ${tagBadge(theme, session.substate)}` : "";
+	const gone = paneGone ? ` ${theme.fg("dim", "·")} ${paneGoneChip(theme)}` : "";
 	const polled = ageSecondsSince(session.last_polled_at);
 	const polledTxt = polled !== undefined ? ` ${theme.fg("dim", `(${formatAge(polled)})`)}` : "";
 	const usageText = formatUsageCompact(stats?.usage);
 	const usageTxt = usageText ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", usageText)}` : "";
-	return `${kindBadge(theme, session)} ${theme.bold(theme.fg("text", sessionLabel(session)))} ${theme.fg("dim", "·")} ${state} ${theme.fg("dim", "·")} ${harness}${pr}${sub}${usageTxt}${polledTxt}`;
+	return `${kindBadge(theme, session)} ${theme.bold(theme.fg("text", sessionLabel(session)))} ${theme.fg("dim", "·")} ${state} ${theme.fg("dim", "·")} ${harness}${pr}${sub}${gone}${usageTxt}${polledTxt}`;
 }
 
 export function renderSessionDetailLines(session: TrackedSession, theme: Theme, stats?: AgentsBridgeItem): string[] {

@@ -9,6 +9,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -26,9 +27,11 @@ import {
 	daemonEverStarted,
 	foldWakeEventsIntoConversations,
 	formatAge,
+	isPaneGone,
 	mostRecentPollMs,
 	readOwnerVisibilityProbe,
 	readTrackedEntries,
+	resolveProjectRoot,
 	type SettingsLike,
 } from "./state.js";
 import { dashboardVisibleForSnapshot, dashboardVisibleInPane, isInFlightdeckChildPane, normalizeDashboardVisibility, renderObserverHeader, type DashboardVisibility } from "./dashboard-visibility.js";
@@ -318,13 +321,24 @@ export function renderDashboardLines(snapshot: FlightdeckSnapshot, theme: Theme,
 			return framePanel(lines, width, theme);
 		}
 		const visible = sessions.slice(0, max);
+		let anyGone = false;
 		for (const [index, session] of visible.entries()) {
 			const isLast = index === visible.length - 1 && sessions.length === visible.length;
 			const stats = usageForSession(session, paneMap, bridge);
-			lines.push(`${panelBranch(theme, isLast ? "└" : "├", treeStyle)}${renderSessionLine(session, theme, stats)}`);
+			const paneGone = isPaneGone(session, snapshot);
+			if (paneGone) anyGone = true;
+			lines.push(`${panelBranch(theme, isLast ? "└" : "├", treeStyle)}${renderSessionLine(session, theme, stats, paneGone)}`);
 		}
 		const hidden = Math.max(0, sessions.length - visible.length);
 		if (hidden > 0) lines.push(`${panelBranch(theme, "└", treeStyle)}${theme.fg("muted", `… ${hidden} more`)}`);
+		if (anyGone) {
+			const pre = theme.fg("dim", "pane gone — open ");
+			const shortcut = ansiYellow(formatShortcutHint(popupShortcut));
+			const mid = theme.fg("dim", ", select the row, press ");
+			const keyHint = ansiYellow("p");
+			const post = theme.fg("dim", " to prune");
+			lines.push(`${panelBranch(theme, "└", treeStyle)}${pre}${shortcut}${mid}${keyHint}${post}`);
+		}
 		return framePanel(lines, width, theme);
 	}
 	// expanded
@@ -333,16 +347,46 @@ export function renderDashboardLines(snapshot: FlightdeckSnapshot, theme: Theme,
 		lines.push(`${panelBranch(theme, "└", treeStyle)}${theme.fg("muted", "No tracked sessions yet")}`);
 		return framePanel(lines, width, theme);
 	}
+	let anyGoneExpanded = false;
 	for (const [index, session] of sessions.entries()) {
 		const isLast = index === sessions.length - 1;
 		const stats = usageForSession(session, paneMap, bridge);
-		lines.push(`${panelBranch(theme, isLast ? "└" : "├", treeStyle)}${renderSessionLine(session, theme, stats)}`);
+		const paneGone = isPaneGone(session, snapshot);
+		if (paneGone) anyGoneExpanded = true;
+		lines.push(`${panelBranch(theme, isLast ? "└" : "├", treeStyle)}${renderSessionLine(session, theme, stats, paneGone)}`);
 		const detailRows = renderSessionDetailLines(session, theme, stats);
 		for (const [detailIndex, row] of detailRows.entries()) {
 			lines.push(`${dashboardChildBranch(theme, treeStyle, isLast, detailIndex === detailRows.length - 1)}${row}`);
 		}
 	}
+	if (anyGoneExpanded) {
+		const pre = theme.fg("dim", "pane gone — open ");
+		const shortcut = ansiYellow(formatShortcutHint(popupShortcut));
+		const mid = theme.fg("dim", ", select the row, press ");
+		const keyHint = ansiYellow("p");
+		const post = theme.fg("dim", " to prune");
+		lines.push(`${panelBranch(theme, "└", treeStyle)}${pre}${shortcut}${mid}${keyHint}${post}`);
+	}
 	return framePanel(lines, width, theme);
+}
+
+// Resolve the pane-registry script bundled with the flightdeck skill
+// install. The dashboard ships separately, so it has to find the skill
+// mirror under the project root.
+function resolvePaneRegistryScript(cwd: string): string | undefined {
+	const root = resolveProjectRoot(cwd);
+	const candidate = join(root, ".agents/skills/flightdeck/scripts/pane-registry");
+	return existsSync(candidate) ? candidate : undefined;
+}
+
+// Run `pane-registry remove <id>` from the popup `p` keybind. Returns
+// `{ ok, stderr }` so the caller can notify on failure.
+function pruneTrackedEntry(cwd: string, entryId: string): { ok: boolean; stderr: string } {
+	const script = resolvePaneRegistryScript(cwd);
+	if (!script) return { ok: false, stderr: "pane-registry script not found under .agents/skills/flightdeck/scripts/" };
+	const r = spawnSync(script, ["remove", entryId], { encoding: "utf8", timeout: 5000 });
+	if (r.status !== 0) return { ok: false, stderr: (r.stderr ?? "").trim() || `pane-registry remove exited ${r.status}` };
+	return { ok: true, stderr: "" };
 }
 
 function dashboardChildBranch(theme: Theme, style: TreeStyle, parentLast: boolean, childLast: boolean): string {
@@ -462,11 +506,14 @@ export function renderOverviewTab(snapshot: FlightdeckSnapshot, ui: PopupUiState
 	const rows = Math.max(1, viewportRows - lines.length - 2);
 	const tail = Math.max(0, filtered.length - (ui.scroll + rows));
 	if (ui.scroll > 0) lines.push(theme.fg("dim", `↑ ${ui.scroll} earlier`));
+	let anyGone = false;
 	for (const [vi, session] of filtered.slice(ui.scroll, ui.scroll + rows).entries()) {
 		const idx = ui.scroll + vi;
 		const selected = idx === ui.selected;
 		const statsText = formatUsageCompact(statsBySession.get(session.id)?.usage);
-		const row = formatOverviewRow(session, theme, width, statsText, hasStats, hasPr, selected);
+		const paneGone = isPaneGone(session, snapshot);
+		if (paneGone) anyGone = true;
+		const row = formatOverviewRow(session, theme, width, statsText, hasStats, hasPr, selected, paneGone);
 		lines.push(selected ? selectedRow(theme, row, width) : row);
 	}
 	if (tail > 0) lines.push(theme.fg("dim", `↓ ${tail} more`));
@@ -1605,6 +1652,28 @@ export default function flightdeck(pi: ExtensionAPI): void {
 							tui.requestRender();
 							return;
 						}
+						if (matchesKey(data, "p") && ui.tab === TAB_OVERVIEW) {
+							const snapshot = cache.lastSnapshot ?? refreshSnapshot(activePopupCwd(ctx));
+							const sessions = snapshot ? readTrackedEntries(snapshot.master) : [];
+							const filtered = ui.search.trim()
+								? sessions.filter((s) => sessionSearchText(s).includes(ui.search.trim().toLowerCase()))
+								: sessions;
+							const target = filtered[ui.selected];
+							if (!target) return;
+							if (!isPaneGone(target, snapshot)) {
+								ctx.ui.notify(`Prune refused: pane for ${target.id} is still alive in tmux. Use 'flightdeck session stop' instead.`, "warning");
+								return;
+							}
+							const result = pruneTrackedEntry(activePopupCwd(ctx), target.id);
+							if (!result.ok) {
+								ctx.ui.notify(`Prune failed: ${result.stderr}`, "error");
+								return;
+							}
+							ctx.ui.notify(`Pruned ${target.id}`, "info");
+							refreshSnapshot(activePopupCwd(ctx));
+							tui.requestRender();
+							return;
+						}
 						if (isPlainSearchInput(data)) {
 							ui.search += data;
 							ui.selected = 0;
@@ -1689,7 +1758,8 @@ export default function flightdeck(pi: ExtensionAPI): void {
 		const viewHint = ui.tab === TAB_DECISIONS || ui.tab === TAB_LIVE || ui.tab === TAB_CONVERSATIONS ? `${theme.fg("dim", " · ")}${ansiYellow("enter")} ${theme.fg("dim", "details")}` : "";
 		const navVerb = ui.tab === TAB_DAEMON ? "scroll" : "select";
 		const noiseHint = ui.tab === TAB_LIVE ? `${theme.fg("dim", " · ")}${ansiYellow("ctrl+n")} ${theme.fg("dim", ui.liveShowNoisy ? "important" : "all")}` : "";
-		const navHint = `${ansiYellow("↑/↓")} ${theme.fg("dim", `${navVerb} · `)}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("home/end")} ${theme.fg("dim", "ends")}${viewHint}${noiseHint}`;
+		const pruneHint = ui.tab === TAB_OVERVIEW ? `${theme.fg("dim", " · ")}${ansiYellow("p")} ${theme.fg("dim", "prune dead")}` : "";
+		const navHint = `${ansiYellow("↑/↓")} ${theme.fg("dim", `${navVerb} · `)}${ansiYellow("-/=")} ${theme.fg("dim", "page · ")}${ansiYellow("home/end")} ${theme.fg("dim", "ends")}${viewHint}${noiseHint}${pruneHint}`;
 		const searchHint = ui.search ? `${ansiYellow("ctrl+u")} ${theme.fg("dim", "clear search")}` : `${theme.fg("dim", "type to filter")}`;
 		const closeHint = `${ansiYellow("esc")} ${theme.fg("dim", "close")}`;
 		return `${tabHint}  ${theme.fg("dim", "·")}  ${navHint}  ${theme.fg("dim", "·")}  ${searchHint}  ${theme.fg("dim", "·")}  ${closeHint}`;

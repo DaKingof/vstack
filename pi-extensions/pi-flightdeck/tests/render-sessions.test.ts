@@ -208,6 +208,30 @@ test("one issue session renders ISS badge and issue-domain child metadata", () =
 	assert.match(text, /scope 3\/2/);
 });
 
+test("compact dashboard renders 'pane gone' chip when entry pane is missing from tmux", () => {
+	const entry = adhoc({ pane_id: "%999" });
+	const snap = snapshot([entry], { livePaneIds: new Set(["%1", "%2"]) });
+	const text = joinRendered(renderDashboardLines(snap, plainTheme() as never, 140, "compact", ENV_CWD, new Map()));
+	assert.match(text, /pane gone/);
+	assert.match(text, /press.+p.+to prune/);
+});
+
+test("compact dashboard does NOT mark entry as gone when pane is alive", () => {
+	const entry = adhoc({ pane_id: "%55" });
+	const snap = snapshot([entry], { livePaneIds: new Set(["%55", "%1"]) });
+	const text = joinRendered(renderDashboardLines(snap, plainTheme() as never, 140, "compact", ENV_CWD, new Map()));
+	assert.doesNotMatch(text, /pane gone/);
+});
+
+test("compact dashboard does NOT mark entry as gone when livePaneIds is empty (unknown)", () => {
+	// livePaneIds = empty Set means "unknown" (not inside tmux); never
+	// flag entries as gone in this state.
+	const entry = adhoc({ pane_id: "%999" });
+	const snap = snapshot([entry], { livePaneIds: new Set() });
+	const text = joinRendered(renderDashboardLines(snap, plainTheme() as never, 140, "compact", ENV_CWD, new Map()));
+	assert.doesNotMatch(text, /pane gone/);
+});
+
 test("one issue session compact row renders ISS badge, title, and state", () => {
 	const text = dashboardText([issue()]);
 	assert.match(text, /1 session/);

@@ -235,6 +235,13 @@ export interface FlightdeckSnapshot {
 	daemon: DaemonHealth;
 	wakeEvents: WakeEvent[];
 	pendingEvents: DaemonEvent[];
+	// Set of pane ids currently alive in tmux (`tmux list-panes -a`).
+	// Captured once per snapshot tick so the renderer can mark tracked
+	// entries whose `pane_id` has been closed in tmux without forcing a
+	// daemon respawn or manual archive. Empty set when not inside tmux
+	// or when the lookup fails — callers treat absence as "unknown" and
+	// must not flag entries as gone.
+	livePaneIds: Set<string>;
 }
 
 export interface SettingsLike {
@@ -785,6 +792,28 @@ export function readOwnerVisibilityProbe(cwd: string, settings: SettingsLike): O
 	return { ownerPaneId: state?.owner?.pane_id, tmux };
 }
 
+function readLivePaneIds(): Set<string> {
+	if (!process.env.TMUX) return new Set();
+	const r = spawnSync("tmux", ["list-panes", "-a", "-F", "#{pane_id}"], { encoding: "utf8", timeout: 1500 });
+	const out = new Set<string>();
+	if (r.status !== 0) return out;
+	for (const line of (r.stdout ?? "").split("\n")) if (line) out.add(line);
+	return out;
+}
+
+// True when the tracked entry has a `pane_id` but tmux no longer lists
+// it as alive. Used by the dashboard to render a `pane gone` chip and
+// to offer one-key prune. Returns false when `livePaneIds` is empty
+// (unknown / not inside tmux) so the chip never fires on cold startup.
+export function isPaneGone(session: TrackedSession | undefined, snapshot: FlightdeckSnapshot | undefined): boolean {
+	if (!session || !snapshot) return false;
+	const paneId = typeof session.pane_id === "string" ? session.pane_id : "";
+	if (!paneId) return false;
+	const live = snapshot.livePaneIds;
+	if (!live || live.size === 0) return false;
+	return !live.has(paneId);
+}
+
 export function buildSnapshotFromInputs(inputs: BuildSnapshotInputs, settings: SettingsLike, options?: { logTailLines?: number; wakeEventsLines?: number }): FlightdeckSnapshot {
 	const { projectRoot, stateDir, tmux } = inputs;
 	const liveStatePath = masterStatePath(projectRoot, settings, tmux.sessionName);
@@ -837,6 +866,7 @@ export function buildSnapshotFromInputs(inputs: BuildSnapshotInputs, settings: S
 	return {
 		daemon,
 		master: state,
+		livePaneIds: readLivePaneIds(),
 		masterArchiveError: archiveError || undefined,
 		masterError: error,
 		masterStatePath: resolvedStatePath,
