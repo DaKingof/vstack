@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { type Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { loadTaskRegistrySync, taskNumberById } from "./browser.js";
+import { loadTaskRegistrySync, taskNumberById } from "./task-records.js";
 import {
 	ansiGreen,
 	ansiMagenta,
@@ -291,8 +291,12 @@ function dashboardLabelsForItems(items: SubagentDashboardItem[], persistentTaskN
 		const next = (occurrence.get(item.agent) ?? 0) + 1;
 		occurrence.set(item.agent, next);
 		const persistentN = persistentTaskNumbers?.get(item.taskId);
-		const n = persistentN ?? next;
-		const showNumber = persistentN !== undefined || (total.get(item.agent) ?? 1) > 1;
+		// Persistent numbers are session-scoped, so two bg one-shot tasks for the
+		// same agent both land on session-local `1`. Fall through to the
+		// in-memory occurrence counter unless the persistent number actually
+		// disambiguates (`> 1`). `#1` is always suppressed.
+		const n = persistentN !== undefined && persistentN > 1 ? persistentN : next;
+		const showNumber = (total.get(item.agent) ?? 1) > 1 && n > 1;
 		const label = showNumber ? `${item.agent} #${n}` : item.agent;
 		labels.set(item.taskId, label);
 	}
