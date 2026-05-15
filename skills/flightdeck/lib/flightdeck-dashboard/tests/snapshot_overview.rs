@@ -1,29 +1,10 @@
-use chrono::{DateTime, TimeZone, Utc};
-use flightdeck_dashboard::app::model::{Model, MotionLevel, Tab};
-use flightdeck_dashboard::app::view;
-use flightdeck_dashboard::fixtures;
-use ratatui::backend::TestBackend;
-use ratatui::Terminal;
+mod common;
 
-fn fixed_now() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 5, 15, 10, 10, 0)
-        .single()
-        .expect("fixed timestamp is valid")
-}
+use flightdeck_dashboard::app::model::{MotionLevel, Tab};
+use flightdeck_dashboard::app::view::fx;
 
-fn render_fixture(name: &str) -> String {
-    let snapshot = fixtures::load_demo_snapshot(name, fixed_now()).expect("fixture loads");
-    let model = Model::new(snapshot, name, MotionLevel::Off, fixed_now);
-    render_model(&model)
-}
-
-fn render_model(model: &Model) -> String {
-    let backend = TestBackend::new(200, 60);
-    let mut terminal = Terminal::new(backend).expect("test backend creates terminal");
-    terminal
-        .draw(|frame| view::render(frame, model))
-        .expect("render succeeds");
-    format!("{}", terminal.backend())
+fn render_fixture(name: &'static str) -> String {
+    common::render_model(&common::model_for_fixture(name, MotionLevel::Off))
 }
 
 #[test]
@@ -58,11 +39,10 @@ fn paused_fixture_overview() {
 
 #[test]
 fn motion_effects_overview_start_and_settled() {
-    let snapshot = fixtures::load_demo_snapshot("mixed", fixed_now()).expect("fixture loads");
-    let mut model = Model::new(snapshot, "mixed", MotionLevel::Full, fixed_now);
+    let mut model = common::model_for_fixture("mixed", MotionLevel::Full);
     model.current_tab = Tab::Overview;
-    insta::assert_snapshot!("overview_motion_t0", render_model(&model));
+    insta::assert_snapshot!("overview_motion_t0", common::render_model(&model));
     model.animate_frame = 8;
-    model.prune_effects();
-    insta::assert_snapshot!("overview_motion_settled", render_model(&model));
+    fx::prune_effects(&mut model);
+    insta::assert_snapshot!("overview_motion_settled", common::render_model(&model));
 }

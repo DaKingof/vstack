@@ -3,7 +3,9 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 
-use crate::state::schema::{DashboardSnapshot, TrackedSession};
+use crate::app::command::SnapshotSource;
+use crate::app::view::fx::{EffectKind, EffectTarget};
+use crate::state::snapshot::{DashboardSnapshot, TrackedSession};
 
 pub type Clock = fn() -> DateTime<Utc>;
 
@@ -102,35 +104,10 @@ impl MotionLevel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EffectKind {
-    TabSwitchForward,
-    TabSwitchBackward,
-    HelpOverlay,
-    ErrorFlash,
-    SelectionHalo,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EffectInstance {
     pub kind: EffectKind,
+    pub target: EffectTarget,
     pub started_frame: u64,
-    pub duration_frames: u64,
-}
-
-impl EffectInstance {
-    #[must_use]
-    pub const fn new(kind: EffectKind, started_frame: u64, duration_frames: u64) -> Self {
-        Self {
-            kind,
-            started_frame,
-            duration_frames,
-        }
-    }
-
-    #[must_use]
-    pub fn is_active(self, frame: u64) -> bool {
-        frame.saturating_sub(self.started_frame) <= self.duration_frames
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +127,8 @@ pub struct Model {
     pub current_tab: Tab,
     pub tabs_enabled: Vec<Tab>,
     pub snapshot: DashboardSnapshot,
+    pub snapshot_source: SnapshotSource,
+    pub now: DateTime<Utc>,
     pub motion: MotionLevel,
     pub motion_clock: Instant,
     pub active_effects: Vec<EffectInstance>,
@@ -159,7 +138,6 @@ pub struct Model {
     pub ui: UiFlags,
     pub quit_requested: bool,
     pub error: Option<String>,
-    pub demo_fixture: String,
     pub clock: Clock,
     pub animate_frame: u64,
 }
@@ -168,7 +146,7 @@ impl Model {
     #[must_use]
     pub fn new(
         snapshot: DashboardSnapshot,
-        demo_fixture: impl Into<String>,
+        snapshot_source: SnapshotSource,
         motion: MotionLevel,
         clock: Clock,
     ) -> Self {
@@ -181,6 +159,8 @@ impl Model {
             current_tab: Tab::Overview,
             tabs_enabled,
             snapshot,
+            snapshot_source,
+            now: clock(),
             motion,
             motion_clock: Instant::now(),
             active_effects: Vec::with_capacity(8),
@@ -193,15 +173,13 @@ impl Model {
             },
             quit_requested: false,
             error: None,
-            demo_fixture: demo_fixture.into(),
             clock,
             animate_frame: 0,
         }
     }
 
-    #[must_use]
-    pub fn now(&self) -> DateTime<Utc> {
-        (self.clock)()
+    pub fn refresh_now(&mut self) {
+        self.now = (self.clock)();
     }
 
     #[must_use]
@@ -230,36 +208,6 @@ impl Model {
     pub fn clamp_selection(&mut self) {
         let current = self.selected_index();
         self.set_selected_index(current);
-    }
-
-    pub fn push_effect(&mut self, kind: EffectKind, duration_frames: u64) {
-        if self.motion.allows_motion() {
-            self.active_effects.push(EffectInstance::new(
-                kind,
-                self.animate_frame,
-                duration_frames,
-            ));
-        }
-    }
-
-    pub fn prune_effects(&mut self) {
-        let frame = self.animate_frame;
-        self.active_effects.retain(|effect| effect.is_active(frame));
-    }
-
-    #[must_use]
-    pub fn has_active_effects(&self) -> bool {
-        if self.motion == MotionLevel::Off {
-            return false;
-        }
-        self.active_effects
-            .iter()
-            .any(|effect| effect.is_active(self.animate_frame))
-            || self
-                .snapshot
-                .sessions
-                .iter()
-                .any(TrackedSession::is_transient)
     }
 }
 

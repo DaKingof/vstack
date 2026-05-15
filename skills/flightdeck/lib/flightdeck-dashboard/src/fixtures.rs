@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
-use crate::state::schema::DashboardSnapshot;
+use crate::state::snapshot::DashboardSnapshot;
 use crate::state::tracked_entries::{self, StateError};
 
 const EMPTY: &str = include_str!("fixtures/empty.json");
@@ -31,8 +31,20 @@ pub fn available() -> &'static [&'static str] {
     ]
 }
 
-pub fn fixture_source(name: &str) -> Result<&'static str, FixtureError> {
+pub fn canonical_name(name: &str) -> Result<&'static str, FixtureError> {
     match name {
+        "empty" => Ok("empty"),
+        "one-adhoc" => Ok("one-adhoc"),
+        "one-issue" => Ok("one-issue"),
+        "mixed" => Ok("mixed"),
+        "terminated" => Ok("terminated"),
+        "paused" => Ok("paused"),
+        other => Err(FixtureError::UnknownFixture(other.to_owned())),
+    }
+}
+
+pub fn fixture_source(name: &str) -> Result<&'static str, FixtureError> {
+    match canonical_name(name)? {
         "empty" => Ok(EMPTY),
         "one-adhoc" => Ok(ONE_ADHOC),
         "one-issue" => Ok(ONE_ISSUE),

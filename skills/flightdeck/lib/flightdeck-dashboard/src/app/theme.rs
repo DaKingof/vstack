@@ -1,5 +1,7 @@
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::state::snapshot::{SessionKind, SessionState};
+
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
     pub frame: Style,
@@ -66,34 +68,36 @@ impl Theme {
     }
 
     #[must_use]
-    pub fn kind_badge(self, kind: &str) -> Style {
+    pub fn kind_badge(self, kind: &SessionKind) -> Style {
         match kind {
-            "adhoc" => Style::default()
+            SessionKind::Adhoc => Style::default()
                 .fg(Color::Black)
                 .bg(Color::LightBlue)
                 .add_modifier(Modifier::BOLD),
-            "issue" => Style::default()
+            SessionKind::Issue => Style::default()
                 .fg(Color::Black)
                 .bg(Color::Magenta)
                 .add_modifier(Modifier::BOLD),
-            "workflow" => Style::default()
+            SessionKind::Workflow => Style::default()
                 .fg(Color::Black)
                 .bg(Color::LightGreen)
                 .add_modifier(Modifier::BOLD),
-            _ => self.muted,
+            SessionKind::Other(_) => self.muted,
         }
     }
 
     #[must_use]
-    pub fn state(self, state: &str) -> Style {
+    pub fn state(self, state: &SessionState) -> Style {
         match state {
-            "complete" | "merged" => self.ok,
-            "ready" => Style::default().fg(Color::LightGreen),
-            "waiting" | "submitting" => self.info,
-            "prompting" | "merge-ready" => self.warning,
-            "cancelled" | "aborted" => Style::default().fg(Color::LightYellow),
-            "dead" => self.error,
-            _ => self.muted,
+            SessionState::Complete | SessionState::Merged => self.ok,
+            SessionState::Ready => Style::default().fg(Color::LightGreen),
+            SessionState::Waiting | SessionState::Submitting => self.info,
+            SessionState::Prompting | SessionState::MergeReady => self.warning,
+            SessionState::Cancelled | SessionState::Aborted => {
+                Style::default().fg(Color::LightYellow)
+            }
+            SessionState::Dead => self.error,
+            SessionState::Other(_) => self.muted,
         }
     }
 }

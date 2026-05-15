@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use thiserror::Error;
 
-use super::schema::{DashboardSnapshot, MasterState};
+use super::schema::MasterState;
+use super::snapshot::DashboardSnapshot;
 
 #[derive(Debug, Error)]
 pub enum StateError {

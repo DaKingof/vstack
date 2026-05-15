@@ -7,7 +7,7 @@ use ratatui::Frame;
 use crate::app::model::Model;
 use crate::app::theme::Theme;
 use crate::app::view::{fx, human_duration};
-use crate::state::schema::TrackedSession;
+use crate::state::snapshot::TrackedSession;
 
 const RIGHT_RAIL_MIN_WIDTH: u16 = 100;
 const SINGLE_COLUMN_WIDTH: u16 = 80;
@@ -62,7 +62,7 @@ fn render_single_column(frame: &mut Frame<'_>, area: Rect, model: &Model, theme:
     if let Some(started) = snapshot.started_at {
         lines.push(Line::from(vec![
             Span::styled("Elapsed ", theme.status_label),
-            Span::raw(human_duration(started, model.now())),
+            Span::raw(human_duration(started, model.now)),
         ]));
     }
     if let Some(pause) = &snapshot.paused_for_user {
@@ -151,7 +151,7 @@ fn render_session_table(frame: &mut Frame<'_>, area: Rect, model: &Model, theme:
             };
             Row::new(vec![
                 Cell::from(Line::from(vec![
-                    Span::styled(session.kind_badge(), theme.kind_badge(&session.kind)),
+                    Span::styled(session.kind.badge(), theme.kind_badge(&session.kind)),
                     Span::raw(" "),
                     Span::styled(fx::spinner(model, session), theme.info),
                 ])),
@@ -162,9 +162,9 @@ fn render_session_table(frame: &mut Frame<'_>, area: Rect, model: &Model, theme:
                 Cell::from(session.harness.as_deref().unwrap_or("—")),
                 Cell::from(session.title.as_str()),
                 Cell::from(issue_label(session)),
-                Cell::from(age_label(session.spawned_at, model.now())),
+                Cell::from(age_label(session.spawned_at, model.now)),
                 Cell::from(last_decision(session)),
-                Cell::from(activity_label(session, model.now())),
+                Cell::from(activity_label(session, model.now)),
             ])
             .style(row_style)
         })
@@ -220,10 +220,10 @@ fn detail_lines(session: &TrackedSession, model: &Model, theme: Theme) -> Vec<Li
         ]),
         Line::from(vec![
             Span::styled("kind ", theme.status_label),
-            Span::raw(session.kind.clone()),
+            Span::raw(session.kind.to_string()),
             Span::raw("  "),
             Span::styled("state ", theme.status_label),
-            Span::styled(session.state.clone(), theme.state(&session.state)),
+            Span::styled(session.state.to_string(), theme.state(&session.state)),
         ]),
     ];
     if let Some(substate) = &session.substate {
@@ -267,8 +267,8 @@ fn detail_lines(session: &TrackedSession, model: &Model, theme: Theme) -> Vec<Li
             Span::styled("scope ", theme.status_label),
             Span::raw(format!(
                 "declared={} actual={}",
-                issue.scope_files_declared.unwrap_or_default(),
-                issue.scope_files_actual.unwrap_or_default()
+                optional_count(issue.scope_files_declared),
+                optional_count(issue.scope_files_actual)
             )),
         ]));
     }
@@ -296,6 +296,12 @@ fn detail_lines(session: &TrackedSession, model: &Model, theme: Theme) -> Vec<Li
         ]));
     }
     lines
+}
+
+fn optional_count(value: Option<u32>) -> String {
+    value
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| String::from("—"))
 }
 
 fn issue_label(session: &TrackedSession) -> String {

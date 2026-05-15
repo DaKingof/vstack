@@ -1,32 +1,33 @@
 use super::command::Cmd;
 use super::keymap::{self, Action};
-use super::model::{EffectKind, ModalState, Model};
+use super::model::{ModalState, Model};
 use super::msg::Msg;
+use super::view::fx::{self, EffectKind, EffectTarget};
 
 const PAGE_STEP: usize = 10;
-const TAB_SWITCH_FRAMES: u64 = 3;
-const HELP_FADE_FRAMES: u64 = 3;
-const ERROR_FLASH_FRAMES: u64 = 4;
-const SELECTION_HALO_FRAMES: u64 = 2;
 
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
-        Msg::Tick => vec![Cmd::Render],
+        Msg::Tick => {
+            model.refresh_now();
+            vec![Cmd::Render]
+        }
         Msg::AnimateTick => {
             model.animate_frame = model.animate_frame.saturating_add(1);
-            model.prune_effects();
+            fx::prune_effects(model);
             vec![Cmd::Render]
         }
         Msg::KeyPressed(key) => handle_key(model, &key),
         Msg::Resize(_, _) => vec![Cmd::Render],
         Msg::SnapshotUpdated(snapshot) => {
             model.snapshot = *snapshot;
+            model.refresh_now();
             model.clamp_selection();
             vec![Cmd::Render]
         }
         Msg::Error(error) => {
             model.error = Some(error);
-            model.push_effect(EffectKind::ErrorFlash, ERROR_FLASH_FRAMES);
+            fx::push_effect(model, EffectKind::ErrorFlash, EffectTarget::Global);
             vec![Cmd::Render]
         }
         Msg::Quit => {
@@ -53,12 +54,14 @@ fn handle_key(model: &mut Model, key: &crossterm::event::KeyEvent) -> Vec<Cmd> {
     match action {
         Action::NextTab => {
             model.current_tab = model.current_tab.next();
-            model.push_effect(EffectKind::TabSwitchForward, TAB_SWITCH_FRAMES);
+            let target = EffectTarget::Tab(model.current_tab);
+            fx::push_effect(model, EffectKind::TabSwitchForward, target);
             vec![Cmd::Render]
         }
         Action::PreviousTab => {
             model.current_tab = model.current_tab.previous();
-            model.push_effect(EffectKind::TabSwitchBackward, TAB_SWITCH_FRAMES);
+            let target = EffectTarget::Tab(model.current_tab);
+            fx::push_effect(model, EffectKind::TabSwitchBackward, target);
             vec![Cmd::Render]
         }
         Action::MoveDown => {
@@ -79,12 +82,14 @@ fn handle_key(model: &mut Model, key: &crossterm::event::KeyEvent) -> Vec<Cmd> {
         }
         Action::First => {
             model.set_selected_index(0);
-            model.push_effect(EffectKind::SelectionHalo, SELECTION_HALO_FRAMES);
+            let target = EffectTarget::Row(model.selected_index());
+            fx::push_effect(model, EffectKind::SelectionHalo, target);
             vec![Cmd::Render]
         }
         Action::Last => {
             model.set_selected_index(model.max_selection_index());
-            model.push_effect(EffectKind::SelectionHalo, SELECTION_HALO_FRAMES);
+            let target = EffectTarget::Row(model.selected_index());
+            fx::push_effect(model, EffectKind::SelectionHalo, target);
             vec![Cmd::Render]
         }
         Action::OpenDetail => vec![Cmd::LogAction(format!(
@@ -99,7 +104,7 @@ fn handle_key(model: &mut Model, key: &crossterm::event::KeyEvent) -> Vec<Cmd> {
                 Cmd::Render,
             ]
         }
-        Action::Reload => vec![Cmd::ReloadDemo(model.demo_fixture.clone())],
+        Action::Reload => vec![Cmd::RequestSnapshot(model.snapshot_source.clone())],
         Action::ToggleCompact => {
             model.ui.compact = !model.ui.compact;
             vec![Cmd::Render]
@@ -111,7 +116,7 @@ fn handle_key(model: &mut Model, key: &crossterm::event::KeyEvent) -> Vec<Cmd> {
             } else {
                 ModalState::None
             };
-            model.push_effect(EffectKind::HelpOverlay, HELP_FADE_FRAMES);
+            fx::push_effect(model, EffectKind::HelpOverlay, EffectTarget::Global);
             vec![Cmd::Render]
         }
         Action::Quit => {
@@ -133,5 +138,6 @@ fn move_selection(model: &mut Model, delta: isize) {
         .saturating_add_signed(delta)
         .min(model.max_selection_index());
     model.set_selected_index(next);
-    model.push_effect(EffectKind::SelectionHalo, SELECTION_HALO_FRAMES);
+    let target = EffectTarget::Row(model.selected_index());
+    fx::push_effect(model, EffectKind::SelectionHalo, target);
 }

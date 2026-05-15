@@ -1,6 +1,6 @@
 use crossterm::event::KeyEvent;
 
-use crate::state::schema::DashboardSnapshot;
+use crate::state::snapshot::DashboardSnapshot;
 
 #[derive(Debug)]
 pub enum Msg {

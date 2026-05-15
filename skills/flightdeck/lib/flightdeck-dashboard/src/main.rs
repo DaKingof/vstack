@@ -2,14 +2,17 @@ use std::io::{self, IsTerminal, Stdout};
 use std::time::Duration;
 
 use clap::Parser;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{eyre, Result};
+use crossterm::cursor::Show;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use flightdeck_dashboard::app::effects;
+use flightdeck_dashboard::app::command::SnapshotSource;
+use flightdeck_dashboard::app::effects::Effects;
 use flightdeck_dashboard::app::model::{utc_now, Model, MotionLevel};
+use flightdeck_dashboard::app::view::fx;
 use flightdeck_dashboard::app::{update, view};
 use flightdeck_dashboard::cli::{Cli, Command};
 use flightdeck_dashboard::fixtures;
@@ -38,8 +41,10 @@ async fn main() -> Result<()> {
 }
 
 async fn run_tui(demo_name: &str) -> Result<()> {
+    let demo_name = fixtures::canonical_name(demo_name)?;
     let snapshot = fixtures::load_demo_snapshot(demo_name, utc_now())?;
-    let mut model = Model::new(snapshot, demo_name, MotionLevel::from_env(), utc_now);
+    let source = SnapshotSource::Demo(demo_name);
+    let mut model = Model::new(snapshot, source, MotionLevel::from_env(), utc_now);
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         tracing::info!(
             demo = demo_name,
@@ -48,14 +53,8 @@ async fn run_tui(demo_name: &str) -> Result<()> {
         return Ok(());
     }
 
-    let mut terminal = setup_terminal()?;
-    let run_result = run_app_loop(&mut terminal, &mut model).await;
-    let restore_result = restore_terminal(&mut terminal);
-    match (run_result, restore_result) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
-    }
+    let mut terminal = TerminalGuard::enter()?;
+    run_app_loop(terminal.terminal_mut()?, &mut model).await
 }
 
 async fn run_app_loop(
@@ -63,6 +62,7 @@ async fn run_app_loop(
     model: &mut Model,
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel();
+    let effects = Effects::new(tx.clone(), model.clock);
     let mut events = EventStream::new();
     let mut anim = tokio::time::interval(Duration::from_millis(ANIMATION_TICK_MS));
     anim.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -75,25 +75,25 @@ async fn run_app_loop(
             biased;
             Some(msg) = rx.recv() => {
                 let commands = update(model, msg);
-                effects::run_commands(commands, &tx, model.clock).await;
+                effects.run_commands(commands);
             }
             maybe_event = events.next() => {
                 if let Some(msg) = event_to_msg(maybe_event) {
                     let commands = update(model, msg);
-                    effects::run_commands(commands, &tx, model.clock).await;
+                    effects.run_commands(commands);
                 }
             }
-            _ = anim.tick(), if model.has_active_effects() => {
+            _ = anim.tick(), if fx::has_active_effects(model) => {
                 let commands = update(model, flightdeck_dashboard::app::msg::Msg::AnimateTick);
-                effects::run_commands(commands, &tx, model.clock).await;
+                effects.run_commands(commands);
             }
             _ = clock.tick() => {
                 let commands = update(model, flightdeck_dashboard::app::msg::Msg::Tick);
-                effects::run_commands(commands, &tx, model.clock).await;
+                effects.run_commands(commands);
             }
             _ = tokio::signal::ctrl_c() => {
                 let commands = update(model, flightdeck_dashboard::app::msg::Msg::Quit);
-                effects::run_commands(commands, &tx, model.clock).await;
+                effects.run_commands(commands);
             }
         }
         terminal.draw(|frame| view::render(frame, model))?;
@@ -121,25 +121,105 @@ fn event_to_msg(
     }
 }
 
-fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    terminal.clear()?;
-    Ok(terminal)
+#[derive(Default)]
+struct TerminalGuard {
+    terminal: Option<Terminal<CrosstermBackend<Stdout>>>,
+    raw_enabled: bool,
+    alt_screen: bool,
+    mouse_capture: bool,
 }
 
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-    Ok(())
+impl TerminalGuard {
+    fn enter() -> Result<Self> {
+        let mut guard = Self::default();
+        if let Err(error) = guard.enter_inner() {
+            guard.cleanup();
+            return Err(error);
+        }
+        Ok(guard)
+    }
+
+    fn terminal_mut(&mut self) -> Result<&mut Terminal<CrosstermBackend<Stdout>>> {
+        self.terminal
+            .as_mut()
+            .ok_or_else(|| eyre!("terminal not initialized"))
+    }
+
+    fn enter_inner(&mut self) -> Result<()> {
+        if let Err(error) = enable_raw_mode() {
+            return Err(error.into());
+        }
+        self.raw_enabled = true;
+
+        let mut stdout = io::stdout();
+        if let Err(error) = execute!(stdout, EnterAlternateScreen) {
+            return Err(error.into());
+        }
+        self.alt_screen = true;
+
+        if let Err(error) = execute!(stdout, EnableMouseCapture) {
+            return Err(error.into());
+        }
+        self.mouse_capture = true;
+
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+        terminal.clear()?;
+        self.terminal = Some(terminal);
+        Ok(())
+    }
+
+    fn cleanup(&mut self) {
+        if self.raw_enabled {
+            if let Err(error) = disable_raw_mode() {
+                tracing::warn!(%error, "failed to disable raw mode");
+            }
+            self.raw_enabled = false;
+        }
+
+        if let Some(terminal) = self.terminal.as_mut() {
+            if self.alt_screen {
+                if let Err(error) = execute!(terminal.backend_mut(), LeaveAlternateScreen) {
+                    tracing::warn!(%error, "failed to leave alternate screen");
+                }
+                self.alt_screen = false;
+            }
+            if self.mouse_capture {
+                if let Err(error) = execute!(terminal.backend_mut(), DisableMouseCapture) {
+                    tracing::warn!(%error, "failed to disable mouse capture");
+                }
+                self.mouse_capture = false;
+            }
+            if let Err(error) = execute!(terminal.backend_mut(), Show) {
+                tracing::warn!(%error, "failed to show cursor");
+            }
+        } else {
+            let mut stdout = io::stdout();
+            if self.alt_screen {
+                if let Err(error) = execute!(stdout, LeaveAlternateScreen) {
+                    tracing::warn!(%error, "failed to leave alternate screen");
+                }
+                self.alt_screen = false;
+            }
+            if self.mouse_capture {
+                if let Err(error) = execute!(stdout, DisableMouseCapture) {
+                    tracing::warn!(%error, "failed to disable mouse capture");
+                }
+                self.mouse_capture = false;
+            }
+            if let Err(error) = execute!(stdout, Show) {
+                tracing::warn!(%error, "failed to show cursor");
+            }
+        }
+
+        self.terminal = None;
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
 }
 
 fn not_implemented(command: &str) -> Result<()> {

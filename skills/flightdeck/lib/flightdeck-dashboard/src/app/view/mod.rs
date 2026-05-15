@@ -44,7 +44,7 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme)
     let owner = owner_label(model);
     let elapsed = snapshot
         .started_at
-        .map(|started| human_duration(started, model.now()))
+        .map(|started| human_duration(started, model.now))
         .unwrap_or_else(|| String::from("unknown"));
     let state_counts = snapshot
         .counts
