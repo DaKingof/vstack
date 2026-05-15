@@ -112,6 +112,7 @@ struct PiStreamState {
     compact_seen: bool,
     last_parse_error: Option<String>,
     last_classifier_spawn_error: Option<io::ErrorKind>,
+    last_classifier_non_file_path: Option<PathBuf>,
 }
 
 impl PiStreamState {
@@ -122,6 +123,7 @@ impl PiStreamState {
             compact_seen: false,
             last_parse_error: None,
             last_classifier_spawn_error: None,
+            last_classifier_non_file_path: None,
         }
     }
 
@@ -479,9 +481,13 @@ async fn classify_text(config: &PiConfig, state: &mut PiStreamState, text: &str)
     if let Some(classifier) = std::env::var_os("FD_CLASSIFIER")
         .or_else(|| std::env::var_os("FLIGHTDECK_CLASSIFIER"))
         .map(PathBuf::from)
-        .filter(|path| path.is_file())
     {
-        match run_classifier(&classifier, text).await {
+        if !classifier.is_file() {
+            warn_classifier_non_file_transition(state, config, &classifier);
+            return fallback_classify_text(text);
+        }
+        state.last_classifier_non_file_path = None;
+        match run_classifier(&classifier, text.as_bytes()).await {
             Ok(Some(tag)) => {
                 state.last_classifier_spawn_error = None;
                 return tag;
@@ -496,6 +502,10 @@ async fn classify_text(config: &PiConfig, state: &mut PiStreamState, text: &str)
                 state.last_classifier_spawn_error = None;
                 tracing::warn!(pane_id = %config.pane_id, classifier_path = %classifier.display(), error_kind = ?error.kind(), %error, "pi classifier io failed");
             }
+            Err(ClassifierError::StdinUnavailable) => {
+                state.last_classifier_spawn_error = None;
+                tracing::warn!(pane_id = %config.pane_id, classifier_path = %classifier.display(), "pi classifier stdin unavailable; falling back to regex");
+            }
             Err(ClassifierError::Timeout) => {
                 state.last_classifier_spawn_error = None;
                 tracing::warn!(pane_id = %config.pane_id, classifier_path = %classifier.display(), timeout_ms = CLASSIFIER_TIMEOUT.as_millis(), "pi classifier timed out; falling back to regex");
@@ -509,10 +519,11 @@ async fn classify_text(config: &PiConfig, state: &mut PiStreamState, text: &str)
 enum ClassifierError {
     Spawn(io::Error),
     Io(io::Error),
+    StdinUnavailable,
     Timeout,
 }
 
-async fn run_classifier(path: &Path, text: &str) -> Result<Option<String>, ClassifierError> {
+async fn run_classifier(path: &Path, input: &[u8]) -> Result<Option<String>, ClassifierError> {
     let mut child = Command::new(path)
         .arg("--no-footer-gate")
         .stdin(Stdio::piped())
@@ -521,21 +532,46 @@ async fn run_classifier(path: &Path, text: &str) -> Result<Option<String>, Class
         .kill_on_drop(true)
         .spawn()
         .map_err(ClassifierError::Spawn)?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(text.as_bytes())
-            .await
-            .map_err(ClassifierError::Io)?;
-    }
-    let output = tokio::time::timeout(CLASSIFIER_TIMEOUT, child.wait_with_output())
-        .await
-        .map_err(|_| ClassifierError::Timeout)?
-        .map_err(ClassifierError::Io)?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or(ClassifierError::StdinUnavailable)?;
+    let input = input.to_owned();
+    let write_task = tokio::spawn(async move {
+        stdin.write_all(&input).await?;
+        stdin.shutdown().await
+    });
+    let output = match tokio::time::timeout(CLASSIFIER_TIMEOUT, child.wait_with_output()).await {
+        Ok(Ok(output)) => {
+            let _ = write_task.await;
+            output
+        }
+        Ok(Err(error)) => {
+            write_task.abort();
+            return Err(ClassifierError::Io(error));
+        }
+        Err(_) => {
+            write_task.abort();
+            return Err(ClassifierError::Timeout);
+        }
+    };
     if !output.status.success() {
         return Ok(None);
     }
     let tag = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     Ok((!tag.is_empty()).then_some(tag))
+}
+
+fn warn_classifier_non_file_transition(
+    state: &mut PiStreamState,
+    config: &PiConfig,
+    classifier: &Path,
+) {
+    if state.last_classifier_non_file_path.as_deref() == Some(classifier) {
+        return;
+    }
+    state.last_classifier_non_file_path = Some(classifier.to_path_buf());
+    tracing::warn!(pane_id = %config.pane_id, classifier_path = %classifier.display(), "FD_CLASSIFIER is not a regular file; using regex fallback");
 }
 
 fn warn_classifier_spawn_transition(
