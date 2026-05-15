@@ -194,8 +194,6 @@ export function registerBash(pi: ExtensionAPI, agent: any, cwd: string): void {
 			const liveTailState = markBashStarted(context);
 			if (isPartial) {
 				const trimmedOutput = output.trim();
-				const count = trimmedOutput ? lineCount(output.replace(/(?:\r?\n)+$/, "")) : 0;
-				const lineText = count === 0 ? "starting" : `${count} line${count === 1 ? "" : "s"}`;
 				const partialMode = bashOutputMode(effectiveCwd);
 				if (partialMode !== "summary" && partialMode !== "hidden" && trimmedOutput) {
 					const delayMs = bashLiveOutputDelayMs(effectiveCwd);
@@ -208,7 +206,7 @@ export function registerBash(pi: ExtensionAPI, agent: any, cwd: string): void {
 					}
 					scheduleBashLiveTailRerender(liveTailState, context, delayMs);
 				}
-				return renderPendingDetail(`running… ${lineText}`, theme);
+				return makeEmpty();
 			}
 			clearBlink(context);
 			clearBashLiveTailTimer(liveTailState);
