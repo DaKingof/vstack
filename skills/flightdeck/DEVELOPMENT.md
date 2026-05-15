@@ -71,7 +71,7 @@ Not run by hand in normal use — the skill calls them.
 - `flightdeck-session` — launches or attaches generic tracked tmux sessions without fake issue ids.
 - `flightdeck-state` — reads/writes the session's master state file, including tracked-entry normalization (`tracked-entries`, `write-entry`).
 - `flightdeck-daemon` — background poller; wakes the master.
-- `flightdeck-dashboard` — Rust/ratatui standalone dashboard; Phase 1 supports `tui --demo[=NAME]` only.
+- `flightdeck-dashboard` — Rust/ratatui standalone dashboard; supports demo fixtures plus `tui --state-file <path>` and `tui --session <name>` live-state reads with terminated-archive fallback.
 - `pane-registry`, `pane-poll`, `pane-respond` — pane tracking and IO.
 - `prompt-classify` — pattern-matches agent output against known prompt shapes; guards issue-only tags on non-issue entries as `domain-mismatch`.
 - `pr-conflict-graph`, `parallel-groups` — issue-mode merge-order planning.
@@ -104,6 +104,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 cargo insta test
 cargo run --release -- tui --demo
+cargo run --release -- tui --state-file ../../tests/fixtures/state/entries-happy.json
 ```
 
 Snapshots live under `tests/snapshots/`; update intentionally with `INSTA_UPDATE=always cargo insta test`, then review the `.snap` diff before committing.
@@ -155,7 +156,7 @@ Detailed list of what each script does, for debugging or porting work:
 | `open-terminal` | Launches a new tmux window with the chosen harness running on the chosen issue worktree. |
 | `flightdeck-state` | Reads/writes the session's master state file, including tracked-entry normalization (`tracked-entries`, `write-entry`). |
 | `flightdeck-daemon` | Background poller. Wakes the master when an agent needs attention. |
-| `flightdeck-dashboard` | Rust/ratatui dashboard trampoline. Phase 1 supports compiled demo fixtures via `tui --demo[=NAME]`; daemon/status/supervise/launch are reserved for later phases. |
+| `flightdeck-dashboard` | Rust/ratatui dashboard trampoline. `tui --demo[=NAME]` uses compiled fixtures; `tui --state-file <path>` reads a concrete master-state JSON; `tui --session <name>` resolves `<project-root>/<FLIGHTDECK_STATE_DIR>/flightdeck-state-<name>.json` and falls back to newest valid `*.json.archive`. Daemon/status/supervise/launch are reserved for later phases. |
 | `pane-registry` | Tracks which tracked entry (issue or adhoc session) lives in which tmux pane and how to talk to its agent. |
 | `pane-poll` | Reads an agent's current state (via native channel where possible). |
 | `pane-respond` | Sends a reply or option pick into an agent. |

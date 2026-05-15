@@ -14,8 +14,10 @@ use flightdeck_dashboard::app::effects::Effects;
 use flightdeck_dashboard::app::model::{utc_now, Model};
 use flightdeck_dashboard::app::motion::{self, MotionLevel};
 use flightdeck_dashboard::app::{update, view};
-use flightdeck_dashboard::cli::{Cli, Command};
+use flightdeck_dashboard::cli::{Cli, Command, TuiArgs};
 use flightdeck_dashboard::fixtures;
+use flightdeck_dashboard::state::snapshot::DashboardSnapshot;
+use flightdeck_dashboard::state::tracked_entries::{self, ArchiveError, SnapshotError};
 use flightdeck_dashboard::util::logging;
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
@@ -32,7 +34,7 @@ async fn main() -> Result<()> {
     let _log_guard = logging::init_file_logging()?;
     let cli = Cli::parse();
     match cli.command {
-        Command::Tui(args) => run_tui(args.demo_name()).await,
+        Command::Tui(args) => run_tui(args).await,
         Command::Daemon(_) => not_implemented("daemon"),
         Command::Status(_) => not_implemented("status"),
         Command::Supervise(_) => not_implemented("supervise"),
@@ -40,14 +42,21 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run_tui(demo_name: &str) -> Result<()> {
-    let demo_name = fixtures::canonical_name(demo_name)?;
-    let snapshot = fixtures::load_demo_snapshot(demo_name, utc_now())?;
-    let source = SnapshotSource::Demo(demo_name);
-    let mut model = Model::new(snapshot, source, MotionLevel::from_env(), utc_now);
+async fn run_tui(args: TuiArgs) -> Result<()> {
+    let initial = initial_snapshot(&args)?;
+    let mut model = Model::new(
+        initial.snapshot,
+        initial.source,
+        MotionLevel::from_env(),
+        utc_now,
+    );
+    if let Some(error) = initial.status_error {
+        model.error = Some(error);
+    }
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         tracing::info!(
-            demo = demo_name,
+            source = ?model.snapshot_source,
+            entries = model.snapshot.sessions.len(),
             "non-terminal dashboard smoke render skipped"
         );
         return Ok(());
@@ -55,6 +64,87 @@ async fn run_tui(demo_name: &str) -> Result<()> {
 
     let mut terminal = TerminalGuard::enter()?;
     run_app_loop(terminal.terminal_mut()?, &mut model).await
+}
+
+struct InitialSnapshot {
+    snapshot: DashboardSnapshot,
+    source: SnapshotSource,
+    status_error: Option<String>,
+}
+
+fn initial_snapshot(args: &TuiArgs) -> Result<InitialSnapshot> {
+    let now = utc_now();
+    if let Some(path) = &args.state_file {
+        return Ok(match tracked_entries::snapshot_from_file(path, now) {
+            Ok(snapshot) => InitialSnapshot {
+                snapshot,
+                source: SnapshotSource::File(path.clone()),
+                status_error: None,
+            },
+            Err(SnapshotError::PrePurgeState) => InitialSnapshot {
+                snapshot: tracked_entries::snapshot_for_error_path(
+                    path,
+                    now,
+                    SnapshotError::PrePurgeState.to_string(),
+                    true,
+                ),
+                source: SnapshotSource::File(path.clone()),
+                status_error: None,
+            },
+            Err(error) => return Err(error.into()),
+        });
+    }
+
+    if args.demo.is_some() || !args.wants_live_state() {
+        let demo_name = fixtures::canonical_name(args.demo_name())?;
+        let snapshot = fixtures::load_demo_snapshot(demo_name, now)?;
+        return Ok(InitialSnapshot {
+            snapshot,
+            source: SnapshotSource::Demo(demo_name),
+            status_error: None,
+        });
+    }
+
+    let resolution = tracked_entries::resolve_session_state(args.session.as_deref())?;
+    let source = SnapshotSource::Session(resolution.clone());
+    match tracked_entries::read_session_snapshot(&resolution, now) {
+        Ok(snapshot) => Ok(InitialSnapshot {
+            snapshot,
+            source,
+            status_error: None,
+        }),
+        Err(SnapshotError::PrePurgeState) => Ok(InitialSnapshot {
+            snapshot: tracked_entries::snapshot_for_error(
+                &resolution.session,
+                resolution.state_path.clone(),
+                now,
+                SnapshotError::PrePurgeState.to_string(),
+                true,
+            ),
+            source,
+            status_error: None,
+        }),
+        Err(SnapshotError::Archive(ArchiveError::NoArchives { .. })) => Ok(InitialSnapshot {
+            snapshot: DashboardSnapshot::empty_for_session(
+                &resolution.session,
+                resolution.state_path.clone(),
+                now,
+            ),
+            source,
+            status_error: None,
+        }),
+        Err(error) => Ok(InitialSnapshot {
+            snapshot: tracked_entries::snapshot_for_error(
+                &resolution.session,
+                resolution.state_path.clone(),
+                now,
+                error.to_string(),
+                false,
+            ),
+            source,
+            status_error: Some(error.to_string()),
+        }),
+    }
 }
 
 async fn run_app_loop(

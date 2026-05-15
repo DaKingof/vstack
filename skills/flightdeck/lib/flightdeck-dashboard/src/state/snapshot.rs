@@ -238,6 +238,14 @@ impl DashboardSnapshot {
     }
 
     #[must_use]
+    pub fn empty_for_session(
+        session_id: impl Into<String>,
+        master_state_path: PathBuf,
+        now: DateTime<Utc>,
+    ) -> Self {
+        Self::empty_base(session_id, master_state_path, now, None, false)
+    }
+
     pub fn empty_with_error(
         session_id: impl Into<String>,
         master_state_path: PathBuf,
@@ -245,7 +253,22 @@ impl DashboardSnapshot {
         error: impl Into<String>,
         pre_purge_state: bool,
     ) -> Self {
-        let error = error.into();
+        Self::empty_base(
+            session_id,
+            master_state_path,
+            now,
+            Some(error.into()),
+            pre_purge_state,
+        )
+    }
+
+    fn empty_base(
+        session_id: impl Into<String>,
+        master_state_path: PathBuf,
+        now: DateTime<Utc>,
+        error: Option<String>,
+        pre_purge_state: bool,
+    ) -> Self {
         Self {
             session_id: session_id.into(),
             project_root: PathBuf::from("."),
@@ -255,7 +278,7 @@ impl DashboardSnapshot {
             terminated_at: None,
             master_state_path,
             master_archive_error: None,
-            master_error: Some(error),
+            master_error: error,
             pre_purge_state,
             owner: None,
             daemon: DaemonStatus::unknown(),

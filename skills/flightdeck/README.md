@@ -52,7 +52,7 @@ Runtime requirements for the shipped core scripts remain `bash` 4+, `tmux` 3.x, 
 
 ## Rust dashboard (experimental)
 
-`skills/flightdeck/scripts/flightdeck-dashboard tui --demo[=NAME]` runs the standalone ratatui dashboard. Phase 1 ships compiled demo fixtures (`empty`, `one-adhoc`, `one-issue`, `mixed`, `terminated`, `paused`), six navigable tabs, help overlay, and motion settings; live Flightdeck state and daemon integration land in later phases.
+`skills/flightdeck/scripts/flightdeck-dashboard tui --demo[=NAME]` runs compiled demo fixtures (`empty`, `one-adhoc`, `one-issue`, `mixed`, `terminated`, `paused`). `tui --state-file <path>` reads a concrete master-state JSON file, and `tui --session <name>` resolves `<project-root>/<FLIGHTDECK_STATE_DIR>/flightdeck-state-<name>.json` (default state dir `tmp/`) with terminated-archive fallback. With neither flag inside tmux, the dashboard uses the current tmux session.
 
 Build a prebuilt binary with:
 

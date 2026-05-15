@@ -8,11 +8,13 @@ use crate::app::model::Model;
 use crate::app::theme::Theme;
 use crate::app::view::{fx, human_duration};
 use crate::state::snapshot::TrackedSession;
+use crate::state::tracked_entries::PRE_PURGE_BANNER;
 
 const RIGHT_RAIL_MIN_WIDTH: u16 = 100;
 const SINGLE_COLUMN_WIDTH: u16 = 80;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) {
+    let area = render_pre_purge_banner(frame, area, model, theme);
     if area.width <= SINGLE_COLUMN_WIDTH || model.ui.compact {
         render_single_column(frame, area, model, theme);
         return;
@@ -39,6 +41,28 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) {
     render_left_rail(frame, columns[0], model, theme);
     render_session_table(frame, columns[1], model, theme);
     render_detail(frame, columns[2], model, theme);
+}
+
+fn render_pre_purge_banner(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) -> Rect {
+    if !model.snapshot.pre_purge_state {
+        return area;
+    }
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.error)
+        .title(Span::styled(" state schema warning ", theme.error));
+    frame.render_widget(
+        Paragraph::new(PRE_PURGE_BANNER)
+            .block(block)
+            .style(theme.error)
+            .alignment(Alignment::Center),
+        chunks[0],
+    );
+    chunks[1]
 }
 
 fn render_single_column(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) {
