@@ -13,12 +13,14 @@ use crate::util::paths::{fd_resolve_state_dir, resolve_session_key};
 
 const DASHBOARD_ENTRY_ID: &str = "flightdeck-dashboard";
 const DEFAULT_WINDOW_NAME: &str = "flightdeck";
-const DEFAULT_MOTION: MotionArg = MotionArg::Full;
 const DASHBOARD_ENV: &str = "FLIGHTDECK_DASHBOARD";
 const WINDOW_ENV: &str = "FLIGHTDECK_DASHBOARD_WINDOW";
 const MOTION_ENV: &str = "FLIGHTDECK_DASHBOARD_MOTION";
 const DAEMON_RUST_ENV: &str = "FLIGHTDECK_DAEMON_RUST";
 const SESSION_BIN_ENV: &str = "FLIGHTDECK_SESSION_BIN";
+const SKILL_DIR_ENV: &str = "FLIGHTDECK_SKILL_DIR";
+const NO_MOTION_ENV: &str = "NO_MOTION";
+const NO_COLOR_ENV: &str = "NO_COLOR";
 
 pub async fn run(args: LaunchArgs) -> Result<()> {
     if dashboard_disabled() {
@@ -50,6 +52,39 @@ pub async fn run(args: LaunchArgs) -> Result<()> {
     let project_root = resolve_project_root();
     let explicit_state_file = args.state_file.as_deref().map(absolutize);
     let state_file = resolve_state_file(explicit_state_file.as_deref(), &session, &project_root);
+
+    if !args.force {
+        match tracked_dashboard_alive(state_file.as_deref()).await {
+            Ok(true) => {
+                tracing::info!(
+                    entry = DASHBOARD_ENTRY_ID,
+                    "flightdeck dashboard entry already alive; launch skipped"
+                );
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(error) => {
+                warn(format!(
+                    "tmux idempotency probe failed; skipping dashboard launch this run: {error}"
+                ));
+                return Ok(());
+            }
+        }
+        match tmux_window_exists(&window_name).await {
+            Ok(true) => {
+                tracing::info!(window = %window_name, "flightdeck dashboard window already exists; launch skipped");
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(error) => {
+                warn(format!(
+                    "tmux idempotency probe failed; skipping dashboard launch this run: {error}"
+                ));
+                return Ok(());
+            }
+        }
+    }
+
     let daemon_state_file = if explicit_state_file.is_some() {
         explicit_state_file.clone()
     } else if !args.no_daemon && rust_daemon_enabled() {
@@ -74,18 +109,6 @@ pub async fn run(args: LaunchArgs) -> Result<()> {
         tracing::info!(
             "flightdeck dashboard launch defers daemon to canonical TS flightdeck daemon"
         );
-    }
-
-    if !args.force && tracked_dashboard_alive(state_file.as_deref()).await {
-        tracing::info!(
-            entry = DASHBOARD_ENTRY_ID,
-            "flightdeck dashboard entry already alive; launch skipped"
-        );
-        return Ok(());
-    }
-    if !args.force && tmux_window_exists(&window_name).await {
-        tracing::info!(window = %window_name, "flightdeck dashboard window already exists; launch skipped");
-        return Ok(());
     }
 
     launch_window(
@@ -120,13 +143,16 @@ fn select_window_name(cli: Option<&str>) -> String {
         .unwrap_or_else(|| DEFAULT_WINDOW_NAME.to_owned())
 }
 
-fn select_motion(cli: Option<MotionArg>) -> MotionArg {
+fn select_motion(cli: Option<MotionArg>) -> Option<MotionArg> {
     cli.or_else(|| {
         std::env::var(MOTION_ENV)
             .ok()
             .and_then(|value| motion_from_str(value.trim()))
     })
-    .unwrap_or(DEFAULT_MOTION)
+    .or_else(|| {
+        (std::env::var_os(NO_MOTION_ENV).is_some() || std::env::var_os(NO_COLOR_ENV).is_some())
+            .then_some(MotionArg::Off)
+    })
 }
 
 fn motion_from_str(value: &str) -> Option<MotionArg> {
@@ -270,62 +296,66 @@ async fn start_daemon_if_needed(
     }
 }
 
-async fn tracked_dashboard_alive(state_file: Option<&Path>) -> bool {
+async fn tracked_dashboard_alive(state_file: Option<&Path>) -> Result<bool> {
     let Some(path) = state_file else {
-        return false;
+        return Ok(false);
     };
     let Ok(body) = fs::read_to_string(path) else {
-        return false;
+        return Ok(false);
     };
     let Ok(value) = serde_json::from_str::<Value>(&body) else {
-        return false;
+        return Ok(false);
     };
     let pane_id = value
         .pointer(&format!("/entries/{DASHBOARD_ENTRY_ID}/pane_id"))
         .and_then(Value::as_str)
         .filter(|pane| !pane.is_empty());
     let Some(pane_id) = pane_id else {
-        return false;
+        return Ok(false);
     };
     tmux_pane_alive(pane_id).await
 }
 
-async fn tmux_pane_alive(pane_id: &str) -> bool {
+async fn tmux_pane_alive(pane_id: &str) -> Result<bool> {
     let output = Command::new("tmux")
         .args(["list-panes", "-a", "-F", "#{pane_id}"])
         .output()
-        .await;
-    let Ok(output) = output else {
-        return false;
-    };
+        .await?;
     if !output.status.success() {
-        return false;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        color_eyre::eyre::bail!(
+            "tmux list-panes failed with status {}: {}",
+            output.status,
+            stderr.trim()
+        );
     }
-    String::from_utf8_lossy(&output.stdout)
+    Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
-        .any(|line| line.trim() == pane_id)
+        .any(|line| line.trim() == pane_id))
 }
 
-async fn tmux_window_exists(window_name: &str) -> bool {
+async fn tmux_window_exists(window_name: &str) -> Result<bool> {
     let output = Command::new("tmux")
         .args(["list-windows", "-F", "#{window_name}"])
         .output()
-        .await;
-    let Ok(output) = output else {
-        return false;
-    };
+        .await?;
     if !output.status.success() {
-        return false;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        color_eyre::eyre::bail!(
+            "tmux list-windows failed with status {}: {}",
+            output.status,
+            stderr.trim()
+        );
     }
-    String::from_utf8_lossy(&output.stdout)
+    Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
-        .any(|line| line.trim() == window_name)
+        .any(|line| line.trim() == window_name))
 }
 
 async fn launch_window(
     session: &str,
     window_name: &str,
-    motion: MotionArg,
+    motion: Option<MotionArg>,
     state_file: Option<&Path>,
     project_root: &Path,
 ) {
@@ -369,14 +399,26 @@ fn resolve_flightdeck_session_bin(project_root: &Path) -> Option<PathBuf> {
             return Some(path);
         }
     }
+    if let Some(path) = std::env::var_os(SKILL_DIR_ENV)
+        .map(PathBuf::from)
+        .map(|skill_dir| skill_dir.join("scripts/flightdeck-session"))
+    {
+        if path.is_file() {
+            return Some(path);
+        }
+    }
     let canonical = project_root.join("skills/flightdeck/scripts/flightdeck-session");
     if canonical.is_file() {
         return Some(canonical);
     }
+    let installed = project_root.join(".agents/skills/flightdeck/scripts/flightdeck-session");
+    if installed.is_file() {
+        return Some(installed);
+    }
     which("flightdeck-session")
 }
 
-fn tui_command(session: &str, motion: MotionArg, state_file: Option<&Path>) -> String {
+fn tui_command(session: &str, motion: Option<MotionArg>, state_file: Option<&Path>) -> String {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("flightdeck-dashboard"));
     let mut args = vec![exe.display().to_string(), "tui".to_owned()];
     if let Some(path) = state_file {
@@ -386,8 +428,10 @@ fn tui_command(session: &str, motion: MotionArg, state_file: Option<&Path>) -> S
         args.push("--session".to_owned());
         args.push(session.to_owned());
     }
-    args.push("--motion".to_owned());
-    args.push(motion.as_str().to_owned());
+    if let Some(motion) = motion {
+        args.push("--motion".to_owned());
+        args.push(motion.as_str().to_owned());
+    }
     args.into_iter()
         .map(|arg| shell_quote(&arg))
         .collect::<Vec<_>>()

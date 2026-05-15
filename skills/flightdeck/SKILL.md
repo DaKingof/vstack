@@ -269,7 +269,7 @@ Master-loop env vars consulted by workflows:
 | `FLIGHTDECK_LAUNCH_EFFORT` | unset | Default `open-terminal --effort` / thinking override when the workflow/user does not pass `--effort`. |
 | `FLIGHTDECK_DASHBOARD` | `1` | Set to `0` to disable the Rust dashboard launch hook silently. |
 | `FLIGHTDECK_DASHBOARD_WINDOW` | `flightdeck` | Tmux window name used by `flightdeck-dashboard launch`. |
-| `FLIGHTDECK_DASHBOARD_MOTION` | `full` | Rust dashboard motion level: `full`, `reduced`, or `off`. CLI `--motion` overrides it. |
+| `FLIGHTDECK_DASHBOARD_MOTION` | `full` | Rust dashboard motion level: `full`, `reduced`, or `off`; `NO_MOTION`/`NO_COLOR` also force `off`. CLI `--motion` overrides it. |
 | `FLIGHTDECK_DAEMON_RUST` | `0` | When `1`, `flightdeck-dashboard launch` starts the Rust daemon; otherwise launch defers daemon ownership to the canonical TypeScript path. |
 
 Daemon tuning (`FD_*`) is in README.md. Most `FD_*` knobs run inside the
