@@ -5,7 +5,7 @@ expression: rendered
 theme=dawn (Rose Pine Dawn)
 title=Style::new().fg(Color::Rgb(144, 122, 169)).bg(Color::Rgb(250, 244, 237)).bold()
 selection=Style::new().fg(Color::Rgb(87, 82, 121)).bg(Color::Rgb(223, 218, 217)).bold()
-warning=Style::new().fg(Color::Rgb(234, 157, 52)).bg(Color::Rgb(250, 244, 237))
+warning=Style::new().fg(Color::Rgb(234, 157, 52)).bg(Color::Rgb(250, 244, 237)).bold()
 "┌ Flightdeck ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│ Flightdeck   session demo-mixed  ·  Master pi at /repo/demo  ·  daemon: file-mode  ·  uptime 2h25m  ·  Adhoc 1 · Issue 1 · Workflow 1  ·  stale-warn 4m  dawn ▾                                      │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"

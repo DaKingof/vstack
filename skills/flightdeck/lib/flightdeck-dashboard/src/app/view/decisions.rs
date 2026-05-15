@@ -53,7 +53,7 @@ pub fn render(
         .enumerate()
         .map(|(idx, row)| {
             let row_style = if idx == model.selected_index() {
-                theme.selection()
+                model.selection_style()
             } else {
                 theme.frame()
             };

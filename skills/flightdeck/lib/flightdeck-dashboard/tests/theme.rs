@@ -11,6 +11,10 @@ fn theme_resolution_cli_overrides_env() {
 #[test]
 fn theme_resolution_env_overrides_default() {
     assert_eq!(Theme::from_cli_or_env(None, Some("system")), Theme::System);
+    assert_eq!(
+        Theme::from_cli_or_env(None, Some("pantera")),
+        Theme::Pantera
+    );
 }
 
 #[test]

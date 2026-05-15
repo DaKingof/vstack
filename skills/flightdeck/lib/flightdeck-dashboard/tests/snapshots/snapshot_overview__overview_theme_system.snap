@@ -5,7 +5,7 @@ expression: rendered
 theme=system (System terminal palette)
 title=Style::new().cyan().bg(Color::Reset).bold()
 selection=Style::new().fg(Color::Reset).bg(Color::Reset).bold().reversed()
-warning=Style::new().yellow().bg(Color::Reset)
+warning=Style::new().yellow().bg(Color::Reset).bold()
 "┌ Flightdeck ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│ Flightdeck   session demo-mixed  ·  Master pi at /repo/demo  ·  daemon: file-mode  ·  uptime 2h25m  ·  Adhoc 1 · Issue 1 · Workflow 1  ·  stale-warn 4m  system ▾                                    │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"

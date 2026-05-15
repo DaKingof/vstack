@@ -175,7 +175,7 @@ fn render_single_column(
             .map(|pr| format!("PR #{pr}"))
             .unwrap_or_default();
         let style = if idx == model.selected_index() {
-            theme.selection()
+            model.selection_style()
         } else {
             theme.frame()
         };
@@ -306,7 +306,7 @@ fn render_session_table(
         .enumerate()
         .map(|(idx, session)| {
             let row_style = if idx == model.selected_index() {
-                theme.selection()
+                model.selection_style()
             } else {
                 theme.frame()
             };

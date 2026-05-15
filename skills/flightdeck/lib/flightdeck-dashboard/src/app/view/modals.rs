@@ -1,4 +1,5 @@
 use ratatui::layout::{Alignment, Constraint, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
@@ -56,7 +57,9 @@ pub fn render_help(
             Span::raw(model.theme.as_str()),
             Span::raw(" ("),
             Span::raw(model.theme.display_name()),
-            Span::raw(") · change with --theme dawn|system or FLIGHTDECK_DASHBOARD_THEME=..."),
+            Span::raw(
+                ") · change with --theme dawn|pantera|system or FLIGHTDECK_DASHBOARD_THEME=...",
+            ),
         ]));
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
     });
@@ -86,15 +89,16 @@ pub fn render_theme_picker(
 ) {
     let chrome = PopupChrome {
         title: "Choose theme",
-        subtitle: Some("set FLIGHTDECK_DASHBOARD_THEME=dawn to persist"),
+        subtitle: Some("set FLIGHTDECK_DASHBOARD_THEME=pantera to persist"),
         footer_hints: &["↑/↓ select", "Enter pick", "Esc close"],
-        width: PopupWidth::Fixed(56),
-        height: PopupHeight::Fixed(12),
+        width: PopupWidth::Fixed(74),
+        height: PopupHeight::Fixed(13),
     };
     render_popup(frame, area, chrome, theme, hitmap, |frame, body, hitmap| {
         let themes = [
             (Theme::Moon, "Rose Pine Moon", "dark"),
             (Theme::Dawn, "Rose Pine Dawn", "light"),
+            (Theme::Pantera, "Pantera", "neon"),
             (Theme::System, "System", "terminal ANSI"),
         ];
         let rows = themes
@@ -107,13 +111,23 @@ pub fn render_theme_picker(
                     ClickAction::SelectTheme(*choice),
                     10,
                 );
+                let palette = choice.palette();
                 Row::new([
                     Cell::from(Span::styled(radio, theme.header())),
                     Cell::from((*name).to_owned()),
                     Cell::from(format!("({desc})")),
+                    Cell::from(Line::from(vec![
+                        Span::styled("█", Style::new().fg(palette.accent).bg(palette.bg)),
+                        Span::raw(" "),
+                        Span::styled("█", Style::new().fg(palette.success).bg(palette.bg)),
+                        Span::raw(" "),
+                        Span::styled("█", Style::new().fg(palette.warning).bg(palette.bg)),
+                        Span::raw(" "),
+                        Span::styled("█", Style::new().fg(palette.error).bg(palette.bg)),
+                    ])),
                 ])
                 .style(if *choice == model.theme {
-                    theme.selection()
+                    model.selection_style()
                 } else {
                     theme.frame()
                 })
@@ -124,8 +138,9 @@ pub fn render_theme_picker(
                 rows,
                 [
                     Constraint::Length(3),
-                    Constraint::Length(22),
-                    Constraint::Min(12),
+                    Constraint::Length(20),
+                    Constraint::Length(18),
+                    Constraint::Min(8),
                 ],
             ),
             body,

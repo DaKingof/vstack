@@ -133,7 +133,7 @@ fn row_for_event<'a>(event: &Event, idx: usize, model: &Model, theme: &Palette) 
         ])),
     ])
     .style(if idx == model.selected_index() {
-        theme.selection()
+        model.selection_style()
     } else {
         theme.frame()
     })
@@ -150,7 +150,7 @@ fn row_for_folded_noise<'a>(count: usize, idx: usize, model: &Model, theme: &Pal
         )),
     ])
     .style(if idx == model.selected_index() {
-        theme.selection()
+        model.selection_style()
     } else {
         theme.frame()
     })

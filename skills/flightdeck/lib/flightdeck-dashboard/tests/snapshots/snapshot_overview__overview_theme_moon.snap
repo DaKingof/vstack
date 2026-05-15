@@ -5,7 +5,7 @@ expression: render_with_theme_summary(&model)
 theme=moon (Rose Pine Moon)
 title=Style::new().fg(Color::Rgb(196, 167, 231)).bg(Color::Rgb(35, 33, 54)).bold()
 selection=Style::new().fg(Color::Rgb(224, 222, 244)).bg(Color::Rgb(68, 65, 90)).bold()
-warning=Style::new().fg(Color::Rgb(246, 193, 119)).bg(Color::Rgb(35, 33, 54))
+warning=Style::new().fg(Color::Rgb(246, 193, 119)).bg(Color::Rgb(35, 33, 54)).bold()
 "┌ Flightdeck ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│ Flightdeck   session demo-mixed  ·  Master pi at /repo/demo  ·  daemon: file-mode  ·  uptime 2h25m  ·  Adhoc 1 · Issue 1 · Workflow 1  ·  stale-warn 4m  moon ▾                                      │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"

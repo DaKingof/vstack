@@ -22,7 +22,7 @@ fn render_with_theme_summary(model: &Model) -> String {
         model.theme.as_str(),
         model.theme.display_name(),
         model.palette().title(),
-        model.palette().selection(),
+        model.selection_style(),
         model.palette().warning(),
         common::render_model(model)
     )
@@ -61,6 +61,16 @@ fn overview_dawn() {
     let rendered = render_with_theme_summary(&model);
     assert_ne!(rendered, render_fixture("mixed"));
     insta::assert_snapshot!("overview_theme_dawn", rendered);
+}
+
+#[test]
+fn overview_pantera() {
+    let mut model = common::model_for_fixture("mixed", MotionLevel::Off);
+    model.theme = Theme::Pantera;
+    let rendered = render_with_theme_summary(&model);
+    assert_ne!(rendered, render_fixture("mixed"));
+    assert!(rendered.contains("Color::Rgb(107, 80, 255)"));
+    insta::assert_snapshot!("overview_theme_pantera", rendered);
 }
 
 #[test]

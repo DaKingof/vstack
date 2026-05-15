@@ -148,6 +148,7 @@ pub struct LaunchArgs {
 pub enum ThemeArg {
     Moon,
     Dawn,
+    Pantera,
     System,
 }
 
@@ -157,6 +158,7 @@ impl ThemeArg {
         match self {
             Self::Moon => "moon",
             Self::Dawn => "dawn",
+            Self::Pantera => "pantera",
             Self::System => "system",
         }
     }

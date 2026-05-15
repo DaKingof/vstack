@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::time::Instant;
 
+use ratatui::style::Style;
 use regex::Regex;
 
 use chrono::{DateTime, Utc};
@@ -273,6 +274,11 @@ impl Model {
     #[must_use]
     pub const fn palette(&self) -> &'static Palette {
         self.theme.palette()
+    }
+
+    #[must_use]
+    pub fn selection_style(&self) -> Style {
+        self.theme.row_style_selected()
     }
 
     #[must_use]

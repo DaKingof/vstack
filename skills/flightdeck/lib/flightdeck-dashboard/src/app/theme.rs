@@ -26,6 +26,7 @@ pub struct Palette {
 pub enum Theme {
     Moon,
     Dawn,
+    Pantera,
     System,
 }
 
@@ -67,6 +68,25 @@ pub const DAWN: Palette = Palette {
     chrome: Color::Rgb(0x79, 0x75, 0x93),
 };
 
+pub const PANTERA: Palette = Palette {
+    bg: Color::Rgb(0x20, 0x1f, 0x26),
+    surface: Color::Rgb(0x2d, 0x2c, 0x35),
+    overlay: Color::Rgb(0x3a, 0x39, 0x43),
+    selected_bg: Color::Rgb(0x4d, 0x4c, 0x57),
+    text: Color::Rgb(0xdf, 0xdb, 0xdd),
+    subtle: Color::Rgb(0xbf, 0xbc, 0xc8),
+    muted: Color::Rgb(0x85, 0x83, 0x92),
+    accent: Color::Rgb(0x6b, 0x50, 0xff),
+    success: Color::Rgb(0x00, 0xff, 0xb2),
+    warning: Color::Rgb(0xf5, 0xef, 0x34),
+    error: Color::Rgb(0xeb, 0x42, 0x68),
+    info: Color::Rgb(0x00, 0xa4, 0xff),
+    secondary: Color::Rgb(0xff, 0x60, 0xff),
+    border_active: Color::Rgb(0x6b, 0x50, 0xff),
+    border_inactive: Color::Rgb(0x4d, 0x4c, 0x57),
+    chrome: Color::Rgb(0x60, 0x5f, 0x6b),
+};
+
 pub const SYSTEM: Palette = Palette {
     bg: Color::Reset,
     surface: Color::Reset,
@@ -103,6 +123,7 @@ impl Theme {
         match self {
             Self::Moon => &MOON,
             Self::Dawn => &DAWN,
+            Self::Pantera => &PANTERA,
             Self::System => &SYSTEM,
         }
     }
@@ -112,6 +133,7 @@ impl Theme {
         match self {
             Self::Moon => "moon",
             Self::Dawn => "dawn",
+            Self::Pantera => "pantera",
             Self::System => "system",
         }
     }
@@ -121,7 +143,23 @@ impl Theme {
         match self {
             Self::Moon => "Rose Pine Moon",
             Self::Dawn => "Rose Pine Dawn",
+            Self::Pantera => "Pantera neon",
             Self::System => "System terminal palette",
+        }
+    }
+
+    #[must_use]
+    pub fn row_style_selected(self) -> Style {
+        let palette = self.palette();
+        match self {
+            Self::Moon | Self::Dawn | Self::Pantera => Style::new()
+                .fg(palette.text)
+                .bg(palette.selected_bg)
+                .add_modifier(Modifier::BOLD),
+            Self::System => Style::new()
+                .fg(palette.text)
+                .bg(palette.bg)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED),
         }
     }
 }
@@ -188,20 +226,6 @@ impl Palette {
     }
 
     #[must_use]
-    pub fn selection(self) -> Style {
-        if self.selected_bg == Color::Reset {
-            return Style::new()
-                .fg(self.text)
-                .bg(self.bg)
-                .add_modifier(Modifier::BOLD | Modifier::REVERSED);
-        }
-        Style::new()
-            .fg(self.text)
-            .bg(self.selected_bg)
-            .add_modifier(Modifier::BOLD)
-    }
-
-    #[must_use]
     pub fn header(self) -> Style {
         Style::new()
             .fg(self.accent)
@@ -234,18 +258,27 @@ impl Palette {
     }
 
     #[must_use]
-    pub const fn ok(self) -> Style {
-        Style::new().fg(self.success).bg(self.bg)
+    pub fn ok(self) -> Style {
+        Style::new()
+            .fg(self.success)
+            .bg(self.bg)
+            .add_modifier(Modifier::BOLD)
     }
 
     #[must_use]
-    pub const fn warning(self) -> Style {
-        Style::new().fg(self.warning).bg(self.bg)
+    pub fn warning(self) -> Style {
+        Style::new()
+            .fg(self.warning)
+            .bg(self.bg)
+            .add_modifier(Modifier::BOLD)
     }
 
     #[must_use]
-    pub const fn info(self) -> Style {
-        Style::new().fg(self.info).bg(self.bg)
+    pub fn info(self) -> Style {
+        Style::new()
+            .fg(self.info)
+            .bg(self.bg)
+            .add_modifier(Modifier::BOLD)
     }
 
     #[must_use]
@@ -306,6 +339,7 @@ fn parse_theme(value: &str) -> Option<Theme> {
     match value.to_ascii_lowercase().as_str() {
         "moon" => Some(Theme::Moon),
         "dawn" => Some(Theme::Dawn),
+        "pantera" => Some(Theme::Pantera),
         "system" => Some(Theme::System),
         _ => None,
     }

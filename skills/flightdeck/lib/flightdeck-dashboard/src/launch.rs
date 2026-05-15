@@ -151,6 +151,8 @@ fn theme_from_str(value: &str) -> Option<ThemeArg> {
         Some(ThemeArg::Moon)
     } else if value.eq_ignore_ascii_case("dawn") {
         Some(ThemeArg::Dawn)
+    } else if value.eq_ignore_ascii_case("pantera") {
+        Some(ThemeArg::Pantera)
     } else if value.eq_ignore_ascii_case("system") {
         Some(ThemeArg::System)
     } else {
