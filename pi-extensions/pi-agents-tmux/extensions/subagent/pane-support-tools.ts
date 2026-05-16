@@ -190,23 +190,39 @@ export function registerPaneSupportTools(deps: PaneSupportToolDeps): void {
 			if (!agentName) return { content: [{ type: "text", text: "Provide either agent or taskId." }], details: {}, isError: true };
 			if (params.taskId && record) {
 				const steerKind = inferTaskRecordKind(runtimeRoot, record);
-				updateDashboard({
-					agent: record.agent,
-					artifacts: steerKind === "pane" ? Boolean(record.completionArchivePath || record.outboxFile || record.transcriptPath) : Boolean(record.transcriptPath),
-					completedAt: record.completedAt,
-					kind: steerKind,
-					message: completionBodyWithoutPromptEcho(record.summary, record.task),
-					model: record.model,
-					effort: record.effort,
-					paneId: record.paneId,
-					startedAt: record.createdAt,
-					status: dashboardStatusFor(record.status, steerKind),
-					task: record.task,
-					taskId: record.taskId,
-					transcriptPath: record.transcriptPath,
-					updatedAt: new Date().toISOString(),
-					usage: record.usage,
-				});
+				// Dashboard status lookup is metadata-only; never let a missing helper
+				// (regression vstack#62) block the actual steer delivery.
+				let steerDashboardStatus: any = record.status;
+				try {
+					if (typeof dashboardStatusFor === "function") {
+						steerDashboardStatus = dashboardStatusFor(record.status, steerKind);
+					} else {
+						console.warn("steer_subagent: dashboardStatusFor missing from deps; using raw record.status for dashboard update.");
+					}
+				} catch (err) {
+					console.warn(`steer_subagent: dashboardStatusFor threw (${(err as Error)?.message ?? err}); using raw record.status for dashboard update.`);
+				}
+				try {
+					updateDashboard({
+						agent: record.agent,
+						artifacts: steerKind === "pane" ? Boolean(record.completionArchivePath || record.outboxFile || record.transcriptPath) : Boolean(record.transcriptPath),
+						completedAt: record.completedAt,
+						kind: steerKind,
+						message: completionBodyWithoutPromptEcho(record.summary, record.task),
+						model: record.model,
+						effort: record.effort,
+						paneId: record.paneId,
+						startedAt: record.createdAt,
+						status: steerDashboardStatus,
+						task: record.task,
+						taskId: record.taskId,
+						transcriptPath: record.transcriptPath,
+						updatedAt: new Date().toISOString(),
+						usage: record.usage,
+					});
+				} catch (err) {
+					console.warn(`steer_subagent: updateDashboard threw (${(err as Error)?.message ?? err}); continuing with steer delivery.`);
+				}
 			}
 
 			const registry = await readPaneRegistry(runtimeRoot);

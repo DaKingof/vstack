@@ -1301,6 +1301,7 @@ export default function (pi: ExtensionAPI) {
 		backfillTaskSummaryFromTranscript,
 		bridgeTargetArgs,
 		createFollowUpTask,
+		dashboardStatusFor,
 		emitSubagentEvent,
 		execCapture,
 		formatSteeringForChild,
