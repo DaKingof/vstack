@@ -161,6 +161,17 @@ run_checks() {
 }
 
 # Print BLOCKED breakdown to stderr, distinguishing transient vs permanent.
+merge_blocked_severity() {
+    local check_result="$1"
+    local transient
+    transient=$(echo "$check_result" | jq -r '.transient // false' 2>/dev/null || echo false)
+    if [ "$transient" = "true" ]; then
+        echo warning
+    else
+        echo error
+    fi
+}
+
 print_blocked() {
     local check_result="$1"
     local pr_num="$2"
@@ -264,8 +275,10 @@ main() {
             # If --auto, fall through to enable auto-merge below.
             # Otherwise, exit BLOCKED with breakdown.
             if [ "$auto" != true ]; then
+                local blocked_severity
+                blocked_severity=$(merge_blocked_severity "$check_result")
                 bash "$SCRIPT_DIR/../_activity-emit.sh" pr.merge_blocked \
-                    --severity warning \
+                    --severity "$blocked_severity" \
                     --importance important \
                     --summary "PR #$pr_num merge blocked" \
                     --pr-number "$pr_num" \
@@ -312,11 +325,11 @@ main() {
     if [ "$merge_exit" -ne 0 ]; then
         # Merge command itself failed. Surface as BLOCKED with raw output.
         bash "$SCRIPT_DIR/../_activity-emit.sh" pr.merge_blocked \
-            --severity warning \
+            --severity error \
             --importance important \
             --summary "PR #$pr_num merge blocked" \
             --pr-number "$pr_num" \
-            --details-json "$(jq -cn --arg output "$merge_output" '{merge_output: $output}')" || true
+            --details-json "$(jq -cn --arg output "$merge_output" '{merge_output: $output, transient: false}')" || true
         echo "BLOCKED PR #$pr_num — gh pr merge failed" >&2
         printf '%s\n' "$merge_output" | sed 's/^/  /' >&2
         exit 1
@@ -365,11 +378,11 @@ main() {
     # gh exited 0 but PR isn't merged and isn't queued. Treat as BLOCKED so
     # callers don't assume success based on exit code alone.
     bash "$SCRIPT_DIR/../_activity-emit.sh" pr.merge_blocked \
-        --severity warning \
+        --severity error \
         --importance important \
         --summary "PR #$pr_num merge blocked" \
         --pr-number "$pr_num" \
-        --details-json "$(jq -cn --arg state "$post_state" --arg auto "$post_auto" --arg output "$merge_output" '{state: $state, auto_merge: $auto, merge_output: $output}')" || true
+        --details-json "$(jq -cn --arg state "$post_state" --arg auto "$post_auto" --arg output "$merge_output" '{state: $state, auto_merge: $auto, merge_output: $output, transient: false}')" || true
     echo "BLOCKED PR #$pr_num — gh reported success but state=$post_state, autoMerge=$post_auto" >&2
     printf '%s\n' "$merge_output" | sed 's/^/  /' >&2
     exit 1

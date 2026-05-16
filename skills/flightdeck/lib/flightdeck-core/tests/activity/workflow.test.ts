@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+	emitMergeAction,
 	emitMergePlanUpdated,
 	emitSessionStarted,
 	emitWorkflowDecision,
@@ -94,6 +95,28 @@ describe("workflow activity helpers", () => {
 		emitSessionStarted({ sessionId: "S2" });
 		emitWorkflowDecision({ entryId: "ISS-2", sessionId: "S2" }, "descope", { answer: "Rejected" });
 		expect(existsSync(activityPath())).toBe(false);
+	});
+
+	test("state-file activity path requires managed workflow gate", () => {
+		const file = activityPath();
+		const stateFile = join(tmp, "state.json");
+		writeFileSync(stateFile, JSON.stringify({ activity_path: file, session_id: "S2b" }), "utf8");
+		emitSessionStarted({ sessionId: "S2b", stateFile });
+		expect(events(file)).toHaveLength(0);
+		process.env.FLIGHTDECK_MANAGED = "1";
+		emitSessionStarted({ sessionId: "S2b", stateFile });
+		expect(events(file)).toHaveLength(1);
+	});
+
+	test("merge action helper splits transient and permanent blocked severity", () => {
+		const file = activityPath();
+		process.env.FLIGHTDECK_ACTIVITY_FILE = file;
+		emitMergeAction({ sessionId: "S2c" }, 9, "blocked", { reason: "unknown", transient: true });
+		emitMergeAction({ sessionId: "S2c" }, 10, "blocked", { reason: "conflict", transient: false });
+		expect(events(file).map((row) => [row.type, row.severity, row.refs?.pr_number])).toEqual([
+			["pr.merge_blocked", "warning", 9],
+			["pr.merge_blocked", "error", 10],
+		]);
 	});
 
 	test("merge plan helper emits daemon.warning with conflict count", () => {

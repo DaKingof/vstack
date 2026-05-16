@@ -36,10 +36,16 @@ ISSUE_RETURN_FIELDS='
     inverseRelations { nodes { id type issue { id identifier title state { name type } } } }
 '
 
+linear_mutation_success() {
+    local normalized="$1"
+    [ "$(echo "$normalized" | jq -r '.success // false' 2>/dev/null || echo false)" = "true" ]
+}
+
 emit_linear_issue_activity() {
     local type="$1"
     local severity="$2"
     local normalized="$3"
+    linear_mutation_success "$normalized" || return 0
     local identifier title state state_type summary details
     identifier=$(echo "$normalized" | jq -r '.identifier // .id // .data.issue.identifier // empty' 2>/dev/null || true)
     title=$(echo "$normalized" | jq -r '.data.issue.title // empty' 2>/dev/null || true)
@@ -59,6 +65,7 @@ emit_linear_issue_activity() {
 
 emit_linear_relation_activity() {
     local normalized="$1"
+    linear_mutation_success "$normalized" || return 0
     local relation_id relation_type issue related summary details
     relation_id=$(echo "$normalized" | jq -r '.identifier // .data.issueRelation.id // empty' 2>/dev/null || true)
     relation_type=$(echo "$normalized" | jq -r '.data.issueRelation.type // empty' 2>/dev/null || true)

@@ -36,6 +36,11 @@ export interface WorkflowCloseIssueOptions {
 
 export type MergeActionKind = "queued" | "merged" | "blocked" | "pr.merge_queued" | "pr.merged" | "pr.merge_blocked";
 export type CloseIssueOutcome = "complete" | "completed" | "merged" | "cancelled" | "canceled" | "dead" | "aborted";
+export interface MergeActionDetails extends Record<string, unknown> {
+	commit?: string;
+	reason?: string;
+	transient?: boolean;
+}
 
 export function emitSessionStarted(ctx: WorkflowEmitContext): void {
 	emitWorkflowActivity(ctx, {
@@ -101,10 +106,10 @@ export function emitMergePlanUpdated(ctx: WorkflowEmitContext, queue: unknown, c
 	});
 }
 
-export function emitMergeAction(ctx: WorkflowEmitContext, prNumber: number | string | null | undefined, kind: MergeActionKind, details: Record<string, unknown> = {}): void {
+export function emitMergeAction(ctx: WorkflowEmitContext, prNumber: number | string | null | undefined, kind: MergeActionKind, details: MergeActionDetails = {}): void {
 	const type = normalizeMergeAction(kind);
 	const pr = normalizePrNumber(prNumber) ?? normalizePrNumber(ctx.refs?.pr_number);
-	const severity: ActivitySeverity = type === "pr.merged" ? "success" : type === "pr.merge_blocked" ? "warning" : "info";
+	const severity: ActivitySeverity = type === "pr.merged" ? "success" : type === "pr.merge_blocked" ? (details.transient === true ? "warning" : "error") : "info";
 	const label = pr ? `PR #${pr}` : "PR";
 	emitWorkflowActivity(ctx, {
 		details: {
@@ -143,25 +148,23 @@ function emitWorkflowActivity(ctx: WorkflowEmitContext, event: ActivityEventInpu
 		...event,
 		refs: mergeRefs(entryFields(ctx).refs as ActivityRefs | undefined, event.refs as ActivityRefs | undefined),
 		source: event.source ?? "workflow",
-	}, { sessionId: workflowSessionId(ctx) });
+	}, { nonblocking: true, sessionId: workflowSessionId(ctx) });
 }
 
 function workflowActivityPath(ctx: WorkflowEmitContext): string | null {
 	const envPath = nonEmpty(process.env.FLIGHTDECK_ACTIVITY_FILE);
 	if (envPath) return envPath;
+	if (process.env.FLIGHTDECK_MANAGED !== "1") return null;
 	const explicit = nonEmpty(ctx.activityPath);
 	if (explicit) return explicit;
 	const stateFile = nonEmpty(ctx.stateFile);
-	let resolved: string | null = null;
-	if (stateFile) resolved = resolveActivityPath({
+	if (!stateFile) return null;
+	return resolveActivityPath({
 		stateDir: ctx.stateDir,
 		stateFile,
 		sessionId: ctx.sessionId,
 		tmuxSession: ctx.tmuxSession,
 	});
-	if (resolved) return resolved;
-	if (process.env.FLIGHTDECK_MANAGED === "1") return null;
-	return null;
 }
 
 function workflowSessionId(ctx: WorkflowEmitContext): string {

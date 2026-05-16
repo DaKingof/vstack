@@ -75,6 +75,9 @@ emit_checks_activity() {
     local json_fields="$1"
     local pr_ref="$2"
     local output="$3"
+    if [ "${FLIGHTDECK_MANAGED:-}" != "1" ] && [ -z "${FLIGHTDECK_ACTIVITY_FILE:-}" ]; then
+        return 0
+    fi
     if [[ ",$json_fields," != *",statusCheckRollup,"* ]]; then
         return 0
     fi

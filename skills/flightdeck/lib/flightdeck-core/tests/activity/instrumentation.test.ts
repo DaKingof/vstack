@@ -64,6 +64,7 @@ function writeShimState(state: ShimState): string {
 function registryEnv(): Record<string, string> {
 	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
 	env.FLIGHTDECK_STATE_DIR = "tmp";
+	env.FLIGHTDECK_MANAGED = "1";
 	env.PATH = `${SHIM_DIR}:${env.PATH ?? ""}`;
 	env.TMUX = env.TMUX || "shim";
 	env.TMUX_PANE = env.TMUX_PANE || "%master";
