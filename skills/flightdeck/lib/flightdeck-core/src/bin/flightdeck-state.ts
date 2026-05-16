@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { appendActivityEvent } from "../activity/append.ts";
 import { formatActivityJsonl, formatActivityLine, formatActivityMarkdown } from "../activity/format.ts";
 import { activityPathForSession } from "../activity/paths.ts";
-import { readActivityEvents, tailActivityEvents } from "../activity/read.ts";
+import { ActivityFilterError, readActivityEvents, readActivityJsonlLines, tailActivityEvents } from "../activity/read.ts";
 import {
 	archiveState,
 	getField,
@@ -26,6 +26,7 @@ import {
 	validateDomainIssueId,
 	validateEntryId,
 } from "../state/tracked-entry.ts";
+import { ActivityValidationError } from "../activity/types.ts";
 import type { FlightdeckStateLike, TrackedEntry } from "../state/types.ts";
 import {
 	fdBusyFile,
@@ -153,6 +154,18 @@ function warnLine(message: string): void {
 	process.stderr.write(`${message}\n`);
 }
 
+function readStdinOrDie(usage: string): string {
+	const text = readFileSync(0, "utf8").trim();
+	if (!text) die(usage);
+	return text;
+}
+
+function dieActivityError(error: unknown): never {
+	if (error instanceof ActivityValidationError || error instanceof ActivityFilterError) die(`Error: ${error.message}`);
+	if (error instanceof Error) die(`Error: ${error.message}`, 1);
+	die(`Error: ${String(error)}`, 1);
+}
+
 function activityFile(): string {
 	return activityPathForSession(session, resolveStateBase());
 }
@@ -167,30 +180,48 @@ function runActivity(args: string[]): void {
 			break;
 		}
 		case "append": {
-			if (args.length < 2) die("Usage: activity append <json-event>");
+			const jsonText = args.length >= 2 ? args[1]! : readStdinOrDie("Usage: activity append <json-event>");
 			let payload: unknown;
 			try {
-				payload = JSON.parse(args[1]!);
+				payload = JSON.parse(jsonText);
 			} catch {
 				die("Error: invalid json-event");
 			}
 			if (!payload || typeof payload !== "object" || Array.isArray(payload)) die("Error: json-event must be an object");
-			const result = appendActivityEvent(activity, payload, { sessionId: session });
-			process.stdout.write(`${JSON.stringify(result.event)}\n`);
+			try {
+				const result = appendActivityEvent(activity, payload, { sessionId: session });
+				process.stdout.write(`${JSON.stringify({ deduped: !result.appended, id: result.event.id })}\n`);
+			} catch (error) {
+				dieActivityError(error);
+			}
 			break;
 		}
 		case "tail": {
 			const opts = parseActivityReadFlags(args.slice(1), { defaultFormat: "text", defaultLimit: 300 });
-			const events = tailActivityEvents(activity, opts.limit, { filter: opts.filter, warn: warnLine });
-			if (opts.format === "json") process.stdout.write(`${JSON.stringify(events)}\n`);
-			else process.stdout.write(events.map(formatActivityLine).join("\n") + (events.length > 0 ? "\n" : ""));
+			try {
+				const events = tailActivityEvents(activity, opts.limit, { filter: opts.filter, warn: warnLine });
+				if (opts.format === "json") process.stdout.write(formatActivityJsonl(events));
+				else process.stdout.write(events.map(formatActivityLine).join("\n") + (events.length > 0 ? "\n" : ""));
+			} catch (error) {
+				dieActivityError(error);
+			}
 			break;
 		}
 		case "export": {
 			const opts = parseActivityReadFlags(args.slice(1), { defaultFormat: "jsonl" });
-			const events = readActivityEvents(activity, { filter: opts.filter, warn: warnLine });
-			if (opts.format === "markdown") process.stdout.write(formatActivityMarkdown(events));
-			else process.stdout.write(formatActivityJsonl(events));
+			try {
+				if (opts.format === "markdown") {
+					const events = readActivityEvents(activity, { filter: opts.filter, warn: warnLine });
+					process.stdout.write(formatActivityMarkdown(events));
+				} else if (opts.filter) {
+					const lines = readActivityJsonlLines(activity, { filter: opts.filter, warn: warnLine });
+					process.stdout.write(lines.join("\n") + (lines.length > 0 ? "\n" : ""));
+				} else if (existsSync(activity)) {
+					process.stdout.write(readFileSync(activity, "utf8"));
+				}
+			} catch (error) {
+				dieActivityError(error);
+			}
 			break;
 		}
 		default:

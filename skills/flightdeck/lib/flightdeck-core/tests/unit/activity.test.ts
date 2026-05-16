@@ -7,8 +7,8 @@ import { pathToFileURL } from "node:url";
 import { appendActivityEvent } from "../../src/activity/append.ts";
 import { formatActivityJsonl, formatActivityLine, formatActivityMarkdown } from "../../src/activity/format.ts";
 import { activityArchivePathFromStatePath, activityPathFromStatePath } from "../../src/activity/paths.ts";
-import { readActivityEvents, tailActivityEvents } from "../../src/activity/read.ts";
-import { activityEventId, normalizeActivityEvent } from "../../src/activity/types.ts";
+import { ActivityFilterError, readActivityEvents, tailActivityEvents } from "../../src/activity/read.ts";
+import { ActivityValidationError, activityEventId, normalizeActivityEvent } from "../../src/activity/types.ts";
 import { archiveState } from "../../src/state/master-state.ts";
 
 let dir = "";
@@ -32,6 +32,41 @@ describe("activity event normalization", () => {
 			ts: "2026-05-15T00:00:00.000Z",
 		});
 		expect(event.id).toBe(activityEventId({ naturalKey: "entry:WORKER", sessionId: "S1", type: "entry.registered" }));
+	});
+
+	test("computes ids from natural-key fallback rungs", () => {
+		const base = { source: "flightdeck", summary: "fallback", type: "entry.state_changed" };
+		const opts = { sessionId: "S1", now: () => new Date("2026-05-15T00:00:00Z") };
+		expect(normalizeActivityEvent({ ...base, details: { dedup_key: "dedup" } }, opts).id)
+			.toBe(activityEventId({ naturalKey: "dedup", sessionId: "S1", type: "entry.state_changed" }));
+		expect(normalizeActivityEvent({ ...base, refs: { task_id: "task-1" } }, opts).id)
+			.toBe(activityEventId({ naturalKey: "task-1", sessionId: "S1", type: "entry.state_changed" }));
+		expect(normalizeActivityEvent({ ...base, refs: { bg_task_id: "bg-1" } }, opts).id)
+			.toBe(activityEventId({ naturalKey: "bg-1", sessionId: "S1", type: "entry.state_changed" }));
+		expect(normalizeActivityEvent({ ...base, refs: { question_id: "q-1" } }, opts).id)
+			.toBe(activityEventId({ naturalKey: "q-1", sessionId: "S1", type: "entry.state_changed" }));
+		expect(normalizeActivityEvent({ ...base, refs: { commit: "abc123" } }, opts).id)
+			.toBe(activityEventId({ naturalKey: "abc123", sessionId: "S1", type: "entry.state_changed" }));
+		expect(normalizeActivityEvent(base, opts).id)
+			.toBe(activityEventId({ naturalKey: "2026-05-15T00:00:00.000Z", sessionId: "S1", type: "entry.state_changed" }));
+	});
+
+	test("explicit id wins over natural-key fallback", () => {
+		const event = normalizeActivityEvent({
+			details: { dedup_key: "dedup" },
+			id: "explicit-id",
+			source: "flightdeck",
+			summary: "explicit",
+			type: "entry.state_changed",
+		}, { sessionId: "S1", now: () => new Date("2026-05-15T00:00:00Z") });
+		expect(event.id).toBe("explicit-id");
+	});
+
+	test("invalid severity and importance are validation errors", () => {
+		expect(() => normalizeActivityEvent({ severity: "bad", source: "flightdeck", summary: "bad", type: "entry.state_changed" }))
+			.toThrow(ActivityValidationError);
+		expect(() => normalizeActivityEvent({ importance: "bad", source: "flightdeck", summary: "bad", type: "entry.state_changed" }))
+			.toThrow(ActivityValidationError);
 	});
 
 	test("normalizes refs, links, noisy flag, and caps oversized details", () => {
@@ -102,6 +137,9 @@ describe("activity append/read", () => {
 		expect(readActivityEvents(file, { warn: (msg) => warnings.push(msg) })).toEqual([one, two]);
 		expect(warnings[0]).toContain("invalid activity JSONL");
 		expect(readActivityEvents(file, { filter: "severity=warning" })).toEqual([two]);
+		expect(readActivityEvents(file, { filter: "severity!=info,entry=E1" })).toEqual([two]);
+		expect(() => readActivityEvents(file, { filter: "unknown=value" })).toThrow(ActivityFilterError);
+		expect(() => readActivityEvents(file, { filter: "severity:warning" })).toThrow(ActivityFilterError);
 		expect(tailActivityEvents(file, 1)).toEqual([two]);
 	});
 
@@ -112,15 +150,26 @@ describe("activity append/read", () => {
 		expect(formatActivityMarkdown([event])).toContain("`question.answered`");
 	});
 
-	test("concurrent appenders serialize under the activity lock", async () => {
+	test("concurrent appenders serialize distinct events under the activity lock", async () => {
 		const file = path("concurrent/activity.jsonl");
 		const appendModule = pathToFileURL(resolve(dirname(import.meta.path), "../../src/activity/append.ts")).href;
-		const script = `import { appendActivityEvent } from ${JSON.stringify(appendModule)};\nappendActivityEvent(process.env.ACTIVITY_FILE, {source:"flightdeck", type:"entry.registered", summary:"E1 registered", entry_id:"E1", natural_key:"same"}, {sessionId:"S1", now:()=>new Date("2026-05-15T00:00:00Z")});`;
-		const env = { ...(process.env as Record<string, string>), ACTIVITY_FILE: file };
-		const procs = Array.from({ length: 8 }, () => Bun.spawn(["bun", "--eval", script], { env, stderr: "pipe", stdout: "pipe" }));
+		const script = `import { appendActivityEvent } from ${JSON.stringify(appendModule)};\nconst writer = process.env.WRITER;\nfor (let i = 0; i < 100; i += 1) {\n\tappendActivityEvent(process.env.ACTIVITY_FILE, {source:"flightdeck", type:"entry.registered", summary:"writer " + writer + " event " + i, entry_id:"E" + writer, natural_key:writer + ":" + i}, {sessionId:"S1", now:()=>new Date("2026-05-15T00:00:00Z")});\n}`;
+		const procs = Array.from({ length: 8 }, (_, writer) => Bun.spawn(["bun", "--eval", script], {
+			env: { ...(process.env as Record<string, string>), ACTIVITY_FILE: file, WRITER: String(writer) },
+			stderr: "pipe",
+			stdout: "pipe",
+		}));
 		const statuses = await Promise.all(procs.map((proc) => proc.exited));
 		expect(statuses.every((status) => status === 0)).toBe(true);
-		expect(readFileSync(file, "utf8").trim().split("\n")).toHaveLength(1);
+		const lines = readFileSync(file, "utf8").trim().split("\n");
+		expect(lines).toHaveLength(800);
+		const ids = new Set<string>();
+		for (const line of lines) {
+			const parsed = JSON.parse(line) as { id: string };
+			expect(ids.has(parsed.id)).toBe(false);
+			ids.add(parsed.id);
+		}
+		expect(ids.size).toBe(800);
 	});
 });
 

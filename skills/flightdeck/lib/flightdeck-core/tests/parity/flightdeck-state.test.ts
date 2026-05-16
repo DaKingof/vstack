@@ -23,7 +23,7 @@ function makeRepo(): string {
 	return dir;
 }
 
-function run(cwd: string, args: string[], extraEnv: Record<string, string | undefined> = {}): { stdout: string; stderr: string; status: number | null } {
+function run(cwd: string, args: string[], extraEnv: Record<string, string | undefined> = {}, input?: string): { stdout: string; stderr: string; status: number | null } {
 	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
 	env.FLIGHTDECK_STATE_DIR = "tmp";
 	env.FLIGHTDECK_OWNER_HARNESS = "pi";
@@ -39,7 +39,7 @@ function run(cwd: string, args: string[], extraEnv: Record<string, string | unde
 	}
 	const [action, ...rest] = args;
 	const full = action ? [action, "--session", SESSION, ...rest] : ["--session", SESSION];
-	const r = spawnSync(SCRIPT, full, { cwd, encoding: "utf8", env });
+	const r = spawnSync(SCRIPT, full, { cwd, encoding: "utf8", env, input });
 	return { status: r.status, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
 }
 
@@ -322,7 +322,8 @@ describe("flightdeck-state CLI", () => {
 		expect(r.stdout.endsWith(`tmp/flightdeck-activity-${SESSION}.jsonl\n`)).toBe(true);
 	});
 
-	test("activity append tail and export expose normalized events", () => {
+	test("activity append tail and export expose the CLI contract", () => {
+		const activityFile = join(repo, "tmp", `flightdeck-activity-${SESSION}.jsonl`);
 		const append = run(repo, ["activity", "append", JSON.stringify({
 			entry_id: "A1",
 			natural_key: "A1:start",
@@ -332,9 +333,13 @@ describe("flightdeck-state CLI", () => {
 			type: "entry.registered",
 		})]);
 		expect(append.status).toBe(0);
-		const event = JSON.parse(append.stdout) as { id?: string; schema_version?: number; session_id?: string };
-		expect(event.schema_version).toBe(1);
-		expect(event.session_id).toBe(SESSION);
+		const appendResult = JSON.parse(append.stdout) as { deduped?: boolean; id?: string };
+		expect(appendResult.deduped).toBe(false);
+		expect(typeof appendResult.id).toBe("string");
+		const firstEvent = JSON.parse(readFileSync(activityFile, "utf8").trim()) as { id?: string; schema_version?: number; session_id?: string };
+		expect(firstEvent.id).toBe(appendResult.id);
+		expect(firstEvent.schema_version).toBe(1);
+		expect(firstEvent.session_id).toBe(SESSION);
 
 		const duplicate = run(repo, ["activity", "append", JSON.stringify({
 			entry_id: "A1",
@@ -345,14 +350,56 @@ describe("flightdeck-state CLI", () => {
 			type: "entry.registered",
 		})]);
 		expect(duplicate.status).toBe(0);
-		expect((readFileSync(join(repo, "tmp", `flightdeck-activity-${SESSION}.jsonl`), "utf8").trim().split("\n"))).toHaveLength(1);
+		expect(JSON.parse(duplicate.stdout)).toEqual({ deduped: true, id: appendResult.id });
+		expect(readFileSync(activityFile, "utf8").trim().split("\n")).toHaveLength(1);
+
+		const stdinAppend = run(repo, ["activity", "append"], {}, JSON.stringify({
+			entry_id: "A2",
+			natural_key: "A2:start",
+			source: "daemon",
+			summary: "A2 registered",
+			type: "daemon.started",
+		}));
+		expect(stdinAppend.status).toBe(0);
+		expect((JSON.parse(stdinAppend.stdout) as { deduped?: boolean }).deduped).toBe(false);
 
 		const tail = run(repo, ["activity", "tail", "--json", "--limit", "5"]);
 		expect(tail.status).toBe(0);
-		expect(JSON.parse(tail.stdout)).toHaveLength(1);
+		const tailLines = tail.stdout.trim().split("\n");
+		expect(tailLines).toHaveLength(2);
+		expect(JSON.parse(tailLines[0]!) as { type: string }).toMatchObject({ type: "entry.registered" });
+
+		const raw = readFileSync(activityFile, "utf8");
+		const exported = run(repo, ["activity", "export", "--format", "jsonl"]);
+		expect(exported.status).toBe(0);
+		expect(exported.stdout).toBe(raw);
+		const rawLines = raw.trim().split("\n");
+		const filtered = run(repo, ["activity", "export", "--format", "jsonl", "--filter", "type=entry.registered,entry=A1"]);
+		expect(filtered.status).toBe(0);
+		expect(filtered.stdout).toBe(`${rawLines[0]}\n`);
+
 		const markdown = run(repo, ["activity", "export", "--format", "markdown", "--filter", "type=entry.registered"]);
 		expect(markdown.status).toBe(0);
 		expect(markdown.stdout).toContain("A1 registered");
+	});
+
+	test("activity append and filters reject invalid input", () => {
+		const invalidSeverity = run(repo, ["activity", "append", JSON.stringify({
+			severity: "bad",
+			source: "flightdeck",
+			summary: "bad",
+			type: "entry.registered",
+		})]);
+		expect(invalidSeverity.status).not.toBe(0);
+		expect(invalidSeverity.stderr).toContain("Error: invalid activity severity");
+
+		run(repo, ["activity", "append", JSON.stringify({ natural_key: "ok", source: "flightdeck", summary: "ok", type: "entry.registered" })]);
+		const badSyntax = run(repo, ["activity", "tail", "--json", "--filter", "severity:warning"]);
+		expect(badSyntax.status).not.toBe(0);
+		expect(badSyntax.stderr).toContain("Error: invalid activity filter clause");
+		const unknownKey = run(repo, ["activity", "export", "--filter", "id=abc"]);
+		expect(unknownKey.status).not.toBe(0);
+		expect(unknownKey.stderr).toContain("Error: invalid activity filter key: id");
 	});
 
 	test("archive moves state and activity sidecars with .archive suffix using terminated_at when set", () => {

@@ -119,11 +119,17 @@ export function normalizeActivityEvent(input: ActivityEventInput, opts: Normaliz
 	if (!isValidIsoTimestamp(ts)) throw new Error(`invalid activity ts: ${ts}`);
 	const severity = normalizeSeverity(input.severity);
 	const importance = normalizeImportance(input.importance);
+	const links = normalizeLinks(input.links);
+	const refs = normalizeRefs(input.refs);
+	const details = normalizeDetails(input.details, opts.detailsMaxBytes ?? DEFAULT_ACTIVITY_DETAILS_MAX_BYTES);
 	const naturalKey = optionalString(opts.naturalKey)
 		?? optionalString(input.natural_key)
-		?? optionalString(input.id)
-		?? optionalString(input.ts)
-		?? `${source}\0${summary}`;
+		?? optionalString(details?.dedup_key)
+		?? refs.task_id
+		?? refs.bg_task_id
+		?? refs.question_id
+		?? refs.commit
+		?? ts;
 	const id = optionalString(input.id) ?? activityEventId({ entryId, naturalKey, sessionId, type });
 	if (!id) throw new Error("activity id must be non-empty");
 
@@ -149,11 +155,8 @@ export function normalizeActivityEvent(input: ActivityEventInput, opts: Normaliz
 	if (harness) event.harness = harness;
 	const body = optionalString(input.body);
 	if (body) event.body = body;
-	const links = normalizeLinks(input.links);
 	if (links.length > 0) event.links = links;
-	const refs = normalizeRefs(input.refs);
 	if (Object.keys(refs).length > 0) event.refs = refs;
-	const details = normalizeDetails(input.details, opts.detailsMaxBytes ?? DEFAULT_ACTIVITY_DETAILS_MAX_BYTES);
 	if (details) event.details = details;
 	const noisy = typeof input.noisy === "boolean" ? input.noisy : importance === "noisy";
 	if (noisy) event.noisy = true;
@@ -183,13 +186,15 @@ function optionalString(value: unknown): string | undefined {
 }
 
 function normalizeSeverity(value: unknown): ActivitySeverity {
+	if (value === undefined || value === null) return "info";
 	if (value === "debug" || value === "info" || value === "success" || value === "warning" || value === "error") return value;
-	return "info";
+	throw new ActivityValidationError(`invalid activity severity: ${String(value)}`);
 }
 
 function normalizeImportance(value: unknown): ActivityImportance {
+	if (value === undefined || value === null) return "normal";
 	if (value === "critical" || value === "important" || value === "normal" || value === "noisy") return value;
-	return "normal";
+	throw new ActivityValidationError(`invalid activity importance: ${String(value)}`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
