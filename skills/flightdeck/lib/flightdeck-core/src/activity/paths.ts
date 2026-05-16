@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 const STATE_PREFIX = "flightdeck-state-";
 const ACTIVITY_PREFIX = "flightdeck-activity-";
 const RESOLVE_CACHE_TTL_MS = 5000;
+const RESOLVE_CACHE_MAX_ENTRIES = 64;
 
 interface ActivityPathContext {
 	stateFile: string;
@@ -50,8 +51,21 @@ export function resolveActivityPath(ctx: ActivityPathContext): string | null {
 		const session = ctx.tmuxSession || ctx.sessionId || stateSession;
 		if (session) path = activityPathForSession(session, ctx.stateDir);
 	}
-	resolveCache.set(key, { expiresAt: now + RESOLVE_CACHE_TTL_MS, path });
+	rememberResolvedActivityPath(key, { expiresAt: now + RESOLVE_CACHE_TTL_MS, path }, now);
 	return path;
+}
+
+function rememberResolvedActivityPath(key: string, value: { expiresAt: number; path: string | null }, now = Date.now()): void {
+	for (const [cachedKey, cached] of resolveCache) {
+		if (cached.expiresAt <= now) resolveCache.delete(cachedKey);
+	}
+	if (resolveCache.has(key)) resolveCache.delete(key);
+	resolveCache.set(key, value);
+	while (resolveCache.size > RESOLVE_CACHE_MAX_ENTRIES) {
+		const oldest = resolveCache.keys().next().value as string | undefined;
+		if (!oldest) break;
+		resolveCache.delete(oldest);
+	}
 }
 
 export function activityArchivePathFromStatePath(stateFile: string, terminatedAt: string): string {

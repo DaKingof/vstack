@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = resolve(HERE, "../../../../scripts/pane-registry");
+const FLIGHTDECK_STATE = resolve(HERE, "../../../../scripts/flightdeck-state");
 const SHIM_DIR = resolve(HERE, "../parity/tmux-shim");
 const SESSION = "test-session";
 
@@ -60,7 +61,7 @@ function writeShimState(state: ShimState): string {
 	return path;
 }
 
-function run(args: string[]): { stdout: string; stderr: string; status: number | null } {
+function registryEnv(): Record<string, string> {
 	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
 	env.FLIGHTDECK_STATE_DIR = "tmp";
 	env.PATH = `${SHIM_DIR}:${env.PATH ?? ""}`;
@@ -68,7 +69,17 @@ function run(args: string[]): { stdout: string; stderr: string; status: number |
 	env.TMUX_PANE = env.TMUX_PANE || "%master";
 	env.TMUX_PARITY_SESSION = SESSION;
 	env.TMUX_SHIM_STATE = shimState;
-	const r = spawnSync(SCRIPT, args, { cwd: repo, encoding: "utf8", env });
+	return env;
+}
+
+function run(args: string[]): { stdout: string; stderr: string; status: number | null } {
+	const r = spawnSync(SCRIPT, args, { cwd: repo, encoding: "utf8", env: registryEnv() });
+	return { status: r.status, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
+}
+
+function runFlightdeckState(args: string[]): { stdout: string; stderr: string; status: number | null } {
+	const env = registryEnv();
+	const r = spawnSync(FLIGHTDECK_STATE, [args[0]!, "--session", SESSION, ...args.slice(1)], { cwd: repo, encoding: "utf8", env });
 	return { status: r.status, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
 }
 
@@ -135,10 +146,12 @@ describe("pane-registry activity instrumentation", () => {
 		initEntry("DEC-1");
 		expect(run(["log-decision", "DEC-1", "merge-now", "Approved merge"]).status).toBe(0);
 		expect(run(["log-decision", "DEC-1", "bot-review", "BLOCKED: missing approval"]).status).toBe(0);
+		expect(run(["log-decision", "DEC-1", "scope", "ESCALATED: needs operator"]).status).toBe(0);
 		const decisions = eventsOf("decision.recorded").filter((event) => event.entry_id === "DEC-1");
-		expect(decisions).toHaveLength(2);
+		expect(decisions).toHaveLength(3);
 		expect(decisions[0]).toMatchObject({ importance: "important", severity: "info", summary: "Approved merge" });
 		expect(decisions[1]).toMatchObject({ importance: "important", severity: "warning", summary: "BLOCKED: missing approval" });
+		expect(decisions[2]).toMatchObject({ importance: "important", severity: "warning", summary: "ESCALATED: needs operator" });
 	});
 
 	test("teardown-entry emits terminal completed cancelled and dead events", () => {
@@ -155,6 +168,22 @@ describe("pane-registry activity instrumentation", () => {
 			expect(terminal).toHaveLength(1);
 			expect(terminal[0]).toMatchObject({ importance: "important", severity });
 		}
+	});
+
+	test("teardown-entry emits terminal event after live pane kill succeeds", () => {
+		shimState = writeShimState({
+			panes: { "%200": { pane_index: 0, path: "/tmp/live", window_id: "@20", window_index: 1, window_name: "live-window" } },
+			session: SESSION,
+			windows: { "@20": { index: 1, name: "live-window" } },
+		});
+		expect(run(["init-entry", "LIVE-1", "--title", "Live", "--kind", "adhoc", "--cwd", "/tmp/live", "--window", "live-window", "--harness", "pi", "--pane-id", "%200", "--pane-target", `${SESSION}:1.0`]).status).toBe(0);
+		expect(run(["set-state", "LIVE-1", "complete"]).status).toBe(0);
+		expect(run(["teardown-entry", "LIVE-1"]).status).toBe(0);
+		const terminal = eventsOf("entry.completed").filter((event) => event.entry_id === "LIVE-1");
+		expect(terminal).toHaveLength(1);
+		expect(terminal[0]).toMatchObject({ importance: "important", severity: "success" });
+		expect(terminal[0]?.details).toMatchObject({ teardown: "killed" });
+		expect(JSON.parse(readFileSync(shimState, "utf8")).panes["%200"]).toBeUndefined();
 	});
 
 	test("reconcile stale pane drops row and emits entry.dead", () => {
@@ -179,6 +208,24 @@ describe("pane-registry activity instrumentation", () => {
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0]?.summary).toContain("reconcile drift: DRIFT-1");
 		expect(JSON.parse(run(["get", "DRIFT-1"]).stdout).pane_id).toBeNull();
+	});
+
+	test("direct flightdeck-state set emits state_changed once and skips no-op", () => {
+		mkdirSync(join(repo, "tmp"), { recursive: true });
+		writeFileSync(statePath(), JSON.stringify({
+			activity_path: activityPath(),
+			activity_schema_version: 1,
+			entries: {
+				"DIRECT-1": { id: "DIRECT-1", kind: "adhoc", state: "waiting", title: "Direct", window: "direct", harness: "pi", pane_id: "%303" },
+			},
+			session_id: SESSION,
+		}), "utf8");
+		expect(runFlightdeckState(["set", `.entries[\"DIRECT-1\"].state`, '"ready"']).status).toBe(0);
+		expect(runFlightdeckState(["set", `.entries[\"DIRECT-1\"].state`, '"ready"']).status).toBe(0);
+		const changes = eventsOf("entry.state_changed").filter((event) => event.entry_id === "DIRECT-1" && event.details?.new === "ready");
+		expect(changes).toHaveLength(1);
+		expect(changes[0]).toMatchObject({ entry_kind: "adhoc", entry_title: "Direct", harness: "pi", pane_id: "%303" });
+		expect(changes[0]?.details).toMatchObject({ new: "ready", old: "waiting" });
 	});
 
 	test("activity disabled succeeds silently without creating activity JSONL", () => {

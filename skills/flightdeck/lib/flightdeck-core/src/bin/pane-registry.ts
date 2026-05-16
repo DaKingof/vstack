@@ -903,8 +903,9 @@ function cmdReconcile(): void {
 		if (driftedThis) continue;
 		const alive = paneId ? live.panes.has(paneId) : !win || live.windows.has(win);
 		if (!alive) {
-			emitReconcileDrop(rec);
+			const droppedEntry = rec;
 			fdStateOrDie(["set", ".entries", `(.entries | del(.["${issue}"]))`]);
+			emitReconcileDrop(droppedEntry);
 			dropped.push(issue);
 		}
 	}

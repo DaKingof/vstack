@@ -15,6 +15,8 @@ export function emitActivity(ctx: EmitContext, ev: ActivityEventInput): void {
 	try {
 		appendActivityEvent(file, ev, { sessionId: ctx.sessionId ?? ctx.tmuxSession });
 	} catch (err) {
-		process.stderr.write(`flightdeck: activity emit failed: ${err instanceof Error ? err.message : String(err)}\n`);
+		const type = typeof ev.type === "string" && ev.type ? ev.type : "unknown";
+		const entry = typeof ev.entry_id === "string" && ev.entry_id ? ev.entry_id : ctx.sessionId ?? ctx.tmuxSession ?? "unknown";
+		process.stderr.write(`flightdeck: activity emit failed [type=${type} entry=${entry} file=${file}]: ${err instanceof Error ? err.message : String(err)}\n`);
 	}
 }
