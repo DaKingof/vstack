@@ -12,7 +12,7 @@ expression: rendered
 "│Time     Session            Type       Status   Summary                                                                                                                                               │"
 "│—        all sessions       noise      ·        2 noisy/debug activity events hidden · press n to show.                                                                                               │"
 "│03:09:50 VST-101            daemon     info     wake delivered to master                                                                                                                              │"
-"│03:06:00 dashboard-rust     decision   ok       ! allowed cargo test in dashboard crate                                                                                                               │"
+"│03:06:00 dashboard-rust     decision   ok       allowed cargo test in dashboard crate                                                                                                                 │"
 "│03:05:30 VST-101            question   warn     ! cleanup prompt needs operator policy                                                                                                                │"
 "│03:05:00 VST-101            session    ok       session started for VST-101                                                                                                                           │"
 "│                                                                                                                                                                                                      │"
