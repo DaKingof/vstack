@@ -104,8 +104,8 @@ Popup chrome lives in `app/view/popup.rs`; individual popups live in `app/view/m
 
 Keep each dashboard fact in one canonical home:
 
-- Header: session id, master harness/path, daemon chip, uptime, kind counts, freshness/observer/cost/theme chips. Do not add per-state counts or owner pane ids here.
-- Left rail: status counts, merge queue glance, and conflict glance.
+- Header: session id, master harness/path, daemon chip, uptime, kind counts, freshness/observer/cost/theme chips. The theme chip is right-anchored on the trailing edge and never truncated; cost compacts before any other chip at narrow widths. Do not add per-state counts, owner pane ids, or a `paused` chip here — the pause state surfaces as a banner row directly below the header, not as a header chip.
+- Left rail: status counts, merge queue glance, and conflict glance. The merge queue renders every queued entry (no per-rail truncation); the table column may abbreviate but the rail does not.
 - Session table: scan-friendly row data only — kind badge, friendly state, harness, title, cost, PR/worktree, age, last decision, last activity, plus `(stale)` only when tmux says the pane id no longer exists.
 - Right rail: selected-session summary grouped as Where, Issue, Paused, Cost, Recent decisions, and Actions. Keep low-level adapter/debug fields out of the rail.
 - Detail popups: full wrapped decision/event/session text and debugging details that would crowd the main layout.
