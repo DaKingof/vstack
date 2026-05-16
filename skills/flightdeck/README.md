@@ -114,6 +114,8 @@ Most users never touch these. The ones that occasionally matter:
 | `FLIGHTDECK_DASHBOARD_STALE_WARN_SECS` | Rust dashboard stale-warning threshold in seconds (default `30`). |
 | `FLIGHTDECK_DASHBOARD_STALE_DEAD_SECS` | Rust dashboard stale/dead threshold in seconds (default `300`). |
 
+Activity history lives beside the master state as `<FLIGHTDECK_STATE_DIR>/flightdeck-activity-<session>.jsonl`. `flightdeck-state activity path|append|tail|export` exposes the path, writes normalized activity rows, tails recent rows, or exports JSONL/Markdown. `flightdeck-state archive` archives the activity JSONL next to the master-state archive.
+
 Daemon-private files live outside your project under `$XDG_RUNTIME_DIR/flightdeck` (fallback `/tmp/flightdeck-$UID`) so they don't show up in commits.
 
 Daemon tuning (`FD_*` env vars) is documented in [`DEVELOPMENT.md`](./DEVELOPMENT.md). Defaults work for normal use.

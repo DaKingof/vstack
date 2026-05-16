@@ -237,7 +237,38 @@ export function lockedRegisterPortPid(lockFile: string, portsFile: string, port:
 	return run(["-x", lockFile, "bash", "-c", script, "_", portsFile, tmp, String(port), String(pid)]);
 }
 
-// Locked file rename — used by archive.
+// Locked state archive with matching activity sidecar archive. The state
+// archive receives activity_path/activity_archive_path before the final
+// rename, so post-termination readers can discover the matching JSONL
+// archive from the archived master state alone.
+export function lockedArchiveStateAndActivity(
+	lockFile: string,
+	stateFile: string,
+	stateArchive: string,
+	activityFile: string,
+	activityArchive: string,
+): SpawnResult {
+	const tmp = `${stateFile}.tmp.${process.pid}`;
+	const script = `
+		set -e
+		state="$1"; state_archive="$2"; activity="$3"; activity_archive="$4"; tmp="$5"
+		mkdir -p "$(dirname "$activity_archive")"
+		jq --arg activity_path "$activity" --arg activity_archive_path "$activity_archive" \
+			'.activity_path = (.activity_path // $activity_path) | .activity_archive_path = $activity_archive_path' \
+			"$state" > "$tmp"
+		mv "$tmp" "$state"
+		mv "$state" "$state_archive"
+		if [[ -f "$activity" ]]; then
+			mv "$activity" "$activity_archive"
+		else
+			: > "$activity_archive"
+		fi
+	`;
+	return run(["-x", lockFile, "bash", "-c", script, "_", stateFile, stateArchive, activityFile, activityArchive, tmp]);
+}
+
+// Locked file rename — used by archive callers that do not own an
+// activity sidecar.
 export function lockedRename(lockFile: string, srcFile: string, dstFile: string): SpawnResult {
 	const script = `mv "$1" "$2"`;
 	return run(["-x", lockFile, "bash", "-c", script, "_", srcFile, dstFile]);

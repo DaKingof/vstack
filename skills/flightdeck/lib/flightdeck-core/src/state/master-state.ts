@@ -12,8 +12,9 @@ import {
 	unlinkSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { activityArchivePathFromStatePath, activityPathFromStatePath } from "../activity/paths.ts";
 import { resolveProjectRoot, loadDotEnvIntoProcess } from "../shared/project.ts";
-import { lockedJqUpdate, lockedRename } from "./locking.ts";
+import { lockedArchiveStateAndActivity, lockedJqUpdate } from "./locking.ts";
 
 export interface FlightdeckOwner {
 	harness: string;
@@ -231,7 +232,10 @@ export function initState(file: string): void {
 	const startedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 	const owner = resolveOwnerMetadata();
 	const ownerJson = JSON.stringify(owner);
+	const activityPath = activityPathFromStatePath(file);
 	const initJson = JSON.stringify({
+		activity_path: activityPath,
+		activity_schema_version: 1,
 		conflict_graph: { computed_at: null, edges: [] },
 		entries: {},
 		merge_queue: [],
@@ -246,14 +250,18 @@ export function initState(file: string): void {
 			const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
 			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
 				const raw = parsed as Record<string, unknown>;
-				if (raw.owner !== null && raw.owner !== undefined && raw.entries !== null && raw.entries !== undefined) return;
+				if (raw.owner !== null && raw.owner !== undefined
+					&& raw.entries !== null && raw.entries !== undefined
+					&& raw.activity_path !== null && raw.activity_path !== undefined
+					&& raw.activity_schema_version !== null && raw.activity_schema_version !== undefined) return;
 			}
 		} catch {
 			// Preserve idempotence for corrupt/partial existing files: init
 			// must not clobber them.
 			return;
 		}
-		const backfillFilter = `if ((. // {}) | type == "object") then (if .owner? == null then . + {owner: ${ownerJson}} else . end) | (if .entries? == null then . + {entries: {}} else . end) else . end`;
+		const activityPathJson = JSON.stringify(activityPath);
+		const backfillFilter = `if ((. // {}) | type == "object") then (if .owner? == null then . + {owner: ${ownerJson}} else . end) | (if .entries? == null then . + {entries: {}} else . end) | (if .activity_path? == null then . + {activity_path: ${activityPathJson}} else . end) | (if .activity_schema_version? == null then . + {activity_schema_version: 1} else . end) else . end`;
 		const backfill = lockedJqUpdate(lock, file, backfillFilter);
 		if (backfill.status !== 0) {
 			process.stderr.write(backfill.stderr || "");
@@ -276,8 +284,10 @@ export function archiveState(file: string): string | null {
 	if (!ts) ts = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 	const safeTs = ts.replace(/:/g, "");
 	const archive = `${file.replace(/\.json$/, "")}-${safeTs}.json.archive`;
+	const activity = activityPathFromStatePath(file);
+	const activityArchive = activityArchivePathFromStatePath(file, ts);
 	const lock = `${file}.lock`;
-	const r = lockedRename(lock, file, archive);
+	const r = lockedArchiveStateAndActivity(lock, file, archive, activity, activityArchive);
 	if (r.status !== 0) {
 		process.stderr.write(r.stderr || "");
 		process.exit(r.status ?? 1);

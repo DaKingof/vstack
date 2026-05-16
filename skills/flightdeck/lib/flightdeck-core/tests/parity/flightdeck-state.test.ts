@@ -121,11 +121,13 @@ describe("flightdeck-state CLI", () => {
 	test("init creates canonical state shape", () => {
 		const r = run(repo, ["init"]);
 		expect(r.status).toBe(0);
-		const state = readState(repo) as { entries?: unknown; owner?: unknown; session_id?: unknown; terminated?: unknown };
+		const state = readState(repo) as { activity_path?: unknown; activity_schema_version?: unknown; entries?: unknown; owner?: unknown; session_id?: unknown; terminated?: unknown };
 		expect(state.entries).toEqual({});
 		expect(state.session_id).toBe(SESSION);
 		expect(state.terminated).toBe(false);
 		expect(state.owner).toBeTruthy();
+		expect(String(state.activity_path).endsWith(`tmp/flightdeck-activity-${SESSION}.jsonl`)).toBe(true);
+		expect(state.activity_schema_version).toBe(1);
 	});
 
 	test("init records owner metadata", () => {
@@ -314,12 +316,56 @@ describe("flightdeck-state CLI", () => {
 		expect(r.stdout.endsWith(`tmp/flightdeck-state-${SESSION}.json\n`)).toBe(true);
 	});
 
-	test("archive moves file with .archive suffix using terminated_at when set", () => {
+	test("activity path returns canonical activity JSONL path", () => {
+		const r = run(repo, ["activity", "path"]);
+		expect(r.status).toBe(0);
+		expect(r.stdout.endsWith(`tmp/flightdeck-activity-${SESSION}.jsonl\n`)).toBe(true);
+	});
+
+	test("activity append tail and export expose normalized events", () => {
+		const append = run(repo, ["activity", "append", JSON.stringify({
+			entry_id: "A1",
+			natural_key: "A1:start",
+			severity: "success",
+			source: "flightdeck",
+			summary: "A1 registered",
+			type: "entry.registered",
+		})]);
+		expect(append.status).toBe(0);
+		const event = JSON.parse(append.stdout) as { id?: string; schema_version?: number; session_id?: string };
+		expect(event.schema_version).toBe(1);
+		expect(event.session_id).toBe(SESSION);
+
+		const duplicate = run(repo, ["activity", "append", JSON.stringify({
+			entry_id: "A1",
+			natural_key: "A1:start",
+			severity: "success",
+			source: "flightdeck",
+			summary: "A1 registered",
+			type: "entry.registered",
+		})]);
+		expect(duplicate.status).toBe(0);
+		expect((readFileSync(join(repo, "tmp", `flightdeck-activity-${SESSION}.jsonl`), "utf8").trim().split("\n"))).toHaveLength(1);
+
+		const tail = run(repo, ["activity", "tail", "--json", "--limit", "5"]);
+		expect(tail.status).toBe(0);
+		expect(JSON.parse(tail.stdout)).toHaveLength(1);
+		const markdown = run(repo, ["activity", "export", "--format", "markdown", "--filter", "type=entry.registered"]);
+		expect(markdown.status).toBe(0);
+		expect(markdown.stdout).toContain("A1 registered");
+	});
+
+	test("archive moves state and activity sidecars with .archive suffix using terminated_at when set", () => {
 		run(repo, ["init"]);
+		run(repo, ["activity", "append", JSON.stringify({ natural_key: "start", source: "flightdeck", summary: "started", type: "session.started" })]);
 		run(repo, ["set", "terminated_at", '"2026-05-11T00:00:00Z"']);
 		const r = run(repo, ["archive"]);
 		expect(r.status).toBe(0);
 		expect(r.stdout).toMatch(/-2026-05-11T000000Z\.json\.archive\n$/);
+		const archived = JSON.parse(readFileSync(r.stdout.trim(), "utf8")) as { activity_archive_path?: string };
+		expect(archived.activity_archive_path).toMatch(/flightdeck-activity-PARITY-2026-05-11T000000Z\.jsonl\.archive$/);
+		expect(existsSync(archived.activity_archive_path!)).toBe(true);
+		expect(readFileSync(archived.activity_archive_path!, "utf8")).toContain("session.started");
 	});
 
 	// Regression: issue #17. terminate.md § 5 previously ran

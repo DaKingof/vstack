@@ -1,17 +1,22 @@
 #!/usr/bin/env bun
 // CLI parity port of skills/flightdeck/scripts/flightdeck-state.
 //
-// Subcommands: init | get | set | append | increment | tracked-entries | write-entry | path | phase | archive | master-busy
+// Subcommands: init | get | set | append | increment | tracked-entries | write-entry | path | phase | archive | activity | master-busy
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { appendActivityEvent } from "../activity/append.ts";
+import { formatActivityJsonl, formatActivityLine, formatActivityMarkdown } from "../activity/format.ts";
+import { activityPathForSession } from "../activity/paths.ts";
+import { readActivityEvents, tailActivityEvents } from "../activity/read.ts";
 import {
 	archiveState,
 	getField,
 	initState,
 	normalizePath,
 	resolveSession,
+	resolveStateBase,
 	statePath,
 	updateState,
 } from "../state/master-state.ts";
@@ -116,6 +121,10 @@ switch (action) {
 		if (ap) process.stdout.write(`${ap}\n`);
 		break;
 	}
+	case "activity": {
+		runActivity(rest);
+		break;
+	}
 	case "phase": {
 		if (rest.length < 1) die("Usage: phase <ISSUE_ID>");
 		runPhase(rest[0]!);
@@ -127,7 +136,7 @@ switch (action) {
 		break;
 	}
 	default:
-		die(`Unknown action: ${action}\nActions: init | get | set | append | increment | tracked-entries | write-entry | archive | master-busy | path | phase`);
+		die(`Unknown action: ${action}\nActions: init | get | set | append | increment | tracked-entries | write-entry | archive | activity | master-busy | path | phase`);
 }
 
 function writeTrackedEntryFilter(id: string, entry: TrackedEntry): string {
@@ -142,6 +151,79 @@ function readStateJson(): FlightdeckStateLike {
 
 function warnLine(message: string): void {
 	process.stderr.write(`${message}\n`);
+}
+
+function activityFile(): string {
+	return activityPathForSession(session, resolveStateBase());
+}
+
+function runActivity(args: string[]): void {
+	const sub = args[0];
+	if (!sub) die("Usage: activity <path|append|tail|export> [args]");
+	const activity = activityFile();
+	switch (sub) {
+		case "path": {
+			process.stdout.write(`${activity}\n`);
+			break;
+		}
+		case "append": {
+			if (args.length < 2) die("Usage: activity append <json-event>");
+			let payload: unknown;
+			try {
+				payload = JSON.parse(args[1]!);
+			} catch {
+				die("Error: invalid json-event");
+			}
+			if (!payload || typeof payload !== "object" || Array.isArray(payload)) die("Error: json-event must be an object");
+			const result = appendActivityEvent(activity, payload, { sessionId: session });
+			process.stdout.write(`${JSON.stringify(result.event)}\n`);
+			break;
+		}
+		case "tail": {
+			const opts = parseActivityReadFlags(args.slice(1), { defaultFormat: "text", defaultLimit: 300 });
+			const events = tailActivityEvents(activity, opts.limit, { filter: opts.filter, warn: warnLine });
+			if (opts.format === "json") process.stdout.write(`${JSON.stringify(events)}\n`);
+			else process.stdout.write(events.map(formatActivityLine).join("\n") + (events.length > 0 ? "\n" : ""));
+			break;
+		}
+		case "export": {
+			const opts = parseActivityReadFlags(args.slice(1), { defaultFormat: "jsonl" });
+			const events = readActivityEvents(activity, { filter: opts.filter, warn: warnLine });
+			if (opts.format === "markdown") process.stdout.write(formatActivityMarkdown(events));
+			else process.stdout.write(formatActivityJsonl(events));
+			break;
+		}
+		default:
+			die("Usage: activity <path|append|tail|export> [args]");
+	}
+}
+
+function parseActivityReadFlags(args: string[], defaults: { defaultFormat: "text" | "json" | "jsonl" | "markdown"; defaultLimit?: number }): { filter?: string; format: "text" | "json" | "jsonl" | "markdown"; limit: number } {
+	let format = defaults.defaultFormat;
+	let limit = defaults.defaultLimit ?? Number.MAX_SAFE_INTEGER;
+	let filter: string | undefined;
+	for (let i = 0; i < args.length; i += 1) {
+		const arg = args[i]!;
+		if (arg === "--json") { format = "json"; continue; }
+		if (arg === "--limit") { limit = parsePositiveInt(args[++i], "--limit"); continue; }
+		if (arg.startsWith("--limit=")) { limit = parsePositiveInt(arg.slice("--limit=".length), "--limit"); continue; }
+		if (arg === "--format") { format = parseActivityFormat(args[++i]); continue; }
+		if (arg.startsWith("--format=")) { format = parseActivityFormat(arg.slice("--format=".length)); continue; }
+		if (arg === "--filter") { filter = args[++i] ?? ""; continue; }
+		if (arg.startsWith("--filter=")) { filter = arg.slice("--filter=".length); continue; }
+		die(`Unknown activity flag: ${arg}`);
+	}
+	return { filter, format, limit };
+}
+
+function parseActivityFormat(value: string | undefined): "jsonl" | "markdown" {
+	if (value === "jsonl" || value === "markdown") return value;
+	die("Error: --format must be jsonl or markdown");
+}
+
+function parsePositiveInt(value: string | undefined, label: string): number {
+	if (!value || !/^[0-9]+$/.test(value)) die(`Error: ${label} must be a non-negative integer`);
+	return Number.parseInt(value, 10);
 }
 
 function validateEntryIdOrDie(value: unknown, label: string): string {

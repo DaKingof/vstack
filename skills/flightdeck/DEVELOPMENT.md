@@ -69,7 +69,7 @@ Not run by hand in normal use — the skill calls them.
 
 - `open-terminal` — launches issue worktree tmux windows with the chosen harness.
 - `flightdeck-session` — launches or attaches generic tracked tmux sessions without fake issue ids.
-- `flightdeck-state` — reads/writes the session's master state file, including tracked-entry normalization (`tracked-entries`, `write-entry`).
+- `flightdeck-state` — reads/writes the session's master state file, including tracked-entry normalization (`tracked-entries`, `write-entry`) and the activity JSONL sidecar (`activity path|append|tail|export`).
 - `flightdeck-daemon` — background poller; wakes the master.
 - `flightdeck-dashboard` — Rust/ratatui standalone dashboard; `launch` opens the tracked workflow dashboard window and optionally starts the Rust daemon. Also supports demo fixtures plus `tui --state-file <path>` and `tui --session <name>` live-state reads with terminated-archive fallback, debounced file watching, stale/archive banners, Activity feed scaffolding, cost/token totals, and confirmation-gated prune/focus actions.
 - `pane-registry`, `pane-poll`, `pane-respond` — pane tracking and IO.
@@ -203,7 +203,7 @@ Detailed list of what each script does, for debugging or porting work:
 | Script | What it does |
 | --- | --- |
 | `open-terminal` | Launches a new tmux window with the chosen harness running on the chosen issue worktree. |
-| `flightdeck-state` | Reads/writes the session's master state file, including tracked-entry normalization (`tracked-entries`, `write-entry`). |
+| `flightdeck-state` | Reads/writes the session's master state file, including tracked-entry normalization (`tracked-entries`, `write-entry`) and activity sidecar commands (`activity path|append|tail|export`). |
 | `flightdeck-daemon` | Background poller. Wakes the master when an agent needs attention. |
 | `flightdeck-dashboard` | Rust/ratatui dashboard trampoline. `launch` is the best-effort startup hook that registers `.entries.flightdeck-dashboard` via `flightdeck-session start --kind workflow`; `--no-daemon` keeps file-mode behavior, while `FLIGHTDECK_DAEMON_RUST=1` starts the Rust daemon. `tui --demo[=NAME]` uses compiled fixtures; `tui --state-file <path>` reads a concrete master-state JSON; `tui --session <name>` resolves `<project-root>/<FLIGHTDECK_STATE_DIR>/flightdeck-state-<name>.json` and falls back to newest valid `*.json.archive`. Live TUI mode watches state/archive paths with debounce, tails daemon/wake JSONL into the Activity tab, shows cost/source-state indicators, and shells confirmation-gated focus/prune writes to canonical helpers. |
 | `pane-registry` | Tracks which tracked entry (issue or adhoc session) lives in which tmux pane and how to talk to its agent. |
