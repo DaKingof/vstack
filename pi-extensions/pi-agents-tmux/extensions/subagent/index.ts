@@ -97,6 +97,13 @@ import {
 	watchdogEnabledFromEnv,
 	watchdogGraceMsFromEnv,
 } from "./agent-end-watchdog.js";
+import {
+	createIdleStallWatchdog,
+	STALL_WATCHDOG_REASON,
+	stallWatchdogEnabledFromEnv,
+	stallWatchdogIntervalMsFromEnv,
+	stallWatchdogThresholdMsFromEnv,
+} from "./idle-stall-watchdog.js";
 import { registerPaneSupportTools } from "./pane-support-tools.js";
 import { MINI_DASHBOARD_RANK, setMiniDashboardWidget } from "./stacked-widget.js";
 import {
@@ -385,6 +392,63 @@ export default function (pi: ExtensionAPI) {
 			await markTaskNeedsCompletion(runtimeRoot, agentName, taskId, {
 				diagnostic: `${payload.summary} (reason: ${WATCHDOG_REASON})`,
 				outboxFile: completionPath(runtimeRoot, agentName, taskId),
+			});
+		},
+		logWarn: (msg) => {
+			console.warn(msg);
+		},
+	});
+
+	// Idle-stall watchdog (vstack#63 workaround): polls active tasks for
+	// pi-core post-compaction stalls where agent_end never fires. Reuses
+	// the W5 O_EXCL writer so a racing real complete_subagent always wins.
+	let currentRuntimeRoot: string | undefined;
+	const idleStallWatchdog = createIdleStallWatchdog({
+		intervalMs: stallWatchdogIntervalMsFromEnv(),
+		thresholdMs: stallWatchdogThresholdMsFromEnv(),
+		isEnabled: () => stallWatchdogEnabledFromEnv(),
+		now: () => Date.now(),
+		listActiveTasks: async () => {
+			if (!currentRuntimeRoot) return [];
+			const records = await readTaskRegistry(currentRuntimeRoot);
+			return Object.values(records).filter(
+				(record) =>
+					record?.taskId &&
+					record.status !== "completed" &&
+					record.status !== "failed" &&
+					record.status !== "blocked" &&
+					record.status !== "needs_completion",
+			);
+		},
+		outboxExists: defaultOutboxExists,
+		outboxPathFor: (record) =>
+			record.outboxFile ??
+			completionPath(currentRuntimeRoot ?? "", record.agent, record.taskId),
+		isPaneIdle: async () => {
+			// In the parent session we don't have a per-pane idle probe handy;
+			// defer to the outbox-existence + staleness checks as the
+			// principal signal. A child Pi process that's still actively
+			// writing tool calls will keep updating its task record so
+			// lastActivityAt advances and the staleness gate refuses. Returning
+			// true here is conservative: it lets the watchdog fire on truly
+			// stale records but still falls through to the outbox-present /
+			// not-stale guards above.
+			return true;
+		},
+		lastActivityAt: (record) => {
+			const raw = record.updatedAt ?? record.completedAt ?? record.createdAt;
+			if (!raw) return 0;
+			const ts = Date.parse(raw);
+			return Number.isFinite(ts) ? ts : 0;
+		},
+		writeSyntheticOutbox: defaultWriteSyntheticOutbox,
+		markFired: async (record, payload) => {
+			if (!currentRuntimeRoot) return;
+			await markTaskNeedsCompletion(currentRuntimeRoot, record.agent, record.taskId, {
+				diagnostic: `${payload.summary} (reason: ${STALL_WATCHDOG_REASON})`,
+				outboxFile:
+					record.outboxFile ??
+					completionPath(currentRuntimeRoot, record.agent, record.taskId),
 			});
 		},
 		logWarn: (msg) => {
@@ -1132,6 +1196,11 @@ export default function (pi: ExtensionAPI) {
 		};
 		poll();
 		completionPoller = setInterval(poll, Math.max(500, Math.floor(settingNumber("completionPollMs", 2000, ctx.cwd))));
+
+		// vstack#63 workaround: idle-stall watchdog rides on the parent
+		// session and polls active tasks for post-compaction stalls.
+		currentRuntimeRoot = runtimeRoot;
+		idleStallWatchdog.start();
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
@@ -1239,6 +1308,8 @@ export default function (pi: ExtensionAPI) {
 		completionPoller = undefined;
 		childInboxPoller = undefined;
 		dashboardCtx = undefined;
+		idleStallWatchdog.stop();
+		currentRuntimeRoot = undefined;
 	});
 
 	registerAgentsCommands({
