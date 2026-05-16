@@ -185,7 +185,15 @@ post_reply() {
     # Execute based on ID type
     if [ "$is_thread_id" = "true" ]; then
         # GraphQL for thread IDs
-        reply_via_graphql "$id" "$body"
+        local reply_result reply_url
+        reply_result=$(reply_via_graphql "$id" "$body") || return 1
+        reply_url=$(echo "$reply_result" | jq -r '.url // ""' 2>/dev/null || true)
+        bash "$SCRIPT_DIR/../_activity-emit.sh" pr.comments_left \
+            --severity info \
+            --importance normal \
+            --summary "Reply left on PR review thread" \
+            --details-json "$(jq -cn --arg url "$reply_url" --arg thread_id "$id" '{url: $url, thread_id: $thread_id}')" || true
+        echo "$reply_result"
     else
         # REST for numeric comment IDs
         local pr_num
@@ -197,7 +205,16 @@ post_reply() {
         owner=$(get_owner "$repo_info")
         repo=$(get_repo "$repo_info")
 
-        reply_via_rest "$id" "$body" "$pr_num" "$owner" "$repo"
+        local reply_result reply_url
+        reply_result=$(reply_via_rest "$id" "$body" "$pr_num" "$owner" "$repo") || return 1
+        reply_url=$(echo "$reply_result" | jq -r '.url // ""' 2>/dev/null || true)
+        bash "$SCRIPT_DIR/../_activity-emit.sh" pr.comments_left \
+            --severity info \
+            --importance normal \
+            --summary "Reply left on PR #$pr_num" \
+            --pr-number "$pr_num" \
+            --details-json "$(jq -cn --arg url "$reply_url" --arg comment_id "$id" '{url: $url, comment_id: $comment_id}')" || true
+        echo "$reply_result"
     fi
 }
 

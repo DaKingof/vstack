@@ -1,0 +1,149 @@
+use chrono::{DateTime, Utc};
+use ratatui::layout::{Alignment, Constraint, Rect};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
+use ratatui::Frame;
+
+use crate::app::command::SnapshotSource;
+use crate::app::hitmap::{ClickAction, HitMap, ScrollSource};
+use crate::app::model::Model;
+use crate::app::theme::Palette;
+use crate::state::snapshot::ConversationStream;
+
+pub fn render(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    theme: &Palette,
+    hitmap: &mut HitMap,
+) {
+    if model.snapshot.conversations.is_empty() {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.border())
+            .style(theme.panel())
+            .title(Span::styled(" conversations ", theme.muted()));
+        let read_mode = if matches!(model.snapshot_source, SnapshotSource::Socket(_)) {
+            "daemon socket"
+        } else {
+            "file-watcher"
+        };
+        let lines = vec![
+            Line::from(Span::styled("Conversations stream", theme.header())),
+            Line::from(""),
+            Line::from("When connected via a daemon socket, this tab shows per-pane last prompt and assistant excerpts (newest-first, Pi streaming partials folded)."),
+            Line::from(""),
+            Line::from(format!("Current read mode: {read_mode}. Conversation excerpts require the daemon's pi-bridge / claude-channel / oc subscribers. Start the daemon with `flightdeck-dashboard daemon start --session <name>` and relaunch the TUI with `--socket <path>`.")),
+        ];
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .style(theme.muted())
+                .alignment(Alignment::Left)
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return;
+    }
+
+    let header = Row::new([
+        Cell::from("Time"),
+        Cell::from("Session"),
+        Cell::from("Role"),
+        Cell::from("Excerpt"),
+    ])
+    .style(theme.header());
+    let rows = model
+        .snapshot
+        .conversations
+        .iter()
+        .enumerate()
+        .map(|(idx, conversation)| {
+            let row_style = if idx == model.selected_index() {
+                model.selection_style()
+            } else {
+                theme.frame()
+            };
+            Row::new([
+                Cell::from(time_label(conversation.ts)),
+                Cell::from(session_label(conversation, model)),
+                Cell::from(role_label(conversation)),
+                Cell::from(conversation.excerpt.clone()),
+            ])
+            .style(row_style)
+        })
+        .collect::<Vec<_>>();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.border_active())
+        .style(theme.panel())
+        .title(Line::from(vec![
+            Span::styled(" conversations ", theme.title()),
+            Span::styled("newest first · pane ids hidden", theme.muted()),
+        ]));
+    hitmap.push(
+        area,
+        ClickAction::ScrollDown(ScrollSource::Conversations),
+        0,
+    );
+    for idx in 0..model.snapshot.conversations.len() {
+        hitmap.push(
+            Rect::new(
+                area.x.saturating_add(1),
+                area.y.saturating_add(2 + idx as u16),
+                area.width.saturating_sub(2),
+                1,
+            ),
+            ClickAction::SelectRow(idx),
+            0,
+        );
+    }
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(9),
+            Constraint::Length(28),
+            Constraint::Length(18),
+            Constraint::Min(40),
+        ],
+    )
+    .header(header)
+    .block(block)
+    .column_spacing(1);
+    frame.render_widget(table, area);
+}
+
+fn session_label(conversation: &ConversationStream, model: &Model) -> String {
+    model
+        .snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == conversation.entry_id)
+        .map(|session| format!("{} {}", session.kind.badge(), truncate(&session.title, 22)))
+        .unwrap_or_else(|| format!("entry {}", conversation.entry_id))
+}
+
+fn role_label(conversation: &ConversationStream) -> String {
+    let role = conversation.role.as_deref().unwrap_or("unknown");
+    if conversation.partial {
+        format!("{role} (stream)")
+    } else {
+        role.to_owned()
+    }
+}
+
+fn time_label(ts: Option<DateTime<Utc>>) -> String {
+    ts.map(|value| value.format("%H:%M:%S").to_string())
+        .unwrap_or_else(|| String::from("—"))
+}
+
+fn truncate(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}

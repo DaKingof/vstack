@@ -11,6 +11,10 @@ import { fileURLToPath } from "node:url";
 import { ocAdapterIsFresh, ocReleasePort, ocSpawnFile } from "../paths/oc.ts";
 import { ccAdapterIsFresh, ccMcpDir, ccReleasePort, ccSpawnFile } from "../paths/cc.ts";
 import { piBridgeIsFresh, piSpawnFile } from "../paths/pi.ts";
+import { emitActivity } from "../activity/emit.ts";
+import { emitCloseIssue, emitMergeAction, emitWorkflowDecision } from "../activity/workflow-emit.ts";
+import type { ActivityEventInput } from "../activity/types.ts";
+import type { CloseIssueOutcome } from "../activity/workflow-emit.ts";
 import { cxAdapterIsFresh, cxSpawnFile } from "../paths/codex.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -33,6 +37,19 @@ function fdStateOrDie(args: string[]): string {
 		process.exit(r.status ?? 1);
 	}
 	return r.stdout;
+}
+
+let cachedStateFile = "";
+let cachedTmuxSession = "";
+
+function registryStateFile(): string {
+	if (!cachedStateFile) cachedStateFile = fdStateOrDie(["path"]).trim();
+	return cachedStateFile;
+}
+
+function registryTmuxSession(): string {
+	if (!cachedTmuxSession) cachedTmuxSession = tmuxCurrentSession();
+	return cachedTmuxSession;
 }
 
 function nowIso(): string {
@@ -321,6 +338,7 @@ function cmdInitEntry(entryId: string, args: string[], mode: "entry" | "issue" =
 	};
 
 	fdStateOrDie(["write-entry", entryId, JSON.stringify(entry)]);
+	emitEntryRegistered(entry);
 }
 
 // ----- init ----------------------------------------------------------------
@@ -361,6 +379,180 @@ function registryHasEntry(id: string): boolean {
 		process.exit(6);
 	}
 	return r.status === 0 && r.stdout.trim() === "true";
+}
+
+type EntryRecord = Record<string, unknown>;
+
+function entryById(id: string): EntryRecord | null {
+	const idJson = JSON.stringify(id);
+	const r = fdState(["get", `.entries[${idJson}] // empty`]);
+	const status = r.status ?? 0;
+	if (status >= 2 || r.stderr.trim()) {
+		process.stderr.write(`pane-registry: registry read failed (flightdeck-state exit=${status}): ${r.stderr}`);
+		if (!r.stderr.endsWith("\n")) process.stderr.write("\n");
+		process.exit(6);
+	}
+	const raw = (r.stdout ?? "").trim();
+	if (r.status === 1 || !raw || raw === "null") return null;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		return isRecord(parsed) ? parsed : null;
+	} catch {
+		process.stderr.write(`pane-registry: malformed registry entry for '${id}'\n`);
+		process.exit(6);
+	}
+}
+
+function entryByIdOrDie(id: string): EntryRecord {
+	const entry = entryById(id);
+	if (!entry) die(`pane-registry: entry '${id}' not found in .entries`);
+	return entry;
+}
+
+function entryString(entry: EntryRecord, key: string): string | undefined {
+	const value = entry[key];
+	return typeof value === "string" && value ? value : undefined;
+}
+
+function entryIssue(entry: EntryRecord): Record<string, unknown> {
+	const domain = isRecord(entry.domain) ? entry.domain : {};
+	return isRecord(domain.issue) ? domain.issue : {};
+}
+
+function entryRefs(entry: EntryRecord): Record<string, unknown> | undefined {
+	const refs: Record<string, unknown> = {};
+	const issue = entryIssue(entry);
+	const taskId = entryString(entry, "task_id");
+	if (taskId) refs.task_id = taskId;
+	const issueId = typeof issue.id === "string" && issue.id ? issue.id : undefined;
+	if (issueId) refs.issue_id = issueId;
+	if (typeof issue.pr_number === "number" && Number.isFinite(issue.pr_number)) refs.pr_number = Math.trunc(issue.pr_number);
+	return Object.keys(refs).length > 0 ? refs : undefined;
+}
+
+function activityEntryFields(entry: EntryRecord, fallbackId?: string): Pick<ActivityEventInput, "entry_id" | "entry_title" | "entry_kind" | "harness" | "pane_id" | "refs"> {
+	const out: Pick<ActivityEventInput, "entry_id" | "entry_title" | "entry_kind" | "harness" | "pane_id" | "refs"> = {};
+	const id = entryString(entry, "id") ?? fallbackId;
+	if (id) out.entry_id = id;
+	const title = entryString(entry, "title");
+	if (title) out.entry_title = title;
+	const kind = entryString(entry, "kind");
+	if (kind) out.entry_kind = kind;
+	const harness = entryString(entry, "harness");
+	if (harness) out.harness = harness;
+	const paneId = entryString(entry, "pane_id");
+	if (paneId) out.pane_id = paneId;
+	const refs = entryRefs(entry);
+	if (refs) out.refs = refs as ActivityEventInput["refs"];
+	return out;
+}
+
+function emitRegistryActivity(entry: EntryRecord | null, event: ActivityEventInput, fallbackId?: string): void {
+	emitActivity({ sessionId: registryTmuxSession(), stateFile: registryStateFile(), tmuxSession: registryTmuxSession() }, {
+		...activityEntryFields(entry ?? {}, fallbackId),
+		...event,
+		source: event.source ?? "flightdeck",
+	});
+}
+
+function registryWorkflowContext(entry: EntryRecord | null): { entry: EntryRecord | null; sessionId: string; stateFile: string; tmuxSession: string } {
+	return { entry, sessionId: registryTmuxSession(), stateFile: registryStateFile(), tmuxSession: registryTmuxSession() };
+}
+
+function emitIssueMergeState(entry: EntryRecord, state: string): void {
+	const issue = entryIssue(entry);
+	const pr = typeof issue.pr_number === "number" && Number.isFinite(issue.pr_number) ? Math.trunc(issue.pr_number) : undefined;
+	if (state === "merge-ready") emitMergeAction(registryWorkflowContext(entry), pr, "queued");
+	else if (state === "merged") emitMergeAction(registryWorkflowContext(entry), pr, "merged", { commit: entryString(issue, "merge_commit") ?? entryString(entry, "merge_commit") ?? "" });
+	else if (state === "aborted") emitMergeAction(registryWorkflowContext(entry), pr, "blocked", { reason: "aborted" });
+}
+
+function emitEntryRegistered(entry: EntryRecord): void {
+	const id = entryString(entry, "id") ?? "unknown";
+	const kind = entryString(entry, "kind") ?? "entry";
+	const title = entryString(entry, "title") ?? id;
+	emitRegistryActivity(entry, {
+		details: { dedup_key: `${id}:entry.registered:${kind}:${title}` },
+		importance: "important",
+		severity: "info",
+		summary: `${kind} ${id} registered: ${title}`,
+		type: "entry.registered",
+	}, id);
+}
+
+function emitEntryStateChanged(entry: EntryRecord, oldState: unknown, newState: string): void {
+	const id = entryString(entry, "id") ?? "unknown";
+	emitRegistryActivity(entry, {
+		details: { dedup_key: `${id}:entry.state_changed:state:${newState}`, new: newState, old: oldState ?? null },
+		importance: "normal",
+		severity: "info",
+		summary: `${id} state: ${String(oldState ?? "null")} → ${newState}`,
+		type: "entry.state_changed",
+	}, id);
+}
+
+function emitEntrySubstateChanged(entry: EntryRecord, substate: string): void {
+	const id = entryString(entry, "id") ?? "unknown";
+	const parentState = entry.state ?? null;
+	emitRegistryActivity(entry, {
+		details: { dedup_key: `${id}:entry.state_changed:substate:${substate}`, parentState, substate },
+		importance: "noisy",
+		severity: "info",
+		summary: `${id} substate: ${substate}`,
+		type: "entry.state_changed",
+	}, id);
+}
+
+function decisionSummary(answer: string): string {
+	return answer.length <= 120 ? answer : `${answer.slice(0, 119)}…`;
+}
+
+function emitDecisionRecorded(entry: EntryRecord, tag: string, answer: string, sequence: number): void {
+	emitWorkflowDecision(registryWorkflowContext(entry), tag, {
+		answer,
+		sequence,
+		summary: decisionSummary(answer),
+	});
+}
+
+function terminalActivity(state: string): { importance: "important"; severity: "success" | "warning" | "error"; summaryWord: string; type: string } | null {
+	if (state === "merged" || state === "complete") return { importance: "important", severity: "success", summaryWord: "completed", type: "entry.completed" };
+	if (state === "cancelled") return { importance: "important", severity: "warning", summaryWord: "cancelled", type: "entry.cancelled" };
+	if (state === "aborted" || state === "dead") return { importance: "important", severity: "error", summaryWord: "dead", type: "entry.dead" };
+	return null;
+}
+
+function emitTerminalEntry(entry: EntryRecord, state: string, details: Record<string, unknown> = {}): void {
+	const terminal = terminalActivity(state);
+	if (!terminal) return;
+	const id = entryString(entry, "id") ?? "unknown";
+	const outcome = state === terminal.summaryWord ? "" : ` (${state})`;
+	emitCloseIssue(registryWorkflowContext(entry), state as CloseIssueOutcome, {
+		details,
+		severity: terminal.severity,
+		summary: `${id} ${terminal.summaryWord}${outcome}`,
+	});
+}
+
+function emitReconcileDrift(entry: EntryRecord, description: string, kind: string): void {
+	emitRegistryActivity(entry, {
+		details: { dedup_key: `${entryString(entry, "id") ?? "unknown"}:daemon.warning:reconcile:${kind}:${description}`, description, drift_kind: kind },
+		importance: "important",
+		severity: "warning",
+		summary: `reconcile drift: ${description}`,
+		type: "daemon.warning",
+	});
+}
+
+function emitReconcileDrop(entry: EntryRecord): void {
+	const id = entryString(entry, "id") ?? "unknown";
+	emitRegistryActivity(entry, {
+		details: { dedup_key: `${id}:entry.dead:reconcile-stale-pane`, reason: "reconcile-stale-pane" },
+		importance: "important",
+		severity: "warning",
+		summary: `${id} dead (reconcile stale pane)`,
+		type: "entry.dead",
+	}, id);
 }
 
 // Issue-mode metadata lives under `entry.domain.issue`. If a caller
@@ -475,23 +667,40 @@ const VALID_STATES = new Set(["waiting", "prompting", "submitting", "ready", "me
 function cmdSetState(issue: string, state: string): void {
 	if (!issue || !state) die("Usage: set-state <ENTRY_ID> <state>");
 	if (!VALID_STATES.has(state)) die(`Unknown state: ${state}`);
+	const before = entryByIdOrDie(issue);
+	if (before.state === state) return;
 	setEntryField(issue, "state", JSON.stringify(state));
+	emitEntryStateChanged(before, before.state, state);
+	emitIssueMergeState(before, state);
 }
 
 function cmdSetSubstate(issue: string, sub: string): void {
 	if (!issue || !sub) die("Usage: set-substate <ENTRY_ID> <substate>");
+	const before = entryByIdOrDie(issue);
+	if (before.substate === sub) return;
 	setEntryField(issue, "substate", JSON.stringify(sub));
+	emitEntrySubstateChanged(before, sub);
 }
 
 function cmdSetField(issue: string, field: string, value: string): void {
 	if (!issue || !field || !value) die("Usage: set <ENTRY_ID> <field> <json-value>");
+	const before = field === "state" ? entryByIdOrDie(issue) : null;
 	setEntryField(issue, field, value);
+	if (field === "state" && before) {
+		const after = entryById(issue);
+		const nextState = after?.state;
+		if (typeof nextState === "string" && before.state !== nextState) emitEntryStateChanged(before, before.state, nextState);
+	}
 }
 
 function cmdLogDecision(issue: string, tag: string, answer: string): void {
 	if (!issue || !tag || !answer) die("Usage: log-decision <ENTRY_ID> <prompt-tag> <answer>");
+	const before = entryByIdOrDie(issue);
+	const decisions = Array.isArray(before.decisions_log) ? before.decisions_log : [];
+	const sequence = decisions.length + 1;
 	const entry = { answer, prompt_tag: tag, ts: nowIso() };
 	fdStateOrDie(["append", `.entries["${issue}"].decisions_log`, JSON.stringify(entry)]);
+	emitDecisionRecorded(before, tag, answer, sequence);
 }
 
 // ----- remove --------------------------------------------------------------
@@ -604,7 +813,7 @@ function cmdFindByPane(target: string): void {
 
 // ----- reconcile / remove-merged -------------------------------------------
 
-interface IssueRec {
+interface IssueRec extends EntryRecord {
 	state?: string;
 	pane_id?: string | null;
 	pane_target?: string | null;
@@ -686,9 +895,9 @@ function cmdReconcile(): void {
 					!currentPath.startsWith(`${worktree}/`)
 				);
 				if (windowMismatch || pathMismatch) {
-					drift.push(
-						`${issue} (window:'${win}'→'${currentWindow}' worktree:'${worktree}'→'${currentPath}')`,
-					);
+					const description = `${issue} (window:'${win}'→'${currentWindow}' worktree:'${worktree}'→'${currentPath}')`;
+					drift.push(description);
+					emitReconcileDrift(rec, description, windowMismatch ? "window-mismatch" : "worktree-mismatch");
 					driftedThis = true;
 				} else {
 					const resolved = tmuxField(paneTarget, "#{pane_id}");
@@ -703,7 +912,9 @@ function cmdReconcile(): void {
 		if (driftedThis) continue;
 		const alive = paneId ? live.panes.has(paneId) : !win || live.windows.has(win);
 		if (!alive) {
+			const droppedEntry = rec;
 			fdStateOrDie(["set", ".entries", `(.entries | del(.["${issue}"]))`]);
+			emitReconcileDrop(droppedEntry);
 			dropped.push(issue);
 		}
 	}
@@ -813,12 +1024,14 @@ function cmdTeardownWindow(args: string[]): void {
 			if (!(killResult.stderr ?? "").endsWith("\n")) process.stderr.write("\n");
 			process.exit(5);
 		}
+		emitTerminalEntry(rec, state, { force, pane_id: paneId, teardown: "killed" });
 		process.stdout.write(
 			`teardown-window: killed ${kind} (pane_id=${paneId}, window=${windowName}, force=${force ? 1 : 0})\n`,
 		);
 		return;
 	}
 	if (TERMINAL_STATES.has(state)) {
+		emitTerminalEntry(rec, state, { pane_id: paneId || null, teardown: "already-closed" });
 		process.stdout.write(`teardown-window: window already closed (pane_id=${paneId || "<none>"} gone, state=${state})\n`);
 		return;
 	}

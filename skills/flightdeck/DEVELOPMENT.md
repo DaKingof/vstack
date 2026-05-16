@@ -4,7 +4,7 @@ This file is for agents and humans hacking on flightdeck itself. End users shoul
 
 ## Implementation
 
-All scripts under `scripts/` are bash trampolines that exec the TypeScript implementation under `lib/flightdeck-core/src/bin/`. `bun` is a hard runtime dependency. Functional + integration tests live under `lib/flightdeck-core/tests/`. The live-wake suite (`tests/live-wake.sh`) is the smoke test for the daemon `start` run-loop.
+Most scripts under `scripts/` are bash trampolines that exec the TypeScript implementation under `lib/flightdeck-core/src/bin/`. `flightdeck-dashboard` is the Rust/ratatui trampoline under `lib/flightdeck-dashboard/`: it prefers a prebuilt release binary and falls back to `cargo run --release`. `bun` is a hard runtime dependency for the TypeScript scripts. Functional + integration tests live under `lib/flightdeck-core/tests/`. The live-wake suite (`tests/live-wake.sh`) is the smoke test for the daemon `start` run-loop.
 
 ## Session model and schema boundary
 
@@ -13,6 +13,32 @@ Flightdeck core is the generic tmux-session manager. It owns `TrackedEntry` life
 `flightdeck-state init` writes `entries`, `merge_queue`, `conflict_graph`, and `owner`. All readers go through `readTrackedEntries(state)` for the canonical `TrackedEntry` view; `writeTrackedEntry` validates `entry.id` plus optional `entry.domain.issue.id` and stores the entry under `entries[id]`.
 
 Use the TrackedEntry seam everywhere new code reads tracked sessions. Core helpers (`readTrackedEntries`, `writeTrackedEntry`, `entryIdForIssue`, `issueIdForEntry`) live under `lib/flightdeck-core/src/state/`; `pane-registry list --format json` and `flightdeck-state tracked-entries` expose the same normalized view to scripts. `pi-flightdeck` consumes the same seam via read-only `TrackedSession` / `TrackedState` render types, reads `.entries`, and uses `owner.pane_id` for default owner-scoped rendering.
+
+## Activity stream architecture
+
+TypeScript activity code lives under `lib/flightdeck-core/src/activity/`: `types.ts` defines `FlightdeckActivityEventV1`, refs, severity, and importance; `paths.ts` resolves live/archive sidecar paths; `append.ts` locks, dedupes, truncates, and rotates the JSONL; `read.ts` tails and filters; `format.ts` renders text/Markdown/JSONL; `emit.ts` is the generic best-effort appender; `workflow-emit.ts` owns issue-workflow/github/linear helpers. Event ids are deterministic from `session_id`, `entry_id`, `type`, and the natural key (`natural_key`, `details.dedup_key`, selected refs, or timestamp). Duplicate ids are skipped in memory and under the activity file lock.
+
+The activity sidecar is `flightdeck-activity-<session>.jsonl` next to the master state. Archive uses the state lock and activity lock together, writes `<activity>.archived` as the append-side sentinel, then moves the live JSONL to `*-<terminated_at>.jsonl.archive`. Appenders check the sentinel before touching the live file, so a late activity write cannot recreate an archived sidecar. Live retention is capped at 5,000 events and 10 MiB; oversized details are collapsed to `{original_bytes,truncated}`.
+
+Daemon/subscriber emission map: daemon start/stop, subscriber start/death/reattach, max-lifetime handoff, and wake-delivery failures emit daemon rows. `pi-bg-task-exit` remains a wake signal and then emits bg-task activity; non-exit bg-task output, successful subagent completions, question open rows, and `pi-activity-broker` rows are activity-only and do not wake master. Failed/blocked subagent completions and terminal bg-task exits still wake through the canonical wake path first.
+
+Pi broker contract: `pi-session-bridge` installs `globalThis[Symbol.for("vstack.pi.activity")]` with `publish(event)`, `subscribe(listener)`, and `recent(limit)`. Producers publish best-effort, the broker holds a 100-event newest-first ring for in-process consumers, and `pi-bridge stream` forwards live publications as `event:"vstack_activity"` bridge rows. Flightdeck's Pi subscriber consumes those rows unless `FLIGHTDECK_PI_ACTIVITY_BROKER=0`.
+
+Dashboard activity: the Rust dashboard reads structured JSONL through `JsonlActivitySource`, not the legacy daemon/wake sources. It validates `schema_version: 1`, skips malformed lines with diagnostics, tracks device/inode for same-path rotation, falls back to newest archive filename when the live file is gone, and file-watches the activity sidecar for debounced reloads.
+
+Workflow emitter table:
+
+| Seam | Event types |
+| --- | --- |
+| `flightdeck-state init/archive` | `session.started`, `session.completed` |
+| `pane-registry log-decision` | `decision.recorded` |
+| `flightdeck-state set .merge_queue/.conflict_graph` | `daemon.warning` for merge-plan updates, warning when conflicts exist |
+| `pane-registry set-state merge-ready/merged/aborted` | `pr.merge_queued`, `pr.merged`, `pr.merge_blocked` |
+| `pane-registry teardown-entry` | `entry.completed`, `entry.cancelled`, `entry.dead` |
+| `github.sh` wrappers | `pr.comments_left`, `pr.merged`, `pr.merge_queued`, `pr.merge_blocked`, `pr.checks_passed`, `pr.checks_failed` |
+| `linear.sh` wrappers | `linear.issue_created`, `linear.issue_updated`, `linear.issue_finished`, `linear.issue_cancelled`, `linear.relation_created` |
+
+`workflow-emit.ts` resolves `FLIGHTDECK_ACTIVITY_FILE` first. Without it, it emits only when `FLIGHTDECK_MANAGED=1` and a state or explicit activity path resolves. Appends use `nonblocking: true`; failures warn once per `(file,type,reason)` and never fail the workflow mutation.
 
 ## `flightdeck-session` flag reference
 
@@ -69,14 +95,62 @@ Not run by hand in normal use — the skill calls them.
 
 - `open-terminal` — launches issue worktree tmux windows with the chosen harness.
 - `flightdeck-session` — launches or attaches generic tracked tmux sessions without fake issue ids.
-- `flightdeck-state` — reads/writes the session's master state file, including tracked-entry normalization (`tracked-entries`, `write-entry`).
+- `flightdeck-state` — reads/writes the session's master state file, including tracked-entry normalization (`tracked-entries`, `write-entry`) and the activity JSONL sidecar (`activity path|append|tail|export`).
 - `flightdeck-daemon` — background poller; wakes the master.
+- `flightdeck-dashboard` — Rust/ratatui standalone dashboard; `launch` opens the tracked workflow dashboard window and optionally starts the Rust daemon. Also supports demo fixtures plus `tui --state-file <path>` and `tui --session <name>` live-state reads with terminated-archive fallback, debounced file watching, stale/archive banners, Activity feed scaffolding, cost/token totals, and confirmation-gated prune/focus actions.
 - `pane-registry`, `pane-poll`, `pane-respond` — pane tracking and IO.
 - `prompt-classify` — pattern-matches agent output against known prompt shapes; guards issue-only tags on non-issue entries as `domain-mismatch`.
 - `pr-conflict-graph`, `parallel-groups` — issue-mode merge-order planning.
 - `codex-app-server-spawn` / `-stop` — Codex bridge server lifecycle.
 
 Full per-script descriptions follow in the [Scripts](#scripts) section below.
+
+## Rust dashboard
+
+The Rust dashboard crate lives in `skills/flightdeck/lib/flightdeck-dashboard/`; the trampoline at `scripts/flightdeck-dashboard` prefers `target/release/flightdeck-dashboard` and falls back to `cargo run --release`.
+
+Build and test from the crate root:
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+cargo insta test
+```
+
+Snapshot tests use `ratatui::backend::TestBackend::new(200, 60)`. The shared constants live in `tests/common/mod.rs` (`SNAPSHOT_WIDTH`, `SNAPSHOT_HEIGHT`); update intentional snapshot diffs with `INSTA_UPDATE=always cargo insta test`, then run `cargo insta review` before committing.
+
+When adding a tab, wire the enum/state in `app/model.rs`, key handling in `app/keymap.rs`, update logic in `app/update.rs`, and render code under `app/view/<tab>.rs` plus `app/view/mod.rs`. Keep view modules render-only: write paths must become `Cmd::Spawn` effects that shell to existing Flightdeck helpers, not direct mutations from the TUI. Mouse targets come from the per-frame `app/hitmap.rs` registry; never store absolute coordinates in `Model`.
+
+Popup chrome lives in `app/view/popup.rs`; individual popups live in `app/view/modals.rs`. Keep popups one-at-a-time and closeable via Esc, `[ ✕ ]`, or the backdrop. Confirm popups are the only write affordance; the pending action must be data (`actions::WriteAction`), not a closure hidden inside view code. Base-layer click zones must remain masked while a popup is open.
+
+`app/theme.rs` is the single source of truth for colors and styles. Views must consume `Palette` style helpers (`theme.ok()`, `theme.warning()`, `theme.error()`, etc.) and never hard-code raw colors. The frame renderer paints `Palette::bg` once for non-system themes, panels use `Palette::surface`, and popups use `Palette::overlay`; keep System background reset so terminal palettes still win. Motion effects live in `app/view/fx.rs` and `app/motion.rs`; add new effects to the catalog, respect `MotionLevel::Off`, and keep semantic information visible without animation.
+
+### Information hierarchy
+
+Keep each dashboard fact in one canonical home:
+
+- Header: session id, master harness/path, daemon chip, uptime, kind counts, freshness/observer/cost/theme chips. The theme chip is right-anchored on the trailing edge and never truncated; cost compacts before any other chip at narrow widths. Do not add per-state counts, owner pane ids, or a `paused` chip here — the pause state surfaces as a banner row directly below the header, not as a header chip.
+- Left rail: status counts, merge queue glance, and conflict glance. The merge queue renders every queued entry (no per-rail truncation); the table column may abbreviate but the rail does not.
+- Session table: scan-friendly row data only — kind badge, friendly state, harness, title, cost, PR/worktree, age, last decision, last activity, plus `(stale)` only when tmux says the pane id no longer exists.
+- Right rail: selected-session summary grouped as Where, Issue, Paused, Cost, Recent decisions, and Actions. Keep low-level adapter/debug fields out of the rail.
+- Detail popups: full wrapped decision/event/session text and debugging details that would crowd the main layout.
+- Daemon tab: daemon/pane/debug metadata, including owner pane ids and socket/file-mode details.
+- Help popup: the canonical legend for kind badges, state-count badges, status chips, spinners, and PR/worktree labels.
+
+### Theme tokens
+
+The Rust dashboard theme layer uses exactly 16 palette slots: four surfaces (`bg`, `surface`, `overlay`, `selected_bg`), three text tones (`text`, `subtle`, `muted`), five semantic colors (`accent`, `success`, `warning`, `error`, `info`), and four decoration colors (`secondary`, `border_active`, `border_inactive`, `chrome`). `Theme::Moon` and `Theme::Dawn` are Rose Pine truecolor palettes; `Theme::Pantera` is the Charmtone/Crush-inspired neon truecolor palette, and `Theme::System` uses reset/ANSI colors so terminal palettes control the final look. Add another theme by adding one 16-slot `Palette` const, one `Theme` variant, parser/display-name branches, theme-picker preview row, and snapshots/tests; do not add ad-hoc view colors or extend the slot set unless a new semantic category cannot be expressed with modifiers. Keep selected-row styling centralized in `Theme::row_style_selected`; use modifiers such as bold/reversed before changing source palette RGB values for contrast.
+
+Cost tracking lives under `src/cost/`. The bundled `pricing.toml` is included at compile time, verified against vendor pricing pages in the file header, and can be overridden with `FLIGHTDECK_DASHBOARD_PRICING_FILE`. Claude transcripts are tailed incrementally from `adapter.cc_transcript`; Pi/OpenCode/Codex sources are metadata-aware stubs until stable external usage APIs are available. Cost read failures keep the last good value, warn on error transition, and surface an unhealthy-source chip instead of panicking.
+
+Write affordances live under `src/actions.rs` plus confirmation handling in `app/update.rs`: prune shells to `pane-registry remove <entry_id>`, focus shells to `tmux select-window -t <pane_target>`. Stale detection comes from `src/tmux/panes.rs` and caches `tmux list-panes -a -F '#{pane_id}'` for `TMUX_PROBE_TTL` seconds. Do not add new dashboard writes without a confirm popup and a canonical script/helper owner.
+
+Daemon code lives under `src/daemon/`. The Pi subscriber is split by responsibility in `daemon/subscribers/pi/{lifecycle,bridge,stream_parse,classifier,wake_emitter}.rs`; keep future subscriber work similarly scoped and leave Claude/OpenCode/Codex/tmux fallback stubs explicit until implemented.
+
+Snapshot fixtures are embedded through `src/fixtures.rs` from `src/fixtures/*.json`. Live-state and archive integration fixtures belong under `tests/fixtures/state/` when needed; avoid ad-hoc fixture paths in test bodies when a reusable state fixture fits.
+
+Live wake parity testing uses `tests/live-wake.sh`. Run `tests/live-wake.sh --no-tmux` for a quick shape check, or `tests/live-wake.sh` against a real Pi/tmux session to verify daemon wake routing, subscriber behavior, and master resume semantics end to end.
 
 ## Tests
 
@@ -91,6 +165,24 @@ bun run typecheck
 ```
 
 The live-wake suite (`tests/live-wake.sh`) must pass before shipping any change to the daemon run-loop, classifier, or pane I/O wiring.
+
+### Rust dashboard
+
+Run from the dashboard crate:
+
+```bash
+cd skills/flightdeck/lib/flightdeck-dashboard
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+cargo insta test
+cargo run --release -- tui --demo
+cargo run --release -- tui --state-file ../../tests/fixtures/state/entries-happy.json
+```
+
+`flightdeck-dashboard launch` is the Flightdeck startup hook. It is best-effort: outside tmux it prints `flightdeck-dashboard: not in tmux; skipping launch`, `FLIGHTDECK_DASHBOARD=0` exits silently, `--no-daemon` skips Rust daemon startup, and `FLIGHTDECK_DAEMON_RUST=1` opts into `daemon start --detach` before opening the tracked workflow window through `flightdeck-session start`. The trampoline exports `FLIGHTDECK_SKILL_DIR` so installed `.agents/skills/flightdeck` projects can find sibling scripts. Use `FLIGHTDECK_DASHBOARD_WINDOW`, `FLIGHTDECK_DASHBOARD_MOTION`, and `FLIGHTDECK_DASHBOARD_THEME` (or CLI `--window-name` / `--motion` / `--theme`) for local launch smoke variants; `NO_MOTION`/`NO_COLOR` force `--motion off` for launched TUI children.
+
+Snapshots live under `tests/snapshots/`; update intentionally with `INSTA_UPDATE=always cargo insta test`, then review the `.snap` diff before committing. Phase 7 parity smoke steps for terminal bell, no-auto-focus pause behavior, and live observer panes live in `docs/work-in-progress/flightdeck-dashboard-parity-smokes.md`. Watcher tests use `notify-debouncer-full` against temp dirs; if they fail locally, verify the filesystem supports native file notifications.
 
 ### Live wake
 
@@ -137,8 +229,9 @@ Detailed list of what each script does, for debugging or porting work:
 | Script | What it does |
 | --- | --- |
 | `open-terminal` | Launches a new tmux window with the chosen harness running on the chosen issue worktree. |
-| `flightdeck-state` | Reads/writes the session's master state file, including tracked-entry normalization (`tracked-entries`, `write-entry`). |
+| `flightdeck-state` | Reads/writes the session's master state file, including tracked-entry normalization (`tracked-entries`, `write-entry`) and activity sidecar commands (`activity path|append|tail|export`). |
 | `flightdeck-daemon` | Background poller. Wakes the master when an agent needs attention. |
+| `flightdeck-dashboard` | Rust/ratatui dashboard trampoline. `launch` is the best-effort startup hook that registers `.entries.flightdeck-dashboard` via `flightdeck-session start --kind workflow`; `--no-daemon` keeps file-mode behavior, while `FLIGHTDECK_DAEMON_RUST=1` starts the Rust daemon. `tui --demo[=NAME]` uses compiled fixtures; `tui --state-file <path>` reads a concrete master-state JSON; `tui --session <name>` resolves `<project-root>/<FLIGHTDECK_STATE_DIR>/flightdeck-state-<name>.json` and falls back to newest valid `*.json.archive`. Live TUI mode watches state/archive paths with debounce, tails daemon/wake JSONL into the Activity tab, shows cost/source-state indicators, and shells confirmation-gated focus/prune writes to canonical helpers. |
 | `pane-registry` | Tracks which tracked entry (issue or adhoc session) lives in which tmux pane and how to talk to its agent. |
 | `pane-poll` | Reads an agent's current state (via native channel where possible). |
 | `pane-respond` | Sends a reply or option pick into an agent. |

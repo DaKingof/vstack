@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { piResolveBridgeBin } from "../paths/pi.ts";
 import { withInprocFlock } from "../shared/inproc-flock.ts";
+import { emitWakeDeliveryFailure, type DaemonActivityContext } from "./activity.ts";
 import { wakePayloadForHarness } from "./wake-payload.ts";
 
 type SpawnSyncLike = (
@@ -176,6 +177,7 @@ interface WakeMasterOpts {
 	resolvePiMasterPidOverride?: () => number | null;
 	// Test seam for wake delivery subprocesses.
 	spawnSyncOverride?: SpawnSyncLike;
+	activity?: DaemonActivityContext;
 }
 
 // Returns true on successful wake delivery, false on skip or failure.
@@ -201,6 +203,7 @@ export function wakeMaster(opts: WakeMasterOpts): boolean {
 	const target = paneTargetFor(masterId);
 	if (!target) {
 		log("master-gone", `master pane ${masterId} no longer resolvable`);
+		emitWakeDeliveryFailure(opts.activity, { reason: "master-pane-unresolved", targetMasterPid: masterId });
 		return false;
 	}
 
@@ -244,6 +247,7 @@ export function wakeMaster(opts: WakeMasterOpts): boolean {
 			outcome = "written";
 		} catch (e) {
 			log("wake-fail", `wake-pending write failed: ${(e as Error).message ?? String(e)}`);
+			emitWakeDeliveryFailure(opts.activity, { reason: "wake-pending-write-failed", targetMasterPid: masterId });
 			outcome = "in-flight";
 		}
 	});
@@ -278,12 +282,14 @@ export function wakeMaster(opts: WakeMasterOpts): boolean {
 		const literal = run("tmux", ["send-keys", "-t", target, "-l", payload], { encoding: "utf8" });
 		if (literal.status !== 0) {
 			log("wake-fail", "send-keys -l failed");
+			emitWakeDeliveryFailure(opts.activity, { reason: "tmux-send-keys-literal-failed", targetMasterPid: masterPid ?? masterId });
 			lockedRmWakePending(sessionLock, wakePending);
 			return false;
 		}
 		const enter = run("tmux", ["send-keys", "-t", target, "Enter"], { encoding: "utf8" });
 		if (enter.status !== 0) {
 			log("wake-fail", "send-keys Enter failed");
+			emitWakeDeliveryFailure(opts.activity, { reason: "tmux-send-keys-enter-failed", targetMasterPid: masterPid ?? masterId });
 			lockedRmWakePending(sessionLock, wakePending);
 			return false;
 		}
@@ -295,18 +301,21 @@ export function wakeMaster(opts: WakeMasterOpts): boolean {
 	const lb = run("tmux", ["load-buffer", "-b", bufferName, "-"], { input: payload, encoding: "utf8" });
 	if (lb.status !== 0) {
 		log("wake-fail", "load-buffer failed");
+		emitWakeDeliveryFailure(opts.activity, { reason: "tmux-load-buffer-failed", targetMasterPid: masterId });
 		lockedRmWakePending(sessionLock, wakePending);
 		return false;
 	}
 	const pb = run("tmux", ["paste-buffer", "-p", "-t", target, "-b", bufferName, "-d"], { encoding: "utf8" });
 	if (pb.status !== 0) {
 		log("wake-fail", "paste-buffer failed");
+		emitWakeDeliveryFailure(opts.activity, { reason: "tmux-paste-buffer-failed", targetMasterPid: masterId });
 		lockedRmWakePending(sessionLock, wakePending);
 		return false;
 	}
 	const sk = run("tmux", ["send-keys", "-t", target, "Enter"], { encoding: "utf8" });
 	if (sk.status !== 0) {
 		log("wake-fail", "send-keys Enter failed");
+		emitWakeDeliveryFailure(opts.activity, { reason: "tmux-send-keys-enter-failed", targetMasterPid: masterId });
 		lockedRmWakePending(sessionLock, wakePending);
 		return false;
 	}

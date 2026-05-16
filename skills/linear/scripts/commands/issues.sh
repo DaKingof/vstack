@@ -36,6 +36,65 @@ ISSUE_RETURN_FIELDS='
     inverseRelations { nodes { id type issue { id identifier title state { name type } } } }
 '
 
+linear_mutation_success() {
+    local normalized="$1"
+    [ "$(echo "$normalized" | jq -r '.success // false' 2>/dev/null || echo false)" = "true" ]
+}
+
+emit_linear_issue_activity() {
+    local type="$1"
+    local severity="$2"
+    local normalized="$3"
+    linear_mutation_success "$normalized" || return 0
+    local identifier title state state_type summary details
+    identifier=$(echo "$normalized" | jq -r '.identifier // .id // .data.issue.identifier // empty' 2>/dev/null || true)
+    title=$(echo "$normalized" | jq -r '.data.issue.title // empty' 2>/dev/null || true)
+    state=$(echo "$normalized" | jq -r '.data.issue.state.name // empty' 2>/dev/null || true)
+    state_type=$(echo "$normalized" | jq -r '.data.issue.state.type // empty' 2>/dev/null || true)
+    summary="$type"
+    [ -n "$identifier" ] && summary="$identifier ${type#linear.}"
+    details=$(jq -cn --arg title "$title" --arg state "$state" --arg state_type "$state_type" '{title: $title, state: $state, state_type: $state_type}')
+    bash "$SCRIPT_DIR/../_activity-emit.sh" "$type" \
+        --severity "$severity" \
+        --importance normal \
+        --summary "$summary" \
+        --issue-id "$identifier" \
+        --linear-id "$identifier" \
+        --details-json "$details" || true
+}
+
+emit_linear_relation_activity() {
+    local normalized="$1"
+    linear_mutation_success "$normalized" || return 0
+    local relation_id relation_type issue related summary details
+    relation_id=$(echo "$normalized" | jq -r '.identifier // .data.issueRelation.id // empty' 2>/dev/null || true)
+    relation_type=$(echo "$normalized" | jq -r '.data.issueRelation.type // empty' 2>/dev/null || true)
+    issue=$(echo "$normalized" | jq -r '.data.issueRelation.issue.identifier // empty' 2>/dev/null || true)
+    related=$(echo "$normalized" | jq -r '.data.issueRelation.relatedIssue.identifier // empty' 2>/dev/null || true)
+    summary="Linear relation created"
+    [ -n "$issue" ] && [ -n "$related" ] && summary="Linear relation created: $issue → $related"
+    details=$(jq -cn --arg relation_id "$relation_id" --arg relation_type "$relation_type" --arg issue "$issue" --arg related "$related" '{relation_id: $relation_id, relation_type: $relation_type, issue: $issue, related_issue: $related}')
+    bash "$SCRIPT_DIR/../_activity-emit.sh" linear.relation_created \
+        --severity info \
+        --importance normal \
+        --summary "$summary" \
+        --issue-id "$issue" \
+        --linear-id "$issue" \
+        --details-json "$details" || true
+}
+
+linear_update_activity_type() {
+    local normalized="$1"
+    local state state_type
+    state=$(echo "$normalized" | jq -r '.data.issue.state.name // empty' 2>/dev/null || true)
+    state_type=$(echo "$normalized" | jq -r '.data.issue.state.type // empty' 2>/dev/null || true)
+    case "$(printf '%s' "$state_type:$state" | tr '[:upper:]' '[:lower:]')" in
+        completed:*|*:done|*:complete|*:completed) printf 'linear.issue_finished success' ;;
+        canceled:*|cancelled:*|*:canceled|*:cancelled|*:canceled*|*:cancelled*) printf 'linear.issue_cancelled warning' ;;
+        *) printf 'linear.issue_updated info' ;;
+    esac
+}
+
 show_help() {
     cat <<'EOF'
 Issue Operations
@@ -943,7 +1002,10 @@ create_issue() {
         _desc=$(echo "$created_issue" | jq -r '.description // empty')
         attach_download_from_text "$_desc" "$_id" "description" &
     fi
-    normalize_mutation_response "$result" "issueCreate" "issue"
+    local normalized
+    normalized=$(normalize_mutation_response "$result" "issueCreate" "issue")
+    emit_linear_issue_activity "linear.issue_created" "info" "$normalized"
+    echo "$normalized"
 }
 
 update_issue() {
@@ -1227,7 +1289,14 @@ update_issue() {
         _desc=$(echo "$updated_issue" | jq -r '.description // empty')
         attach_download_from_text "$_desc" "$_id" "description" &
     fi
-    normalize_mutation_response "$result" "issueUpdate" "issue"
+    local normalized
+    normalized=$(normalize_mutation_response "$result" "issueUpdate" "issue")
+    if [ -n "$state" ]; then
+        local activity_type activity_severity
+        read -r activity_type activity_severity < <(linear_update_activity_type "$normalized")
+        emit_linear_issue_activity "$activity_type" "$activity_severity" "$normalized"
+    fi
+    echo "$normalized"
 }
 
 archive_issue() {
@@ -1659,7 +1728,10 @@ add_relation() {
     result=$(graphql_query "$mutation" "{\"input\": $input}")
     # Write-through: re-fetch both issues to get updated relations
     cache_refresh_issues "$issue_id" "$related_issue_uuid" 2>/dev/null || true
-    normalize_mutation_response "$result" "issueRelationCreate" "issueRelation"
+    local normalized
+    normalized=$(normalize_mutation_response "$result" "issueRelationCreate" "issueRelation")
+    emit_linear_relation_activity "$normalized"
+    echo "$normalized"
 }
 
 remove_relation() {

@@ -1,17 +1,24 @@
 #!/usr/bin/env bun
 // CLI parity port of skills/flightdeck/scripts/flightdeck-state.
 //
-// Subcommands: init | get | set | append | increment | tracked-entries | write-entry | path | phase | archive | master-busy
+// Subcommands: init | get | set | append | increment | tracked-entries | write-entry | path | phase | archive | activity | master-busy
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { appendActivityEvent } from "../activity/append.ts";
+import { emitActivity } from "../activity/emit.ts";
+import { formatActivityJsonl, formatActivityLine, formatActivityMarkdown } from "../activity/format.ts";
+import { activityPathForSession } from "../activity/paths.ts";
+import { emitMergePlanUpdated, emitSessionCompleted, emitSessionStarted } from "../activity/workflow-emit.ts";
+import { ActivityFilterError, readActivityEvents, readActivityJsonlLines, tailActivityEvents } from "../activity/read.ts";
 import {
 	archiveState,
 	getField,
 	initState,
 	normalizePath,
 	resolveSession,
+	resolveStateBase,
 	statePath,
 	updateState,
 } from "../state/master-state.ts";
@@ -21,6 +28,7 @@ import {
 	validateDomainIssueId,
 	validateEntryId,
 } from "../state/tracked-entry.ts";
+import { ActivityValidationError } from "../activity/types.ts";
 import type { FlightdeckStateLike, TrackedEntry } from "../state/types.ts";
 import {
 	fdBusyFile,
@@ -62,6 +70,7 @@ switch (action) {
 	}
 	case "init": {
 		initState(file);
+		emitSessionStarted({ sessionId: session, stateFile: file, tmuxSession: session });
 		break;
 	}
 	case "get": {
@@ -73,7 +82,10 @@ switch (action) {
 	case "set": {
 		if (rest.length < 2) die("Usage: set <field> <json-value>");
 		const field = normalizePath(rest[0]!);
+		const before = readDirectStateEntry(field);
 		updateState(file, `${field} = (${rest[1]})`);
+		emitDirectStateChange(field, before);
+		emitMergePlanChange(field);
 		break;
 	}
 	case "append": {
@@ -112,8 +124,13 @@ switch (action) {
 		break;
 	}
 	case "archive": {
+		emitSessionCompleted({ sessionId: session, stateFile: file, tmuxSession: session });
 		const ap = archiveState(file);
 		if (ap) process.stdout.write(`${ap}\n`);
+		break;
+	}
+	case "activity": {
+		runActivity(rest);
 		break;
 	}
 	case "phase": {
@@ -127,7 +144,7 @@ switch (action) {
 		break;
 	}
 	default:
-		die(`Unknown action: ${action}\nActions: init | get | set | append | increment | tracked-entries | write-entry | archive | master-busy | path | phase`);
+		die(`Unknown action: ${action}\nActions: init | get | set | append | increment | tracked-entries | write-entry | archive | activity | master-busy | path | phase`);
 }
 
 function writeTrackedEntryFilter(id: string, entry: TrackedEntry): string {
@@ -140,8 +157,191 @@ function readStateJson(): FlightdeckStateLike {
 	return JSON.parse(readFileSync(file, "utf8")) as FlightdeckStateLike;
 }
 
+function entryIdFromStateField(field: string): string | null {
+	const bracket = field.match(/^\.entries\[(.+)]\.state$/);
+	if (bracket) {
+		try {
+			const parsed = JSON.parse(bracket[1]!);
+			return typeof parsed === "string" && parsed ? parsed : null;
+		} catch {
+			return null;
+		}
+	}
+	const dotted = field.match(/^\.entries\.([A-Za-z0-9_-]+)\.state$/);
+	return dotted?.[1] ?? null;
+}
+
+function readDirectStateEntry(field: string): Record<string, unknown> | null {
+	const entryId = entryIdFromStateField(field);
+	if (!entryId || !existsSync(file)) return null;
+	try {
+		const state = JSON.parse(readFileSync(file, "utf8")) as unknown;
+		if (!state || typeof state !== "object" || Array.isArray(state)) return null;
+		const entries = (state as { entries?: unknown }).entries;
+		if (!entries || typeof entries !== "object" || Array.isArray(entries)) return null;
+		const entry = (entries as Record<string, unknown>)[entryId];
+		return entry && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : null;
+	} catch {
+		return null;
+	}
+}
+
+function emitDirectStateChange(field: string, before: Record<string, unknown> | null): void {
+	if (!before) return;
+	const entryId = entryIdFromStateField(field);
+	if (!entryId) return;
+	let after: Record<string, unknown> | null = null;
+	try { after = readDirectStateEntry(field); } catch { return; }
+	const nextState = after?.state;
+	if (typeof nextState !== "string" || before.state === nextState) return;
+	const domain = before.domain && typeof before.domain === "object" && !Array.isArray(before.domain) ? before.domain as Record<string, unknown> : {};
+	const issue = domain.issue && typeof domain.issue === "object" && !Array.isArray(domain.issue) ? domain.issue as Record<string, unknown> : {};
+	const refs: Record<string, unknown> = {};
+	if (typeof before.task_id === "string" && before.task_id) refs.task_id = before.task_id;
+	if (typeof issue.id === "string" && issue.id) refs.issue_id = issue.id;
+	if (typeof issue.pr_number === "number" && Number.isFinite(issue.pr_number)) refs.pr_number = Math.trunc(issue.pr_number);
+	emitActivity({ sessionId: session, stateFile: file, tmuxSession: session }, {
+		details: { dedup_key: `${entryId}:entry.state_changed:state:${nextState}`, new: nextState, old: before.state ?? null },
+		entry_id: typeof before.id === "string" && before.id ? before.id : entryId,
+		entry_kind: typeof before.kind === "string" ? before.kind : undefined,
+		entry_title: typeof before.title === "string" ? before.title : undefined,
+		harness: typeof before.harness === "string" ? before.harness : undefined,
+		importance: "normal",
+		pane_id: typeof before.pane_id === "string" ? before.pane_id : undefined,
+		refs: Object.keys(refs).length > 0 ? refs : undefined,
+		severity: "info",
+		source: "flightdeck",
+		summary: `${entryId} state: ${String(before.state ?? "null")} → ${nextState}`,
+		type: "entry.state_changed",
+	});
+}
+
+function emitMergePlanChange(field: string): void {
+	if (!field.startsWith(".merge_queue") && !field.startsWith(".conflict_graph")) return;
+	try {
+		const state = readStateJson() as Record<string, unknown>;
+		emitMergePlanUpdated(
+			{ sessionId: session, stateFile: file, tmuxSession: session },
+			state.merge_queue,
+			state.conflict_graph,
+		);
+	} catch {
+		// Best-effort activity must not break state writes.
+	}
+}
+
 function warnLine(message: string): void {
 	process.stderr.write(`${message}\n`);
+}
+
+function readStdinOrDie(usage: string): string {
+	const text = readFileSync(0, "utf8").trim();
+	if (!text) die(usage);
+	return text;
+}
+
+function dieActivityError(error: unknown): never {
+	if (error instanceof ActivityValidationError || error instanceof ActivityFilterError) die(`Error: ${error.message}`);
+	if (error instanceof Error) die(`Error: ${error.message}`, 1);
+	die(`Error: ${String(error)}`, 1);
+}
+
+function activityFile(): string {
+	const envActivity = process.env.FLIGHTDECK_ACTIVITY_FILE;
+	if (typeof envActivity === "string" && envActivity.trim()) return envActivity.trim();
+	return activityPathForSession(session, resolveStateBase());
+}
+
+function runActivity(args: string[]): void {
+	const sub = args[0];
+	if (!sub) die("Usage: activity <path|append|tail|export> [args]");
+	const activity = activityFile();
+	switch (sub) {
+		case "path": {
+			process.stdout.write(`${activity}\n`);
+			break;
+		}
+		case "append": {
+			const jsonText = args.length >= 2 ? args[1]! : readStdinOrDie("Usage: activity append <json-event>");
+			let payload: unknown;
+			try {
+				payload = JSON.parse(jsonText);
+			} catch {
+				die("Error: invalid json-event");
+			}
+			if (!payload || typeof payload !== "object" || Array.isArray(payload)) die("Error: json-event must be an object");
+			try {
+				const result = appendActivityEvent(activity, payload, { sessionId: session });
+				const output: { id: string; deduped: boolean; archived?: true } = {
+					id: result.event.id,
+					deduped: !result.appended && !result.archived,
+				};
+				if (result.archived) output.archived = true;
+				process.stdout.write(`${JSON.stringify(output)}\n`);
+			} catch (error) {
+				dieActivityError(error);
+			}
+			break;
+		}
+		case "tail": {
+			const opts = parseActivityReadFlags(args.slice(1), { defaultFormat: "text", defaultLimit: 300 });
+			try {
+				const events = tailActivityEvents(activity, opts.limit, { filter: opts.filter, warn: warnLine });
+				if (opts.format === "json") process.stdout.write(formatActivityJsonl(events));
+				else process.stdout.write(events.map(formatActivityLine).join("\n") + (events.length > 0 ? "\n" : ""));
+			} catch (error) {
+				dieActivityError(error);
+			}
+			break;
+		}
+		case "export": {
+			const opts = parseActivityReadFlags(args.slice(1), { defaultFormat: "jsonl" });
+			try {
+				if (opts.format === "markdown") {
+					const events = readActivityEvents(activity, { filter: opts.filter, warn: warnLine });
+					process.stdout.write(formatActivityMarkdown(events));
+				} else if (opts.filter) {
+					const lines = readActivityJsonlLines(activity, { filter: opts.filter, warn: warnLine });
+					process.stdout.write(lines.join("\n") + (lines.length > 0 ? "\n" : ""));
+				} else if (existsSync(activity)) {
+					process.stdout.write(readFileSync(activity, "utf8"));
+				}
+			} catch (error) {
+				dieActivityError(error);
+			}
+			break;
+		}
+		default:
+			die("Usage: activity <path|append|tail|export> [args]");
+	}
+}
+
+function parseActivityReadFlags(args: string[], defaults: { defaultFormat: "text" | "json" | "jsonl" | "markdown"; defaultLimit?: number }): { filter?: string; format: "text" | "json" | "jsonl" | "markdown"; limit: number } {
+	let format = defaults.defaultFormat;
+	let limit = defaults.defaultLimit ?? Number.MAX_SAFE_INTEGER;
+	let filter: string | undefined;
+	for (let i = 0; i < args.length; i += 1) {
+		const arg = args[i]!;
+		if (arg === "--json") { format = "json"; continue; }
+		if (arg === "--limit") { limit = parsePositiveInt(args[++i], "--limit"); continue; }
+		if (arg.startsWith("--limit=")) { limit = parsePositiveInt(arg.slice("--limit=".length), "--limit"); continue; }
+		if (arg === "--format") { format = parseActivityFormat(args[++i]); continue; }
+		if (arg.startsWith("--format=")) { format = parseActivityFormat(arg.slice("--format=".length)); continue; }
+		if (arg === "--filter") { filter = args[++i] ?? ""; continue; }
+		if (arg.startsWith("--filter=")) { filter = arg.slice("--filter=".length); continue; }
+		die(`Unknown activity flag: ${arg}`);
+	}
+	return { filter, format, limit };
+}
+
+function parseActivityFormat(value: string | undefined): "jsonl" | "markdown" {
+	if (value === "jsonl" || value === "markdown") return value;
+	die("Error: --format must be jsonl or markdown");
+}
+
+function parsePositiveInt(value: string | undefined, label: string): number {
+	if (!value || !/^[0-9]+$/.test(value)) die(`Error: ${label} must be a non-negative integer`);
+	return Number.parseInt(value, 10);
 }
 
 function validateEntryIdOrDie(value: unknown, label: string): string {

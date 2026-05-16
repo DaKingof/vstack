@@ -8,6 +8,7 @@ Control a running Pi session from outside the TUI. The interactive Pi terminal s
 
 - External clients send prompts, steering, follow-ups, and aborts over a structured socket; plain text and expanded skills avoid tmux key injection, while extension/TUI slash commands use a guarded own-pane tmux route.
 - Subscribe to live Pi events (messages, tool calls, agent end) without scraping panes.
+- Activity broker at `Symbol.for("vstack.pi.activity")` lets local extensions publish structured `vstack_activity` events to the bridge stream without chat noise.
 - Discover active Pi sessions through registry files; target by pid, cwd, session, or name.
 - `pi-bridge` CLI handles common operations; raw JSONL protocol is documented for any language.
 - When `pi-questions` is loaded, external clients can list, answer, and reject pending questions.
@@ -76,9 +77,24 @@ Example response and event:
 ```json
 {"type":"response","id":"1","command":"get_state","success":true,"data":{}}
 {"type":"event","event":"message_update","timestamp":"...","data":{}}
+{"type":"event","event":"vstack_activity","timestamp":"...","data":{"type":"agent.task_completed","source":"pi-agents","severity":"success","importance":"normal","summary":"agent done"}}
 ```
 
-Clients receive events by default. Send `{"type":"subscribe","enabled":false}` to mute them.
+Clients receive events by default. Send `{"type":"subscribe","enabled":false}` to mute them. `vstack_activity` rows are bridge events, not `sendMessage()` chat entries, so they do not render in the conversation.
+
+## Activity broker
+
+`pi-session-bridge` exposes an in-process broker at `globalThis[Symbol.for("vstack.pi.activity")]` for local Pi extensions:
+
+```ts
+interface PiActivityBroker {
+  publish(event: PiActivityEvent): void;
+  subscribe(listener: (event: PiActivityEvent) => void): () => void;
+  recent(limit?: number): PiActivityEvent[];
+}
+```
+
+`publish()` is best-effort and fail-open. The broker keeps a 100-event ring buffer; `recent(limit)` returns newest-first validated events for in-process replay. `pi-bridge stream` emits live broker publications as `event:"vstack_activity"` only while the bridge is connected; external clients that need earlier rows must use an in-process consumer before they leave the ring.
 
 ## Slash command notes
 

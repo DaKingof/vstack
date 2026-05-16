@@ -43,6 +43,8 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, openSync, utimesSync } from "node:fs";
 
+import { emitDaemonStopped, emitMaxLifetimeHandoff, type DaemonActivityContext } from "./activity.ts";
+
 export function touchHeartbeat(file: string): void {
 	// `utimesSync(file, atime, mtime)` requires the file to exist.
 	// Create it on first call.
@@ -64,6 +66,7 @@ export interface ShutdownOpts {
 	lockedCleanup: () => void;
 	log: (tag: string, msg: string) => void;
 	masterId: () => string;
+	activity?: DaemonActivityContext;
 }
 
 // Handoff mode: when set, the EXIT cleanup MUST NOT remove PID_FILE /
@@ -73,7 +76,7 @@ let handoffMode = false;
 export function setHandoffMode(on: boolean): void { handoffMode = on; }
 
 let daemonExitReason = "other";
-export function setDaemonExitReason(reason: "master-gone" | "signal-term" | "signal-int" | "other"): void {
+export function setDaemonExitReason(reason: "master-gone" | "session-gone" | "signal-term" | "signal-int" | "other"): void {
 	daemonExitReason = reason;
 }
 
@@ -90,6 +93,7 @@ function emitDaemonExitedEvent(opts: ShutdownOpts): void {
 	const ts = new Date().toISOString();
 	const reason = daemonExitReason || "other";
 	const masterId = daemonMasterId || opts.masterId();
+	emitDaemonStopped(opts.activity ?? {}, { masterId, pid: process.pid, reason });
 	const hash = createHash("sha256").update(`${ts}|${reason}|${masterId}|${process.pid}`).digest("hex").slice(0, 12);
 	const row = JSON.stringify({
 		ts,
@@ -175,6 +179,7 @@ export interface MaxLifetimeExecOpts {
 	scriptPath: string;
 	origArgs: string[];
 	logFile: string;
+	activity?: DaemonActivityContext;
 }
 
 export function maxLifetimeExec(opts: MaxLifetimeExecOpts): never {
@@ -200,7 +205,10 @@ export function maxLifetimeExec(opts: MaxLifetimeExecOpts): never {
 	// Pre-round-4 bug: log path was left in $@ and nohup tried to run
 	// it as a command, producing 'permission denied'.
 	const script = `log="$1"; shift; setsid nohup "$@" </dev/null >>"$log" 2>&1 &\necho $!`;
-	spawnSync("bash", ["-c", script, "_", logFile, scriptPath, ...childArgs], { stdio: ["ignore", "ignore", "inherit"] });
+	const spawned = spawnSync("bash", ["-c", script, "_", logFile, scriptPath, ...childArgs], { encoding: "utf8" });
+	if (spawned.stderr) process.stderr.write(spawned.stderr);
+	const successorPid = Number.parseInt((spawned.stdout ?? "").trim(), 10);
+	emitMaxLifetimeHandoff(opts.activity ?? {}, Number.isFinite(successorPid) ? successorPid : null);
 	process.exit(0);
 }
 

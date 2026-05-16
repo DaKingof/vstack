@@ -248,6 +248,7 @@ pi_subscriber_loop() {
   exec 200<&- 2>/dev/null || true
   local pane_id="$1" pi_pid="$2" pi_socket="${3:-}" parent_pid="${4:-}"
   local last_hash=""
+  local last_activity_hash=""
   local seen_qids=","
   local sub_log; sub_log="${LOG}.pi-sub-$(pi_pane_id_safe "$pane_id")"
   printf '%s [pi-sub-start] pane=%s pi_pid=%s socket=%s parent=%s\n' \
@@ -288,11 +289,13 @@ pi_subscriber_loop() {
     | jq --unbuffered -c 'select(
         (.type == "bridge_hello")
         or
+        (.type == "event" and .event == "vstack_activity")
+        or
         (.type == "event" and .event == "question" and (.data.action // "") == "opened")
         or
         (.type == "event" and .event == "message_end" and ((.data.message.customType // "") == "subagent-completion"))
         or
-        (.type == "event" and .event == "message_end" and ((.data.message.customType // "") == "vstack-background-tasks:event") and ((.data.message.details.eventType // "") == "exit"))
+        (.type == "event" and .event == "message_end" and ((.data.message.customType // "") == "vstack-background-tasks:event"))
         or
         (.type == "event" and .data.message.role == "assistant" and (.data.message.stopReason // "") != "")
       )' \
@@ -312,6 +315,42 @@ pi_subscriber_loop() {
 
       local event_name
       event_name=$(jq -r '.event // ""' <<< "$line" 2>/dev/null)
+      if [[ "$event_name" == "vstack_activity" ]]; then
+        [[ "${FLIGHTDECK_PI_ACTIVITY_BROKER:-1}" == "0" ]] && continue
+        local activity_payload activity_type activity_hash
+        activity_payload=$(jq -c '.data // {}' <<< "$line" 2>/dev/null)
+        [[ -z "$activity_payload" || "$activity_payload" == "null" ]] && continue
+        activity_type=$(jq -r '.type // ""' <<< "$activity_payload" 2>/dev/null)
+        [[ -z "$activity_type" || "$activity_type" == "null" ]] && continue
+        activity_hash=$(printf '%s' "$activity_payload" | sha256sum | awk '{print substr($1,1,12)}')
+        [[ "$activity_hash" == "$last_activity_hash" ]] && continue
+        local append_error append_rc error_tail
+        append_rc=0
+        append_error=$( ( exec 218>"$SESSION_LOCK"
+          flock 218
+          jq -nc --arg ts "$(date -Iseconds)" \
+                 --arg pid "$pane_id" \
+                 --arg harness "pi" \
+                 --arg tag "pi-activity-broker" \
+                 --arg h "$activity_hash" \
+                 --argjson activity "$activity_payload" \
+                 '{ts:$ts, pane_id:$pid, harness:$harness, event_type:"vstack_activity", activity:$activity, classifier_tag:$tag, hash:$h}' \
+                 >> "$WAKE_EVENTS_LOG"
+        ) 2>&1 ) || append_rc=$?
+        if [[ "$append_rc" -eq 0 ]]; then
+          printf '%s [pi-activity-broker-emit-ok] pane=%s type=%s hash=%s rc=0\n' \
+            "$(date -Iseconds)" "$pane_id" "$activity_type" "$activity_hash" \
+            >> "$sub_log" 2>/dev/null || true
+          last_activity_hash="$activity_hash"
+        else
+          error_tail=$(printf '%s' "$append_error" | tr '\n' ' ' | tail -c 400)
+          printf '%s [pi-activity-broker-emit-error] pane=%s type=%s hash=%s rc=%s error=%s\n' \
+            "$(date -Iseconds)" "$pane_id" "$activity_type" "$activity_hash" "$append_rc" "$error_tail" \
+            >> "$sub_log" 2>/dev/null || true
+        fi
+        continue
+      fi
+
       if [[ "$event_name" == "question" ]]; then
         local qid
         qid=$(jq -r '.data.requestId // .data.request.id // ""' <<< "$line" 2>/dev/null)
@@ -344,10 +383,16 @@ pi_subscriber_loop() {
       local custom_type
       custom_type=$(jq -r '.data.message.customType // ""' <<< "$line" 2>/dev/null)
       if [[ "$custom_type" == "$BG_TASK_EVENT_CUSTOM_TYPE" ]]; then
-        # vstack#15: dispatch the new branch via the shared
-        # daemon-bg-task-events.sh helper. Returns 0 on emit, 1 on
-        # dedup (caller `continue`s either way), 2 on malformed input.
-        emit_pi_bg_task_exit_event "$pane_id" "$line" last_hash "$sub_log"
+        local bg_event_type
+        bg_event_type=$(jq -r '.data.message.details.eventType // ""' <<< "$line" 2>/dev/null)
+        # vstack#15: terminal exits remain canonical wake rows. Other
+        # bg-task signals are activity-only rows drained by the TS daemon;
+        # they must not change wake routing.
+        if [[ "$bg_event_type" == "$BG_TASK_EXIT_EVENT_TYPE" ]]; then
+          emit_pi_bg_task_exit_event "$pane_id" "$line" last_hash "$sub_log"
+        else
+          emit_pi_bg_task_activity_event "$pane_id" "$line" last_hash "$sub_log"
+        fi
         continue
       fi
       if [[ "$custom_type" == "subagent-completion" ]]; then
@@ -364,19 +409,19 @@ pi_subscriber_loop() {
         printf '%s [pi-subagent-completion] pane=%s hash=%s bad=%s\n' \
           "$(date -Iseconds)" "$pane_id" "$hash" "$has_bad" \
           >> "$sub_log" 2>/dev/null || true
-        if [[ "$has_bad" == "1" ]]; then
-          ( exec 218>"$SESSION_LOCK"
-            flock 218
-            jq -nc --arg ts "$(date -Iseconds)" \
-                   --arg pid "$pane_id" \
-                   --arg harness "pi" \
-                   --arg tag "pi-subagent-completion" \
-                   --arg h "$hash" \
-                   --argjson details "$details" \
-                   '{ts:$ts, pane_id:$pid, harness:$harness, event_type:"subagent-completion", completion:$details, classifier_tag:$tag, hash:$h}' \
-                   >> "$WAKE_EVENTS_LOG"
-          )
-        fi
+        ( exec 218>"$SESSION_LOCK"
+          flock 218
+          local tag="pi-subagent-completion-ok"
+          [[ "$has_bad" == "1" ]] && tag="pi-subagent-completion"
+          jq -nc --arg ts "$(date -Iseconds)" \
+                 --arg pid "$pane_id" \
+                 --arg harness "pi" \
+                 --arg tag "$tag" \
+                 --arg h "$hash" \
+                 --argjson details "$details" \
+                 '{ts:$ts, pane_id:$pid, harness:$harness, event_type:"subagent-completion", completion:$details, classifier_tag:$tag, hash:$h}' \
+                 >> "$WAKE_EVENTS_LOG"
+        )
         last_hash="$hash"
         continue
       fi

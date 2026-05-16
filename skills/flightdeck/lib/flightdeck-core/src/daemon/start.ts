@@ -28,6 +28,7 @@ import { daemonLog, daemonWarn } from "./log.ts";
 import { gcOrphanState } from "./gc.ts";
 import { installShutdownHandlers, killAllSubscribers } from "./lifecycle.ts";
 import { lockedCleanupState } from "../state/locking.ts";
+import { emitDaemonStarted, resolveDaemonActivityContext } from "./activity.ts";
 import { runLoop, type RunLoopOpts } from "./loop.ts";
 import { PaneCache, resolvePaneId } from "./pane-meta.ts";
 
@@ -156,6 +157,7 @@ async function foregroundStart(opts: StartOpts): Promise<void> {
 
 	const log = (tag: string, msg: string): void => daemonLog(logFile, tag, msg);
 	const warn = (tag: string, msg: string): void => daemonWarn(logFile, tag, msg);
+	const activity = resolveDaemonActivityContext(opts.sessionName);
 
 	// PID-file lock acquisition. Mirror bash's 30 × 0.2s grace using
 	// non-blocking flock(2) (LOCK_EX | LOCK_NB) via bun:ffi. On
@@ -248,6 +250,7 @@ async function foregroundStart(opts: StartOpts): Promise<void> {
 	// so a signal during fresh-start wipe still cleans up subscriber
 	// state / temp files.
 	installShutdownHandlers({
+		activity,
 		pidFile,
 		heartbeatFile,
 		eventsFile,
@@ -290,6 +293,8 @@ async function foregroundStart(opts: StartOpts): Promise<void> {
 		masterId: () => opts.masterTarget,
 	});
 
+	emitDaemonStarted(activity, { lifetimeMax: opts.maxLifetime, mode: opts.spawnMode, pid: process.pid });
+
 	// Fresh-start state wipe under SESSION_LOCK. Round-5 #1: skip
 	// when invoked as a max-lifetime successor — the parent kept
 	// wake-pending/events/wake-events.log for the successor to drain
@@ -328,6 +333,7 @@ async function foregroundStart(opts: StartOpts): Promise<void> {
 		scriptPath: opts.scriptPath,
 		origArgs: opts.origArgs,
 		paneRegistryBin: opts.paneRegistryBin,
+		activity,
 	});
 }
 

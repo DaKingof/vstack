@@ -20,7 +20,7 @@ For wake purposes, the daemon's claude subscriber tails the JSONL and emits a no
 
 ## Encoded cwd
 
-Replace every `/` in the absolute worktree path with `-`. Example: `/mnt/Tertiary/dev/hyprtrade/trees/cc-9001` → `-mnt-Tertiary-dev-hyprtrade-trees-cc-9001`.
+Replace every `/` in the absolute worktree path with `-`. Example: `/path/to/project/trees/cc-9001` → `-path-to-project-trees-cc-9001`.
 
 ## Spawn
 

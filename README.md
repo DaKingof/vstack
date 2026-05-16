@@ -192,7 +192,7 @@ Windows: CLI runs natively; symlink mode falls back to copy.
 | [`github`](skills/github/)* | GitHub PR, thread, review, CI, and merge workflows. |
 | [`issue-lifecycle`](skills/issue-lifecycle/)* | Delegated implementation, review, and QA issue workflows. |
 | [`linear`](skills/linear/)* | Linear issue, cycle, milestone, and project workflows. |
-| [`flightdeck`](skills/flightdeck/)* | Master session lifecycle for multi-issue parallel dev work; tmux-only. |
+| [`flightdeck`](skills/flightdeck/)* | Master session lifecycle for multi-issue parallel dev work; tmux-only, with structured activity JSONL for dashboard/live inspection. |
 | [`orchestration`](skills/orchestration/)* | Per-issue lifecycle inside a worktree: dev → review → submit → merge. |
 | [`project-management`](skills/project-management/)* | TPM-driven planning, audits, roadmaps, and research-backed decomposition. |
 | [`second-opinion`](skills/second-opinion/) | Cross-model review via the opposite AI CLI (Claude ↔ Codex). |
@@ -233,13 +233,13 @@ Extensions can ship an `instructions.md` (declared via `pi.appendSystem` in `pac
 | [`pi-claude-bridge`](pi-extensions/pi-claude-bridge/README.md) | Claude Code provider bridge with prompt-context forwarding. |
 | [`pi-codex-minimal-tools`](pi-extensions/pi-codex-minimal-tools/README.md) | Codex-style image, patch, and image-generation tools alongside Pi natives. |
 | [`pi-extension-manager`](pi-extensions/pi-extension-manager/README.md) | Pi-styled package manager and inline settings editor. |
-| [`pi-flightdeck`](pi-extensions/pi-flightdeck/README.md) | ⚠️ **WIP — not production ready.** Mission-control dashboard for the `flightdeck` skill. |
+| [`pi-flightdeck`](pi-extensions/pi-flightdeck/README.md) | ⚠️ **Deprecated for new sessions.** In-Pi mission-control dashboard for the `flightdeck` skill; prefer the Rust dashboard at `skills/flightdeck/scripts/flightdeck-dashboard` (Pantera/Moon/Dawn/System themes, cost engine, confirmed prune/focus actions). |
 | [`pi-hooks`](pi-extensions/pi-hooks/README.md) | First-class Pi port of the vstack safety hooks: bare-cd blocking, pre-commit fmt+clippy, post-edit clippy, end-of-turn lint. |
 | [`pi-output-policy`](pi-extensions/pi-output-policy/README.md) | Large-output policy with truncation and spill-file preservation. |
 | [`pi-prompt-stash`](pi-extensions/pi-prompt-stash/README.md) | Per-session prompt stash history with stash/pop editor. |
 | [`pi-qol`](pi-extensions/pi-qol/README.md) | Compact statusline, multiline input, image chips, session naming and search. |
 | [`pi-questions`](pi-extensions/pi-questions/README.md) | Structured multi-tab popup questions with bridge-driven replies. |
-| [`pi-session-bridge`](pi-extensions/pi-session-bridge/README.md) | Side-channel for external control, event streaming, and prompt sending. |
+| [`pi-session-bridge`](pi-extensions/pi-session-bridge/README.md) | Side-channel for external control, event streaming, prompt sending, and the Pi activity broker stream. |
 | [`pi-session-manager`](pi-extensions/pi-session-manager/README.md) | Polished session browser for searching, resuming, and managing Pi sessions. |
 | [`pi-skills-manager`](pi-extensions/pi-skills-manager/README.md) | Browse, create, edit, and toggle Pi skills from a dedicated shell. |
 | [`pi-task-panel`](pi-extensions/pi-task-panel/README.md) | Persistent structured task panel above the status line. |

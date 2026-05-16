@@ -18,6 +18,8 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { installPiActivityBridgePublisher } from "./activity-broker.js";
+
 const PROTOCOL = "pi-session-bridge.v1";
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-session-bridge.installed");
 const STATUS_KEY = "session-bridge";
@@ -155,6 +157,7 @@ export default function sessionBridge(pi: ExtensionAPI) {
 	let heartbeat: NodeJS.Timeout | undefined;
 	let exitHandler: (() => void) | undefined;
 	let questionUnsubscribe: (() => void) | undefined;
+	let activityUnsubscribe: (() => void) | undefined;
 	let stopping = false;
 
 	function getState(reason?: string): InstanceInfo {
@@ -268,6 +271,9 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		}
 
 		ensureQuestionSubscription();
+		if (!activityUnsubscribe) {
+			activityUnsubscribe = installPiActivityBridgePublisher("pi-session-bridge", (event) => publish("vstack_activity", event));
+		}
 		publish("bridge_start", { state: currentInfo });
 	}
 
@@ -281,6 +287,8 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		heartbeat = undefined;
 		questionUnsubscribe?.();
 		questionUnsubscribe = undefined;
+		activityUnsubscribe?.();
+		activityUnsubscribe = undefined;
 
 		for (const client of clients) {
 			send(client, { type: "bridge_stop", reason });
