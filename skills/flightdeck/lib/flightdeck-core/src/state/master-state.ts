@@ -287,7 +287,8 @@ export function archiveState(file: string): string | null {
 	const activity = activityPathFromStatePath(file);
 	const activityArchive = activityArchivePathFromStatePath(file, ts);
 	const lock = `${file}.lock`;
-	const r = lockedArchiveStateAndActivity(lock, file, archive, activity, activityArchive);
+	const activityLock = `${activity}.lock`;
+	const r = lockedArchiveStateAndActivity(lock, file, archive, activity, activityArchive, activityLock);
 	if (r.status !== 0) {
 		process.stderr.write(r.stderr || "");
 		process.exit(r.status ?? 1);

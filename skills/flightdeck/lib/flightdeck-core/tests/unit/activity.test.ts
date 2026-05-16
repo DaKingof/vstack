@@ -6,8 +6,10 @@ import { pathToFileURL } from "node:url";
 
 import { appendActivityEvent } from "../../src/activity/append.ts";
 import { formatActivityJsonl, formatActivityLine, formatActivityMarkdown } from "../../src/activity/format.ts";
+import { activityArchivePathFromStatePath, activityPathFromStatePath } from "../../src/activity/paths.ts";
 import { readActivityEvents, tailActivityEvents } from "../../src/activity/read.ts";
 import { activityEventId, normalizeActivityEvent } from "../../src/activity/types.ts";
+import { archiveState } from "../../src/state/master-state.ts";
 
 let dir = "";
 function path(name: string): string { return join(dir, name); }
@@ -73,6 +75,24 @@ describe("activity append/read", () => {
 		expect(readActivityEvents(file)).toEqual([first.event]);
 	});
 
+	test("append trims from the head until event and byte caps both pass", () => {
+		const file = path("retained/activity.jsonl");
+		for (let i = 0; i < 16; i += 1) {
+			appendActivityEvent(file, {
+				body: "x".repeat(120 + i * 10),
+				natural_key: `event:${i}`,
+				source: "flightdeck",
+				summary: `event ${i}`,
+				type: "entry.state_changed",
+			}, { maxBytes: 1600, maxEvents: 100, sessionId: "S1", now: () => new Date(`2026-05-15T00:00:${String(i).padStart(2, "0")}Z`) });
+		}
+		const raw = readFileSync(file, "utf8");
+		expect(Buffer.byteLength(raw, "utf8")).toBeLessThanOrEqual(1600);
+		const events = raw.trim().split("\n").map((line) => JSON.parse(line) as { summary: string });
+		expect(events.at(-1)?.summary).toBe("event 15");
+		expect(events.map((event) => event.summary)).not.toContain("event 0");
+	});
+
 	test("reader skips invalid lines, dedupes, filters, and tails", () => {
 		const file = path("activity.jsonl");
 		const one = normalizeActivityEvent({ source: "daemon", summary: "daemon started", type: "daemon.started" }, { naturalKey: "daemon", now: () => new Date("2026-05-15T00:00:00Z") });
@@ -101,5 +121,71 @@ describe("activity append/read", () => {
 		const statuses = await Promise.all(procs.map((proc) => proc.exited));
 		expect(statuses.every((status) => status === 0)).toBe(true);
 		expect(readFileSync(file, "utf8").trim().split("\n")).toHaveLength(1);
+	});
+});
+
+describe("activity archive", () => {
+	function writeState(stateFile: string, terminatedAt: string): void {
+		writeFileSync(stateFile, JSON.stringify({
+			activity_path: activityPathFromStatePath(stateFile),
+			activity_schema_version: 1,
+			entries: {},
+			terminated_at: terminatedAt,
+		}), "utf8");
+	}
+
+	test("archive skips missing activity sidecar and clears activity pointers", () => {
+		const stateFile = path("flightdeck-state-MISSING.json");
+		const terminatedAt = "2026-05-15T00:01:00Z";
+		writeState(stateFile, terminatedAt);
+		const archive = archiveState(stateFile);
+		expect(archive).not.toBeNull();
+		const archived = JSON.parse(readFileSync(archive!, "utf8")) as { activity_archive_path?: unknown; activity_path?: unknown };
+		expect(archived.activity_path).toBeUndefined();
+		expect(archived.activity_archive_path).toBeUndefined();
+		expect(existsSync(activityArchivePathFromStatePath(stateFile, terminatedAt))).toBe(false);
+	});
+
+	test("archive skips zero-byte activity sidecar and leaves no archive", () => {
+		const stateFile = path("flightdeck-state-EMPTY.json");
+		const terminatedAt = "2026-05-15T00:02:00Z";
+		writeState(stateFile, terminatedAt);
+		const activityFile = activityPathFromStatePath(stateFile);
+		writeFileSync(activityFile, "", "utf8");
+		const archive = archiveState(stateFile);
+		expect(archive).not.toBeNull();
+		const archived = JSON.parse(readFileSync(archive!, "utf8")) as { activity_archive_path?: unknown; activity_path?: unknown };
+		expect(archived.activity_path).toBeUndefined();
+		expect(archived.activity_archive_path).toBeUndefined();
+		expect(existsSync(activityArchivePathFromStatePath(stateFile, terminatedAt))).toBe(false);
+		expect(existsSync(activityFile)).toBe(true);
+	});
+
+	test("archive waits for an in-flight append and moves the completed line", async () => {
+		const stateFile = path("flightdeck-state-RACE.json");
+		const terminatedAt = "2026-05-15T00:03:00Z";
+		writeState(stateFile, terminatedAt);
+		const activityFile = activityPathFromStatePath(stateFile);
+		const readyFile = path("activity-lock-ready");
+		const appendModule = pathToFileURL(resolve(dirname(import.meta.path), "../../src/activity/append.ts")).href;
+		const holder = Bun.spawn([
+			"bash", "-c",
+			"lock=\"$1\"; ready=\"$2\"; flock -x \"$lock\" bash -c 'printf ready > \"$1\"; sleep 0.5' _ \"$ready\"",
+			"_", `${activityFile}.lock`, readyFile,
+		], { stderr: "pipe", stdout: "pipe" });
+		while (!existsSync(readyFile)) await Bun.sleep(5);
+		const script = `import { appendActivityEvent } from ${JSON.stringify(appendModule)};\nappendActivityEvent(process.env.ACTIVITY_FILE, {source:"flightdeck", type:"entry.registered", summary:"race append", entry_id:"R1", natural_key:"race"}, {sessionId:"RACE", now:()=>new Date("2026-05-15T00:03:00Z")});`;
+		const append = Bun.spawn(["bun", "--eval", script], { env: { ...(process.env as Record<string, string>), ACTIVITY_FILE: activityFile }, stderr: "pipe", stdout: "pipe" });
+		await Bun.sleep(100);
+		const archive = archiveState(stateFile);
+		expect(await holder.exited).toBe(0);
+		expect(await append.exited).toBe(0);
+		expect(archive).not.toBeNull();
+		const activityArchive = activityArchivePathFromStatePath(stateFile, terminatedAt);
+		expect(existsSync(activityArchive)).toBe(true);
+		const archivedLines = readFileSync(activityArchive, "utf8").trim().split("\n");
+		expect(archivedLines).toHaveLength(1);
+		expect(JSON.parse(archivedLines[0]!) as { summary: string }).toMatchObject({ summary: "race append" });
+		expect(existsSync(activityFile)).toBe(false);
 	});
 });

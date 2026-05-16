@@ -6,6 +6,13 @@ export const DEFAULT_ACTIVITY_MAX_EVENTS = 5000;
 export const DEFAULT_ACTIVITY_MAX_BYTES = 10 * 1024 * 1024;
 export const DEFAULT_ACTIVITY_DETAILS_MAX_BYTES = 16 * 1024;
 
+export class ActivityValidationError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ActivityValidationError";
+	}
+}
+
 export type ActivitySource =
 	| "flightdeck"
 	| "daemon"

@@ -238,33 +238,40 @@ export function lockedRegisterPortPid(lockFile: string, portsFile: string, port:
 }
 
 // Locked state archive with matching activity sidecar archive. The state
-// archive receives activity_path/activity_archive_path before the final
-// rename, so post-termination readers can discover the matching JSONL
-// archive from the archived master state alone.
+// archive receives activity_path/activity_archive_path only when a non-empty
+// sidecar exists before the final rename, so post-termination readers can
+// discover the matching JSONL archive from the archived master state alone.
 export function lockedArchiveStateAndActivity(
 	lockFile: string,
 	stateFile: string,
 	stateArchive: string,
 	activityFile: string,
 	activityArchive: string,
+	activityLockFile: string,
 ): SpawnResult {
 	const tmp = `${stateFile}.tmp.${process.pid}`;
 	const script = `
 		set -e
-		state="$1"; state_archive="$2"; activity="$3"; activity_archive="$4"; tmp="$5"
-		mkdir -p "$(dirname "$activity_archive")"
-		jq --arg activity_path "$activity" --arg activity_archive_path "$activity_archive" \
-			'.activity_path = (.activity_path // $activity_path) | .activity_archive_path = $activity_archive_path' \
-			"$state" > "$tmp"
-		mv "$tmp" "$state"
-		mv "$state" "$state_archive"
-		if [[ -f "$activity" ]]; then
-			mv "$activity" "$activity_archive"
-		else
-			: > "$activity_archive"
-		fi
+		state="$1"; state_archive="$2"; activity="$3"; activity_archive="$4"; activity_lock="$5"; tmp="$6"
+		flock -x "$activity_lock" bash -c '
+			set -e
+			state="$1"; state_archive="$2"; activity="$3"; activity_archive="$4"; tmp="$5"
+			if [[ -s "$activity" ]]; then
+				mkdir -p "$(dirname "$activity_archive")"
+				jq --arg activity_path "$activity" --arg activity_archive_path "$activity_archive" \
+					".activity_path = (.activity_path // \\$activity_path) | .activity_archive_path = \\$activity_archive_path" \
+					"$state" > "$tmp"
+				mv "$tmp" "$state"
+				mv "$state" "$state_archive"
+				mv "$activity" "$activity_archive"
+			else
+				jq "del(.activity_path, .activity_archive_path)" "$state" > "$tmp"
+				mv "$tmp" "$state"
+				mv "$state" "$state_archive"
+			fi
+		' _ "$state" "$state_archive" "$activity" "$activity_archive" "$tmp"
 	`;
-	return run(["-x", lockFile, "bash", "-c", script, "_", stateFile, stateArchive, activityFile, activityArchive, tmp]);
+	return run(["-x", lockFile, "bash", "-c", script, "_", stateFile, stateArchive, activityFile, activityArchive, activityLockFile, tmp]);
 }
 
 // Locked file rename — used by archive callers that do not own an

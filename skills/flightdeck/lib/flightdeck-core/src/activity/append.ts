@@ -3,6 +3,8 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import {
+	ActivityValidationError,
+	DEFAULT_ACTIVITY_DETAILS_MAX_BYTES,
 	DEFAULT_ACTIVITY_MAX_BYTES,
 	DEFAULT_ACTIVITY_MAX_EVENTS,
 	normalizeActivityEvent,
@@ -26,17 +28,41 @@ export interface AppendActivityResult {
 
 export function appendActivityEvent(file: string, input: ActivityEventInput, opts: AppendActivityOptions = {}): AppendActivityResult {
 	const event = normalizeActivityEvent(input, opts);
+	const line = stringifyEventForAppend(event, opts.detailsMaxBytes ?? DEFAULT_ACTIVITY_DETAILS_MAX_BYTES);
+	const maxBytes = opts.maxBytes ?? DEFAULT_ACTIVITY_MAX_BYTES;
+	const lineBytes = Buffer.byteLength(`${line}\n`, "utf8");
+	if (lineBytes > maxBytes) {
+		throw new ActivityValidationError(`activity event exceeds session byte cap (${lineBytes} > ${maxBytes})`);
+	}
 	const recentKey = `${file}\0${event.id}`;
 	if (recentIds.has(recentKey)) return { appended: false, event };
 	const appended = lockedAppendJsonlDedup({
 		file,
 		id: event.id,
-		line: JSON.stringify(event),
-		maxBytes: opts.maxBytes ?? DEFAULT_ACTIVITY_MAX_BYTES,
+		line,
+		maxBytes,
 		maxEvents: opts.maxEvents ?? DEFAULT_ACTIVITY_MAX_EVENTS,
 	});
 	if (appended) rememberId(recentKey);
 	return { appended, event };
+}
+
+function stringifyEventForAppend(event: FlightdeckActivityEventV1, detailsMaxBytes: number): string {
+	let line = JSON.stringify(event);
+	const maxEventBytes = detailsMaxBytes * 2;
+	if (line.length <= maxEventBytes) return line;
+	if (event.details) {
+		const detailsBytes = Buffer.byteLength(JSON.stringify(event.details), "utf8");
+		event.details = { original_bytes: detailsBytes, truncated: true };
+		line = JSON.stringify(event);
+	}
+	if (line.length <= maxEventBytes) return line;
+	if (event.body) {
+		delete event.body;
+		line = JSON.stringify(event);
+	}
+	if (line.length <= maxEventBytes) return line;
+	throw new ActivityValidationError(`activity event exceeds maximum size (${line.length} > ${maxEventBytes})`);
 }
 
 function rememberId(key: string): void {
@@ -71,9 +97,30 @@ function lockedAppendJsonlDedup(opts: LockedAppendOpts): boolean {
 		cat >> "$file"
 		bytes=$(wc -c < "$file" | tr -d ' ')
 		lines=$(wc -l < "$file" | tr -d ' ')
-		if (( lines > max_events || bytes > max_bytes )); then
+		if (( lines > max_events )); then
 			tmp="$file.tmp.$$"
 			tail -n "$max_events" "$file" > "$tmp"
+			mv "$tmp" "$file"
+		fi
+		bytes=$(wc -c < "$file" | tr -d ' ')
+		if (( bytes > max_bytes )); then
+			tmp="$file.tmp.$$"
+			LC_ALL=C awk -v max_bytes="$max_bytes" '
+				{
+					lines[NR] = $0
+					sizes[NR] = length($0) + 1
+				}
+				END {
+					bytes = 0
+					start = NR + 1
+					for (i = NR; i >= 1; i--) {
+						if (bytes + sizes[i] > max_bytes) break
+						bytes += sizes[i]
+						start = i
+					}
+					for (i = start; i <= NR; i++) print lines[i]
+				}
+			' "$file" > "$tmp"
 			mv "$tmp" "$file"
 		fi
 	`;
