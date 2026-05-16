@@ -137,6 +137,13 @@ post_comment() {
     local url
     url=$(echo "$result" | jq -r '.html_url // .url // ""')
 
+    bash "$SCRIPT_DIR/../_activity-emit.sh" pr.comments_left \
+        --severity info \
+        --importance normal \
+        --summary "Comment left on PR #$pr_num" \
+        --pr-number "$pr_num" \
+        --details-json "$(jq -cn --arg url "$url" '{url: $url}')" || true
+
     if [ -n "$url" ]; then
         echo "{\"success\": true, \"url\": \"$url\"}"
     else

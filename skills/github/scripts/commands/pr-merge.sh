@@ -264,6 +264,12 @@ main() {
             # If --auto, fall through to enable auto-merge below.
             # Otherwise, exit BLOCKED with breakdown.
             if [ "$auto" != true ]; then
+                bash "$SCRIPT_DIR/../_activity-emit.sh" pr.merge_blocked \
+                    --severity warning \
+                    --importance important \
+                    --summary "PR #$pr_num merge blocked" \
+                    --pr-number "$pr_num" \
+                    --details-json "$check_result" || true
                 print_blocked "$check_result" "$pr_num"
                 exit 1
             fi
@@ -305,6 +311,12 @@ main() {
 
     if [ "$merge_exit" -ne 0 ]; then
         # Merge command itself failed. Surface as BLOCKED with raw output.
+        bash "$SCRIPT_DIR/../_activity-emit.sh" pr.merge_blocked \
+            --severity warning \
+            --importance important \
+            --summary "PR #$pr_num merge blocked" \
+            --pr-number "$pr_num" \
+            --details-json "$(jq -cn --arg output "$merge_output" '{merge_output: $output}')" || true
         echo "BLOCKED PR #$pr_num — gh pr merge failed" >&2
         printf '%s\n' "$merge_output" | sed 's/^/  /' >&2
         exit 1
@@ -319,6 +331,14 @@ main() {
 
     if [ "$post_state" = "MERGED" ]; then
         echo "MERGED PR #$pr_num" >&2
+        local merge_commit
+        merge_commit=$(gh pr view "$pr_num" --json mergeCommit --jq '.mergeCommit.oid // ""' 2>/dev/null || true)
+        bash "$SCRIPT_DIR/../_activity-emit.sh" pr.merged \
+            --severity success \
+            --importance important \
+            --summary "PR #$pr_num merged" \
+            --pr-number "$pr_num" \
+            --commit "$merge_commit" || true
         # Delete remote branch via API (avoids gh's local git checkout, which
         # fails inside worktrees). Best-effort — branch may already be gone.
         if [ "$delete_branch" = true ]; then
@@ -332,6 +352,11 @@ main() {
     fi
 
     if [ "$auto" = true ] && [ "$post_auto" = "true" ]; then
+        bash "$SCRIPT_DIR/../_activity-emit.sh" pr.merge_queued \
+            --severity info \
+            --importance normal \
+            --summary "PR #$pr_num queued for auto-merge" \
+            --pr-number "$pr_num" || true
         echo "QUEUED FOR AUTO-MERGE PR #$pr_num — will fire when CI + branch protection clear" >&2
         echo "  Track with: github.sh await-mergeable $pr_num" >&2
         exit 75
@@ -339,6 +364,12 @@ main() {
 
     # gh exited 0 but PR isn't merged and isn't queued. Treat as BLOCKED so
     # callers don't assume success based on exit code alone.
+    bash "$SCRIPT_DIR/../_activity-emit.sh" pr.merge_blocked \
+        --severity warning \
+        --importance important \
+        --summary "PR #$pr_num merge blocked" \
+        --pr-number "$pr_num" \
+        --details-json "$(jq -cn --arg state "$post_state" --arg auto "$post_auto" --arg output "$merge_output" '{state: $state, auto_merge: $auto, merge_output: $output}')" || true
     echo "BLOCKED PR #$pr_num — gh reported success but state=$post_state, autoMerge=$post_auto" >&2
     printf '%s\n' "$merge_output" | sed 's/^/  /' >&2
     exit 1
