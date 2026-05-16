@@ -71,6 +71,71 @@ main() {
     emit_checks_activity "$json_fields" "$pr_num" "$output"
 }
 
+# vstack#71 W4 Phase 7 follow-up (B2): transition-memory for PR checks.
+# Returns the directory we should write the sidecar JSON into.
+pr_checks_state_dir() {
+    if [ -n "${FLIGHTDECK_PR_CHECKS_STATE_DIR:-}" ]; then
+        printf '%s' "$FLIGHTDECK_PR_CHECKS_STATE_DIR"
+        return
+    fi
+    if [ -n "${FLIGHTDECK_ACTIVITY_FILE:-}" ]; then
+        printf '%s' "$(dirname "$FLIGHTDECK_ACTIVITY_FILE")"
+        return
+    fi
+    if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+        printf '%s/flightdeck' "$XDG_RUNTIME_DIR"
+        return
+    fi
+    printf '/tmp/flightdeck-%s' "$(id -u 2>/dev/null || echo 0)"
+}
+
+pr_checks_state_path() {
+    local pr_number="$1"
+    [ -z "$pr_number" ] && return 1
+    printf '%s/flightdeck-pr-checks-%s.json' "$(pr_checks_state_dir)" "$pr_number"
+}
+
+pr_checks_prune_lru() {
+    local dir="$1" max="${FLIGHTDECK_PR_CHECKS_LRU:-50}"
+    [[ "$max" =~ ^[1-9][0-9]*$ ]] || max=50
+    [ -d "$dir" ] || return 0
+    local count
+    count=$(find "$dir" -maxdepth 1 -type f -name 'flightdeck-pr-checks-*.json' 2>/dev/null | wc -l)
+    if [ "$count" -le "$max" ]; then
+        return 0
+    fi
+    local trim
+    trim=$((count - max))
+    # Delete oldest by mtime first.
+    find "$dir" -maxdepth 1 -type f -name 'flightdeck-pr-checks-*.json' -printf '%T@ %p\n' 2>/dev/null \
+        | sort -n \
+        | head -n "$trim" \
+        | awk '{ $1=""; sub(/^ /,""); print }' \
+        | xargs -r rm -f 2>/dev/null || true
+}
+
+pr_checks_last_outcome() {
+    local state_file="$1"
+    [ -f "$state_file" ] || { printf ''; return; }
+    jq -r '.lastOutcome // empty' "$state_file" 2>/dev/null || printf ''
+}
+
+pr_checks_record_outcome() {
+    local state_file="$1" outcome="$2" pr_number="$3"
+    local dir
+    dir=$(dirname "$state_file")
+    mkdir -p "$dir" 2>/dev/null || return 0
+    local tmp="$state_file.tmp.$$"
+    if jq -n --arg outcome "$outcome" --arg pr "$pr_number" --arg ts "$(date -Iseconds)" \
+        '{lastOutcome: $outcome, prNumber: $pr, updatedAt: $ts}' \
+        > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$state_file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    else
+        rm -f "$tmp" 2>/dev/null
+    fi
+    pr_checks_prune_lru "$dir"
+}
+
 emit_checks_activity() {
     local json_fields="$1"
     local pr_ref="$2"
@@ -100,6 +165,25 @@ emit_checks_activity() {
     if [ -z "$pr_number" ] && [[ "$pr_ref" =~ ^[0-9]+$ ]]; then
         pr_number="$pr_ref"
     fi
+
+    # vstack#71 W4 Phase 7 follow-up (B2): emit pr.checks_* ONLY on
+    # transition. Flapping CI used to produce a fresh event on every
+    # pr-view call; the sidecar JSON at
+    # <state-dir>/flightdeck-pr-checks-<pr>.json records the last outcome
+    # so duplicates collapse. State is bounded by FLIGHTDECK_PR_CHECKS_LRU
+    # (default 50, oldest-mtime first).
+    if [ -n "$pr_number" ]; then
+        local state_file last_outcome
+        state_file=$(pr_checks_state_path "$pr_number")
+        if [ -n "$state_file" ]; then
+            last_outcome=$(pr_checks_last_outcome "$state_file")
+            if [ "$last_outcome" = "$outcome" ]; then
+                return 0
+            fi
+            pr_checks_record_outcome "$state_file" "$outcome" "$pr_number"
+        fi
+    fi
+
     local type severity summary
     if [ "$outcome" = "passed" ]; then
         type="pr.checks_passed"
