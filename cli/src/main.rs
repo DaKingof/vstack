@@ -10,11 +10,11 @@ mod installer;
 mod mapping;
 mod pi_extension;
 mod project_config;
-#[cfg(test)]
-mod test_util;
 mod resolve;
 mod scope;
 mod skill;
+#[cfg(test)]
+mod test_util;
 mod tui;
 
 use anyhow::Result;
@@ -86,6 +86,14 @@ struct Cli {
     /// /etc. to install one item).
     #[arg(long)]
     clobber: bool,
+
+    /// Skip auto-installation of skills referenced by selected agents.
+    /// By default `vstack add` walks each selected agent's `agent-skills`
+    /// plus `role-skills` plus transitive dependencies and includes any
+    /// missing skills in the install pass so `.agents/skills/<name>/` is
+    /// never empty of skills the agent's frontmatter references.
+    #[arg(long)]
+    no_auto_skills: bool,
 }
 
 #[derive(Subcommand)]
@@ -119,6 +127,9 @@ enum Commands {
         /// Allow `--global --all` to clobber an existing non-empty global lock.
         #[arg(long)]
         clobber: bool,
+        /// Skip auto-installation of skills referenced by selected agents.
+        #[arg(long)]
+        no_auto_skills: bool,
     },
 
     /// Remove installed agents, skills, hooks, or Pi packages
@@ -237,6 +248,7 @@ fn main() -> Result<()> {
             yes,
             all,
             clobber,
+            no_auto_skills,
         }) => commands::add::run(
             source,
             global,
@@ -249,17 +261,15 @@ fn main() -> Result<()> {
             yes,
             all,
             clobber,
+            no_auto_skills,
         ),
         Some(Commands::Remove {
             names,
             global,
             scope,
         }) => {
-            let scope = scope::ScopeFilter::resolve(
-                scope.as_deref(),
-                global,
-                scope::ScopeFilter::Project,
-            )?;
+            let scope =
+                scope::ScopeFilter::resolve(scope.as_deref(), global, scope::ScopeFilter::Project)?;
             commands::remove::run(&names, scope)
         }
         Some(Commands::List {
@@ -277,12 +287,22 @@ fn main() -> Result<()> {
             commands::check::run(scope)
         }
         Some(Commands::Update { force }) => commands::update::run(force),
-        Some(Commands::Refresh { global, scope, verbose }) => {
-            let scope = scope::ScopeFilter::resolve(scope.as_deref(), global, scope::ScopeFilter::All)?;
+        Some(Commands::Refresh {
+            global,
+            scope,
+            verbose,
+        }) => {
+            let scope =
+                scope::ScopeFilter::resolve(scope.as_deref(), global, scope::ScopeFilter::All)?;
             commands::refresh::run(scope, verbose)
         }
-        Some(Commands::Verify { names, global, scope }) => {
-            let scope = scope::ScopeFilter::resolve(scope.as_deref(), global, scope::ScopeFilter::All)?;
+        Some(Commands::Verify {
+            names,
+            global,
+            scope,
+        }) => {
+            let scope =
+                scope::ScopeFilter::resolve(scope.as_deref(), global, scope::ScopeFilter::All)?;
             commands::verify::run(scope, &names)
         }
         Some(Commands::UpdatePi { check, scope }) => commands::update_pi::run(check, scope),
@@ -302,6 +322,7 @@ fn main() -> Result<()> {
             cli.yes,
             cli.all,
             cli.clobber,
+            cli.no_auto_skills,
         ),
     }
 }

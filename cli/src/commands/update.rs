@@ -108,6 +108,20 @@ fn parse_cargo_version(cargo_toml: &str) -> Option<String> {
     None
 }
 
+/// Check if an update is available (called after non-interactive installs)
+pub fn check_update_hint() {
+    let local = env!("CARGO_PKG_VERSION");
+
+    if let Some(remote) = get_remote_version_with_timeout(Duration::from_millis(1500))
+        && remote != local
+    {
+        eprintln!(
+            "\n  Update available: {} → {}  (run: vstack update)",
+            local, remote
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,19 +145,5 @@ edition = "2024"
     fn parse_version_with_prerelease() {
         let toml = "version = \"1.2.3-beta.1\"";
         assert_eq!(parse_cargo_version(toml), Some("1.2.3-beta.1".into()));
-    }
-}
-
-/// Check if an update is available (called after non-interactive installs)
-pub fn check_update_hint() {
-    let local = env!("CARGO_PKG_VERSION");
-
-    if let Some(remote) = get_remote_version_with_timeout(Duration::from_millis(1500)) {
-        if remote != local {
-            eprintln!(
-                "\n  Update available: {} → {}  (run: vstack update)",
-                local, remote
-            );
-        }
     }
 }

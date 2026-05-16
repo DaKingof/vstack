@@ -872,7 +872,9 @@ pub enum AppendSystemRemoveOutcome {
 pub fn append_system_remove(target: &Path, name: &str) -> Result<AppendSystemRemoveOutcome> {
     let existing = match std::fs::read_to_string(target) {
         Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(AppendSystemRemoveOutcome::NoOp),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(AppendSystemRemoveOutcome::NoOp);
+        }
         Err(e) => return Err(e.into()),
     };
     let (begin, end) = append_system_block_markers(name);
@@ -883,7 +885,9 @@ pub fn append_system_remove(target: &Path, name: &str) -> Result<AppendSystemRem
     if stripped.is_empty() {
         match std::fs::remove_file(target) {
             Ok(()) => Ok(AppendSystemRemoveOutcome::Deleted),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AppendSystemRemoveOutcome::Deleted),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Ok(AppendSystemRemoveOutcome::Deleted)
+            }
             Err(e) => Err(e.into()),
         }
     } else {
@@ -965,12 +969,14 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
                 })?;
             } else if target.is_dir() {
                 std::fs::remove_dir_all(&target).with_context(|| {
-                    format!("removing existing dir {} for symlink replace", target.display())
+                    format!(
+                        "removing existing dir {} for symlink replace",
+                        target.display()
+                    )
                 })?;
             }
-            let link_target = std::fs::read_link(entry.path()).with_context(|| {
-                format!("reading symlink target at {}", entry.path().display())
-            })?;
+            let link_target = std::fs::read_link(entry.path())
+                .with_context(|| format!("reading symlink target at {}", entry.path().display()))?;
             std::os::unix::fs::symlink(&link_target, &target).with_context(|| {
                 format!(
                     "recreating symlink {} → {}",
@@ -991,7 +997,7 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
                 let mode = entry
                     .metadata()
                     .ok()
-                    .and_then(|m| Some(m.permissions().mode()))
+                    .map(|m| m.permissions().mode())
                     .unwrap_or(0o644);
                 let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode));
             }
@@ -1755,7 +1761,8 @@ mod tests {
                 !combined.contains("extension_error"),
                 "pi reported extension_error: {combined}"
             );
-            for forbidden in ["Failed to load extension"] {
+            {
+                let forbidden = "Failed to load extension";
                 assert!(
                     !combined.contains(forbidden),
                     "pi reported `{forbidden}`: {combined}"
@@ -1775,10 +1782,8 @@ mod tests {
         // make every refresh report install drift.
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join(format!(
-            "vstack_pi_copy_dir_symlink_{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("vstack_pi_copy_dir_symlink_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = root.join("src");
         let dst = root.join("dst");
@@ -1849,11 +1854,7 @@ mod tests {
         // Unscoped package alongside it: <scope>/packages/legacy/package.json
         let legacy = pkgs_dir.join("legacy-pkg");
         std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(
-            legacy.join("package.json"),
-            r#"{"name":"legacy-pkg"}"#,
-        )
-        .unwrap();
+        std::fs::write(legacy.join("package.json"), r#"{"name":"legacy-pkg"}"#).unwrap();
 
         let names = with_pi_dir(&pi_dir, || list_installed_vstack_packages(true));
         assert!(

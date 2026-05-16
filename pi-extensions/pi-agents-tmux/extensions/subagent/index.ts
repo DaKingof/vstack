@@ -88,6 +88,15 @@ import {
 	processingDir,
 } from "./paths.js";
 import { randomHex } from "./random.js";
+import {
+	createAgentEndWatchdog,
+	defaultOutboxExists,
+	defaultScheduleAfter,
+	defaultWriteSyntheticOutbox,
+	WATCHDOG_REASON,
+	watchdogEnabledFromEnv,
+	watchdogGraceMsFromEnv,
+} from "./agent-end-watchdog.js";
 import { registerPaneSupportTools } from "./pane-support-tools.js";
 import { MINI_DASHBOARD_RANK, setMiniDashboardWidget } from "./stacked-widget.js";
 import {
@@ -347,6 +356,41 @@ export default function (pi: ExtensionAPI) {
 	let childPollInFlight = false;
 	let childCurrentTaskFile: string | undefined;
 	let agentCommandCompletions: Array<{ value: string; label: string; description: string; pane: boolean }> = [];
+
+	// Agent-end watchdog (vstack#66): rides on `pi.on("agent_end")` for tasks
+	// delivered without an inbox file (bridge follow-ups). The existing handler
+	// above already covers the childCurrentTaskFile path; this watchdog covers
+	// active task records for the same agent that lack a processing file.
+	let lastChildAgentEndCtx: ExtensionContext | undefined;
+	const agentEndWatchdog = createAgentEndWatchdog({
+		graceMs: watchdogGraceMsFromEnv(),
+		now: () => Date.now(),
+		scheduleAfter: defaultScheduleAfter,
+		isEnabled: () => watchdogEnabledFromEnv(),
+		outboxPathFor: (runtimeRoot, agentName, taskId) => completionPath(runtimeRoot, agentName, taskId),
+		readTaskRecord: async (runtimeRoot, taskId) => {
+			const records = await readTaskRegistry(runtimeRoot);
+			return records[taskId];
+		},
+		outboxExists: defaultOutboxExists,
+		isPaneIdle: async () => {
+			try {
+				return lastChildAgentEndCtx?.isIdle?.() ?? true;
+			} catch {
+				return true;
+			}
+		},
+		writeSyntheticOutbox: defaultWriteSyntheticOutbox,
+		markFired: async (runtimeRoot, agentName, taskId, payload) => {
+			await markTaskNeedsCompletion(runtimeRoot, agentName, taskId, {
+				diagnostic: `${payload.summary} (reason: ${WATCHDOG_REASON})`,
+				outboxFile: completionPath(runtimeRoot, agentName, taskId),
+			});
+		},
+		logWarn: (msg) => {
+			console.warn(msg);
+		},
+	});
 	let dashboardState: SubagentDashboardState = { collapsed: false, mode: "normal", visible: true, items: {} };
 	let dashboardCtx: ExtensionContext | undefined;
 	let dashboardBatchDepth = 0;
@@ -1092,6 +1136,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_end", async (_event, ctx) => {
 		if (!childAgentName) return;
+		lastChildAgentEndCtx = ctx;
 		if (childCurrentTaskFile) {
 			const runtimeRoot = runtimeDirForContext(ctx);
 			const activeTaskFile = childCurrentTaskFile;
@@ -1169,6 +1214,22 @@ export default function (pi: ExtensionAPI) {
 		}
 		ctx.ui.setStatus("agent", `${childAgentName} idle`);
 		pendingChildCompletion = undefined;
+
+		// Fallback watchdog for tasks delivered without an inbox file (bridge
+		// follow-ups, sessionless steers, etc.). If any task record for this
+		// agent is still active and has no outbox after the grace window, write
+		// a synthetic needs_completion outbox so the parent's wake handler runs.
+		try {
+			const runtimeRoot = runtimeDirForContext(ctx);
+			const records = await readTaskRegistry(runtimeRoot);
+			for (const record of Object.values(records)) {
+				if (!record?.taskId || record.agent !== childAgentName) continue;
+				if (isTerminalTaskStatus(record.status) || record.status === "needs_completion") continue;
+				agentEndWatchdog.onAgentEnd({ runtimeRoot, agentName: childAgentName, taskId: record.taskId });
+			}
+		} catch (err) {
+			console.warn(`agent-end watchdog: scan failed: ${(err as Error)?.message ?? err}`);
+		}
 	});
 
 	pi.on("session_shutdown", () => {
@@ -1301,6 +1362,7 @@ export default function (pi: ExtensionAPI) {
 		backfillTaskSummaryFromTranscript,
 		bridgeTargetArgs,
 		createFollowUpTask,
+		dashboardStatusFor,
 		emitSubagentEvent,
 		execCapture,
 		formatSteeringForChild,

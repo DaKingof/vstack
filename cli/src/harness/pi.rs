@@ -188,7 +188,10 @@ mod tests {
             pi_model_for_with_effort("haiku", Some("medium".into())),
             "openai-codex/gpt-5.5:medium"
         );
-        assert_eq!(pi_model_for_with_effort("opus", None), "openai-codex/gpt-5.5");
+        assert_eq!(
+            pi_model_for_with_effort("opus", None),
+            "openai-codex/gpt-5.5"
+        );
         assert_eq!(pi_model_for_with_effort("custom-id", None), "custom-id");
     }
 
@@ -282,8 +285,8 @@ mod tests {
 
     #[test]
     fn generate_agent_omits_suffix_when_no_effort() {
-        let dir = std::env::temp_dir()
-            .join(format!("vstack_pi_agent_no_effort_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("vstack_pi_agent_no_effort_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

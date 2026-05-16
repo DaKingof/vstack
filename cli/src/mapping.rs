@@ -46,8 +46,7 @@ impl MappingConfig {
             return Self::default();
         };
         let mut parsed: Self = toml::from_str(&content).unwrap_or_default();
-        let (legacy, by_harness) =
-            crate::project_config::parse_agent_frontmatter_tables(&content);
+        let (legacy, by_harness) = crate::project_config::parse_agent_frontmatter_tables(&content);
         parsed.agent_frontmatter = legacy;
         parsed.agent_frontmatter_by_harness = by_harness;
         parsed
@@ -135,10 +134,10 @@ impl MappingConfig {
         if let Some(entries) = self.agent_skills_optional.get(&name) {
             collect(entries);
         }
-        if let Some(suffix) = name.strip_prefix("reviewer-") {
-            if let Some(entries) = self.agent_skills_optional.get(suffix) {
-                collect(entries);
-            }
+        if let Some(suffix) = name.strip_prefix("reviewer-")
+            && let Some(entries) = self.agent_skills_optional.get(suffix)
+        {
+            collect(entries);
         }
         result
     }

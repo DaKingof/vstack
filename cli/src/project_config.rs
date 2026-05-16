@@ -291,17 +291,17 @@ impl ProjectConfig {
             return;
         }
 
-        if let Some(ref text) = extracted.guidance {
-            if needs_guidance {
-                self.agent_guidance
-                    .insert(agent_name.to_string(), text.clone());
-            }
+        if let Some(ref text) = extracted.guidance
+            && needs_guidance
+        {
+            self.agent_guidance
+                .insert(agent_name.to_string(), text.clone());
         }
-        if let Some(ref text) = extracted.instructions {
-            if needs_instructions {
-                self.agent_instructions
-                    .insert(agent_name.to_string(), text.clone());
-            }
+        if let Some(ref text) = extracted.instructions
+            && needs_instructions
+        {
+            self.agent_instructions
+                .insert(agent_name.to_string(), text.clone());
         }
 
         // Write back to vstack.toml surgically — preserve comments and structure
@@ -309,26 +309,22 @@ impl ProjectConfig {
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
         let mut out = existing.clone();
 
-        if needs_guidance {
-            if let Some(ref text) = extracted.guidance {
-                out = upsert_agent_value_in_section(
-                    &out,
-                    "[agent-launch-instructions]",
-                    agent_name,
-                    text,
-                );
-            }
+        if needs_guidance && let Some(ref text) = extracted.guidance {
+            out = upsert_agent_value_in_section(
+                &out,
+                "[agent-launch-instructions]",
+                agent_name,
+                text,
+            );
         }
 
-        if needs_instructions {
-            if let Some(ref text) = extracted.instructions {
-                out = upsert_agent_value_in_section(
-                    &out,
-                    "[agent-additional-instructions]",
-                    agent_name,
-                    text,
-                );
-            }
+        if needs_instructions && let Some(ref text) = extracted.instructions {
+            out = upsert_agent_value_in_section(
+                &out,
+                "[agent-additional-instructions]",
+                agent_name,
+                text,
+            );
         }
 
         out = dedupe_agent_frontmatter_sections(&out);
@@ -1050,10 +1046,7 @@ fn claude_frontmatter_defaults(
             frontmatter.model.as_deref().unwrap_or(&agent.model),
         )),
     ));
-    let effort = frontmatter
-        .effort
-        .clone()
-        .or_else(|| agent.effort.clone());
+    let effort = frontmatter.effort.clone().or_else(|| agent.effort.clone());
     if let Some(effort) = effort.filter(|effort| !is_none_value(effort)) {
         fields.push(("effort".into(), toml_inline_string(&effort)));
     }
@@ -1654,59 +1647,57 @@ fn repair_instruction_multiline_values(content: &str) -> String {
 
         let is_instruction_section = active_section == "[agent-launch-instructions]"
             || active_section == "[agent-additional-instructions]";
-        if is_instruction_section {
-            if let Some((key, raw_value)) = trimmed.split_once('=') {
-                let value = raw_value.trim();
-                if starts_toml_multiline_value(trimmed) {
-                    let mut block_lines = vec![lines[i].to_string()];
+        if is_instruction_section && let Some((key, raw_value)) = trimmed.split_once('=') {
+            let value = raw_value.trim();
+            if starts_toml_multiline_value(trimmed) {
+                let mut block_lines = vec![lines[i].to_string()];
+                i += 1;
+                while i < lines.len() {
+                    block_lines.push(lines[i].to_string());
+                    let just_pushed = lines[i].trim();
                     i += 1;
-                    while i < lines.len() {
-                        block_lines.push(lines[i].to_string());
-                        let just_pushed = lines[i].trim();
-                        i += 1;
-                        if closes_toml_multiline_value(just_pushed) {
-                            break;
-                        }
+                    if closes_toml_multiline_value(just_pushed) {
+                        break;
                     }
-                    let block = block_lines.join("\n");
-                    let value = block.split_once('=').map(|(_, v)| v.trim()).unwrap_or("");
-                    let mini = format!("value = {}", value);
-                    if let Ok(parsed) = toml::from_str::<toml::Value>(&mini) {
-                        if let Some(text) = parsed.get("value").and_then(|value| value.as_str()) {
-                            out.push(format!(
-                                "{} = {}",
-                                key.trim(),
-                                format_toml_string_value(text)
-                            ));
-                        } else {
-                            out.extend(block_lines);
-                        }
+                }
+                let block = block_lines.join("\n");
+                let value = block.split_once('=').map(|(_, v)| v.trim()).unwrap_or("");
+                let mini = format!("value = {}", value);
+                if let Ok(parsed) = toml::from_str::<toml::Value>(&mini) {
+                    if let Some(text) = parsed.get("value").and_then(|value| value.as_str()) {
+                        out.push(format!(
+                            "{} = {}",
+                            key.trim(),
+                            format_toml_string_value(text)
+                        ));
                     } else {
                         out.extend(block_lines);
                     }
-                    i = skip_orphan_duplicate_multiline_body(&lines, i);
-                    continue;
+                } else {
+                    out.extend(block_lines);
                 }
-                if value.starts_with('"') && value.ends_with('"') && value.contains("\\n") {
-                    let mini = format!("value = {}", value);
-                    if let Ok(parsed) = toml::from_str::<toml::Value>(&mini) {
-                        if let Some(text) = parsed.get("value").and_then(|value| value.as_str()) {
-                            out.push(format!(
-                                "{} = {}",
-                                key.trim(),
-                                format_toml_string_value(text)
-                            ));
-                            i += 1;
-                            i = skip_orphan_duplicate_multiline_body(&lines, i);
-                            continue;
-                        }
-                    }
-                }
-                out.push(lines[i].to_string());
-                i += 1;
                 i = skip_orphan_duplicate_multiline_body(&lines, i);
                 continue;
             }
+            if value.starts_with('"') && value.ends_with('"') && value.contains("\\n") {
+                let mini = format!("value = {}", value);
+                if let Ok(parsed) = toml::from_str::<toml::Value>(&mini)
+                    && let Some(text) = parsed.get("value").and_then(|value| value.as_str())
+                {
+                    out.push(format!(
+                        "{} = {}",
+                        key.trim(),
+                        format_toml_string_value(text)
+                    ));
+                    i += 1;
+                    i = skip_orphan_duplicate_multiline_body(&lines, i);
+                    continue;
+                }
+            }
+            out.push(lines[i].to_string());
+            i += 1;
+            i = skip_orphan_duplicate_multiline_body(&lines, i);
+            continue;
         }
 
         out.push(lines[i].to_string());
@@ -1839,12 +1830,13 @@ fn dedupe_agent_frontmatter_sections(content: &str) -> String {
             continue;
         }
 
-        if is_agent_frontmatter_section(active_section) && looks_like_toml_key_line(trimmed) {
-            if let Some((key, _)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                if !seen_keys.insert(key) {
-                    continue;
-                }
+        if is_agent_frontmatter_section(active_section)
+            && looks_like_toml_key_line(trimmed)
+            && let Some((key, _)) = trimmed.split_once('=')
+        {
+            let key = key.trim().to_string();
+            if !seen_keys.insert(key) {
+                continue;
             }
         }
 
@@ -1968,7 +1960,9 @@ fn agent_frontmatter_heading() -> String {
     out.push_str("# Fields: color, model, effort, deny-tools, pane, background,\n");
     out.push_str("# isolation, memory, mode, sandbox-mode, model-reasoning-effort.\n");
     out.push_str("# Claude background is seeded from Pi pane on first install (pane=true -> false, pane=false -> true), then preserved on refresh.\n");
-    out.push_str("# OpenCode maps colors to hex. Effort values are written verbatim per harness.\n");
+    out.push_str(
+        "# OpenCode maps colors to hex. Effort values are written verbatim per harness.\n",
+    );
     out.push_str("#\n");
     out
 }
@@ -2126,9 +2120,9 @@ fn ensure_agent_frontmatter_scaffold(content: &str) -> String {
         .unwrap_or(content.len());
     let mut out = String::new();
     out.push_str(content[..insert_at].trim_end());
-    out.push_str("\n");
+    out.push('\n');
     out.push_str(&block);
-    out.push_str("\n");
+    out.push('\n');
     out.push_str(content[insert_at..].trim_start_matches('\n'));
     if content.ends_with('\n') && !out.ends_with('\n') {
         out.push('\n');
@@ -2239,7 +2233,7 @@ fn create_project_config(path: &Path, agents: &[String], skills: &[String]) {
     // Actual skill lists are written by write_agent_skills() after
     // the mapping is computed, so we just emit the section header here.
 
-    out.push_str("\n");
+    out.push('\n');
     out.push_str(&agent_frontmatter_scaffold());
 
     // ── agent-skills-optional ──
@@ -2363,9 +2357,10 @@ fn insert_keys_into_section(content: &str, section_header: &str, new_keys: &[&St
 
             if !new_keys.is_empty() {
                 // Blank line before new entries if section already had content
-                if result.last().map_or(false, |l| {
-                    !l.trim().is_empty() && l.trim() != section_header
-                }) {
+                if result
+                    .last()
+                    .is_some_and(|l| !l.trim().is_empty() && l.trim() != section_header)
+                {
                     result.push(String::new());
                 }
                 for name in new_keys {
@@ -2418,7 +2413,7 @@ fn insert_entries_into_section(content: &str, section_header: &str, entries: &st
                 i += 1;
             }
             // Insert new entries here, right after existing keys
-            if result.last().map_or(false, |line| !line.trim().is_empty()) {
+            if result.last().is_some_and(|line| !line.trim().is_empty()) {
                 result.push(String::new());
             }
             for line in entries.lines() {
@@ -2769,7 +2764,12 @@ scout = { pane = false }
         let mut harnesses = HashMap::new();
         harnesses.insert("rust".into(), vec![crate::harness::Harness::OpenCode]);
 
-        write_agent_frontmatter_defaults(&dir, &[rust], &harnesses, &crate::mapping::MappingConfig::default());
+        write_agent_frontmatter_defaults(
+            &dir,
+            &[rust],
+            &harnesses,
+            &crate::mapping::MappingConfig::default(),
+        );
 
         let updated = std::fs::read_to_string(&path).unwrap();
         assert!(updated.contains("rust = { model = \"openai/gpt-5.5\", deny-tools = [\"task\", \"question\"], mode = \"subagent\", model-reasoning-effort = \"xhigh\" }"));
@@ -2789,7 +2789,12 @@ scout = { pane = false }
             body: String::new(),
             source_path: std::path::PathBuf::new(),
         };
-        write_agent_frontmatter_defaults(&dir, &[rust], &harnesses, &crate::mapping::MappingConfig::default());
+        write_agent_frontmatter_defaults(
+            &dir,
+            &[rust],
+            &harnesses,
+            &crate::mapping::MappingConfig::default(),
+        );
         let updated = std::fs::read_to_string(&path).unwrap();
         assert!(updated.contains("rust = { model = \"openai/gpt-5.5\", deny-tools = [\"task\", \"question\"], mode = \"primary\", model-reasoning-effort = \"xhigh\" }"));
 
@@ -2826,7 +2831,12 @@ scout = { pane = false }
             ],
         );
 
-        write_agent_frontmatter_defaults(&dir, &[rust], &harnesses, &crate::mapping::MappingConfig::default());
+        write_agent_frontmatter_defaults(
+            &dir,
+            &[rust],
+            &harnesses,
+            &crate::mapping::MappingConfig::default(),
+        );
 
         let updated = std::fs::read_to_string(&path).unwrap();
         assert!(!updated.contains("[agent-colors]"));

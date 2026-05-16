@@ -72,9 +72,7 @@ pub fn run(scope: ScopeFilter, names: &[String]) -> Result<()> {
                 Some(false) => "!",
                 None => "·",
             };
-            let ok = row.source_ok
-                && row.install_ok.unwrap_or(true)
-                && row.note.is_none();
+            let ok = row.source_ok && row.install_ok.unwrap_or(true) && row.note.is_none();
             if !ok {
                 total_failed += 1;
             }
@@ -199,7 +197,9 @@ fn verify_agent_install(
         let Some(harness) = crate::harness::Harness::from_id(h) else {
             continue;
         };
-        let path = harness.agents_dir(global).join(harness.agent_filename(name));
+        let path = harness
+            .agents_dir(global)
+            .join(harness.agent_filename(name));
         if !path.exists() {
             missing.push(h.clone());
         }
@@ -207,7 +207,10 @@ fn verify_agent_install(
     if missing.is_empty() {
         (Some(true), None)
     } else {
-        (Some(false), Some(format!("missing in: {}", missing.join(", "))))
+        (
+            Some(false),
+            Some(format!("missing in: {}", missing.join(", "))),
+        )
     }
 }
 
@@ -302,10 +305,15 @@ fn hash_dir_walk(dir: &Path) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x00000100000001B3;
     let mut state = FNV_OFFSET;
-    let mut walker = walkdir::WalkDir::new(dir).min_depth(1).sort_by_file_name().into_iter();
+    let mut walker = walkdir::WalkDir::new(dir)
+        .min_depth(1)
+        .sort_by_file_name()
+        .into_iter();
     while let Some(entry) = walker.next() {
         let Ok(entry) = entry else { continue };
-        if entry.file_type().is_dir() && should_skip_hash_dir(entry.file_name().to_string_lossy().as_ref()) {
+        if entry.file_type().is_dir()
+            && should_skip_hash_dir(entry.file_name().to_string_lossy().as_ref())
+        {
             walker.skip_current_dir();
             continue;
         }

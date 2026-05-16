@@ -61,6 +61,30 @@ import {
 	spawnPiSubscriber,
 	spawnCxSubscriber,
 } from "./subscribers/spawn.ts";
+import {
+	reconcileIntervalFromEnv,
+	reconcileTrackedEntries,
+	type ReconcileAdapterMeta,
+	type ReconcileEntry,
+} from "./reconcile.ts";
+import { reapSubscriber } from "./subscribers/reap.ts";
+import {
+	bellWakeIntervalFromEnv,
+	makeBellWakeState,
+	recordBellWake,
+	shouldEmitBellWake,
+	shouldEmitBgTaskExitWake,
+} from "./wake-filter.ts";
+import {
+	recoveryHintPath,
+	resolveMasterPidSafe,
+	writeRecoveryHint,
+} from "./recovery-hint.ts";
+import {
+	ownerCgroupProbeEnabled,
+	ownerMemHeartbeatFields,
+	probeOwnerCgroupMem,
+} from "./owner-cgroup-mem.ts";
 import { OC_LAST_ASSISTANT_JQ } from "../paths/oc.ts";
 import { CC_LAST_ASSISTANT_JQ } from "../paths/cc.ts";
 import { PI_LAST_ASSISTANT_JQ } from "../paths/pi.ts";
@@ -131,6 +155,66 @@ function resolveMeta(bin: string, action: string, paneTarget: string): string {
 	const issue = paneRegistryIssueForPane(bin, paneTarget);
 	if (!issue) return "";
 	return paneRegistryArgs(bin, action, issue);
+}
+
+function paneRegistryRows(bin: string): Record<string, unknown>[] {
+	if (!bin) return [];
+	const r = spawnSync(bin, ["list", "--format", "json"], { encoding: "utf8" });
+	if (r.status !== 0) return [];
+	try {
+		const rows = JSON.parse(r.stdout ?? "[]") as unknown;
+		if (!Array.isArray(rows)) return [];
+		return rows.filter((row): row is Record<string, unknown> => !!row && typeof row === "object" && !Array.isArray(row));
+	} catch { return []; }
+}
+
+function resolvePaneTargetForEntry(bin: string, paneId: string): string {
+	if (!paneId) return "";
+	for (const row of paneRegistryRows(bin)) {
+		if (row.pane_id === paneId) {
+			if (typeof row.pane_target === "string" && row.pane_target) return row.pane_target;
+			return paneId;
+		}
+	}
+	return paneId;
+}
+
+function entryKindForPane(bin: string, paneId: string): string {
+	if (!paneId) return "";
+	for (const row of paneRegistryRows(bin)) {
+		if (row.pane_id === paneId && typeof row.kind === "string" && row.kind.trim()) return row.kind.trim();
+	}
+	return "";
+}
+
+export function listTrackedEntriesForReconcile(bin: string, defaultHarness: string): ReconcileEntry[] {
+	if (!bin) return [];
+	const r = spawnSync(bin, ["list", "--format", "json"], { encoding: "utf8" });
+	if (r.status !== 0) return [];
+	let rows: unknown;
+	try { rows = JSON.parse(r.stdout ?? "[]"); }
+	catch { return []; }
+	if (!Array.isArray(rows)) return [];
+	const entries: ReconcileEntry[] = [];
+	for (const row of rows) {
+		if (!row || typeof row !== "object") continue;
+		const r2 = row as Record<string, unknown>;
+		const paneId = typeof r2.pane_id === "string" ? r2.pane_id : "";
+		if (!paneId) continue;
+		const harness = typeof r2.harness === "string" && r2.harness.trim() ? r2.harness.trim() : (defaultHarness || "");
+		const kind = typeof r2.kind === "string" ? r2.kind : undefined;
+		const adapterMeta: ReconcileAdapterMeta = {
+			ocUrl: typeof r2.oc_url === "string" ? r2.oc_url : undefined,
+			ocSessionId: typeof r2.oc_session_id === "string" ? r2.oc_session_id : undefined,
+			ccTranscript: typeof r2.cc_transcript === "string" ? r2.cc_transcript : undefined,
+			piPid: r2.pi_bridge_pid != null ? String(r2.pi_bridge_pid) : undefined,
+			piSocket: typeof r2.pi_bridge_socket === "string" ? r2.pi_bridge_socket : undefined,
+			cxUrl: typeof r2.cx_ws === "string" ? r2.cx_ws : undefined,
+			cxThreadId: typeof r2.cx_thread_id === "string" ? r2.cx_thread_id : undefined,
+		};
+		entries.push({ paneId, harness, kind, adapterMeta });
+	}
+	return entries;
 }
 
 export async function runLoop(opts: RunLoopOpts): Promise<void> {
@@ -212,58 +296,62 @@ export async function runLoop(opts: RunLoopOpts): Promise<void> {
 		classifier: opts.classifierBin,
 		parentPid: process.pid,
 	};
-	for (const id of innerIds) {
-		const h = paneHarness.get(id) ?? "";
-		const target = ocPaneTarget.get(id) ?? "";
-		switch (h) {
+
+	function trySpawnSubscriberForPane(paneId: string, target: string, harness: string): boolean {
+		switch (harness) {
 			case "opencode": {
 				const meta = resolveMeta(opts.paneRegistryBin, "oc-attach-args", target);
 				const url = extractFlag(meta, "--url");
 				const sid = extractFlag(meta, "--session");
-				if (url && sid) {
-					const { pid, reattached } = spawnOcSubscriber({ ...baseEnv, sessionKey: opts.sessionKey, paneId: id, ocUrl: url, sessionId: sid, ocLastAssistantJq: OC_LAST_ASSISTANT_JQ, log });
-					ocSubscribed.set(id, true);
-					subscriberPid.set(id, pid);
-					emitSubscriberLifecycle(activity, reattached, "opencode", id, pid);
-				}
-				break;
+				if (!url || !sid) return false;
+				const { pid, reattached } = spawnOcSubscriber({ ...baseEnv, sessionKey: opts.sessionKey, paneId, ocUrl: url, sessionId: sid, ocLastAssistantJq: OC_LAST_ASSISTANT_JQ, log });
+				ocSubscribed.set(paneId, true);
+				subscriberPid.set(paneId, pid);
+				emitSubscriberLifecycle(activity, reattached, "opencode", paneId, pid);
+				return true;
 			}
 			case "claude": {
 				const meta = resolveMeta(opts.paneRegistryBin, "cc-channel-args", target);
 				const transcript = extractFlag(meta, "--transcript");
-				if (transcript) {
-					const { pid, reattached } = spawnCcSubscriber({ ...baseEnv, sessionKey: opts.sessionKey, paneId: id, transcript, ccLastAssistantJq: CC_LAST_ASSISTANT_JQ, log });
-					ocSubscribed.set(id, true);
-					subscriberPid.set(id, pid);
-					emitSubscriberLifecycle(activity, reattached, "claude", id, pid);
-				}
-				break;
+				if (!transcript) return false;
+				const { pid, reattached } = spawnCcSubscriber({ ...baseEnv, sessionKey: opts.sessionKey, paneId, transcript, ccLastAssistantJq: CC_LAST_ASSISTANT_JQ, log });
+				ocSubscribed.set(paneId, true);
+				subscriberPid.set(paneId, pid);
+				emitSubscriberLifecycle(activity, reattached, "claude", paneId, pid);
+				return true;
 			}
 			case "pi": {
 				const meta = resolveMeta(opts.paneRegistryBin, "pi-bridge-args", target);
 				const piPid = extractFlag(meta, "--pid");
 				const piSocket = extractFlag(meta, "--socket");
-				if (piPid || piSocket) {
-					const { pid, reattached } = spawnPiSubscriber({ ...baseEnv, sessionKey: opts.sessionKey, paneId: id, piPid, piSocket, piLastAssistantJq: PI_LAST_ASSISTANT_JQ, log });
-					ocSubscribed.set(id, true);
-					subscriberPid.set(id, pid);
-					emitSubscriberLifecycle(activity, reattached, "pi", id, pid);
-				}
-				break;
+				if (!piPid && !piSocket) return false;
+				const entryKind = entryKindForPane(opts.paneRegistryBin, paneId);
+				const { pid, reattached } = spawnPiSubscriber({ ...baseEnv, sessionKey: opts.sessionKey, paneId, piPid, piSocket, piLastAssistantJq: PI_LAST_ASSISTANT_JQ, entryKind, entryHarness: "pi", log });
+				ocSubscribed.set(paneId, true);
+				subscriberPid.set(paneId, pid);
+				emitSubscriberLifecycle(activity, reattached, "pi", paneId, pid);
+				return true;
 			}
 			case "codex": {
 				const meta = resolveMeta(opts.paneRegistryBin, "cx-bridge-args", target);
 				const cxUrl = extractFlag(meta, "--url");
 				const threadId = extractFlag(meta, "--thread");
-				if (cxUrl && threadId) {
-					const { pid, reattached } = spawnCxSubscriber({ ...baseEnv, sessionKey: opts.sessionKey, paneId: id, cxUrl, threadId, cxLastAssistantJq: CX_LAST_ASSISTANT_JQ, log });
-					ocSubscribed.set(id, true);
-					subscriberPid.set(id, pid);
-					emitSubscriberLifecycle(activity, reattached, "codex", id, pid);
-				}
-				break;
+				if (!cxUrl || !threadId) return false;
+				const { pid, reattached } = spawnCxSubscriber({ ...baseEnv, sessionKey: opts.sessionKey, paneId, cxUrl, threadId, cxLastAssistantJq: CX_LAST_ASSISTANT_JQ, log });
+				ocSubscribed.set(paneId, true);
+				subscriberPid.set(paneId, pid);
+				emitSubscriberLifecycle(activity, reattached, "codex", paneId, pid);
+				return true;
 			}
+			default:
+				return false;
 		}
+	}
+
+	for (const id of innerIds) {
+		const h = paneHarness.get(id) ?? "";
+		const target = ocPaneTarget.get(id) ?? "";
+		if (h) trySpawnSubscriberForPane(id, target, h);
 	}
 
 	// Auto-detect master harness when caller didn't pass --master-harness.
@@ -282,6 +370,89 @@ export async function runLoop(opts: RunLoopOpts): Promise<void> {
 	const startEpoch = Math.floor(Date.now() / 1000);
 	const paneCache = new PaneCache();
 	void warn; void notifiedHash; void wakeEventsLog;
+
+	// vstack#68: per-pane bell-wake rate limit + non-canonical drop. The
+	// state is in-memory only (a daemon restart starts fresh, which is
+	// the right thing — the user wants to be re-notified about an unread
+	// canonical bell after a restart).
+	const bellWakeState = makeBellWakeState();
+	const bellWakeIntervalSec = bellWakeIntervalFromEnv();
+
+	// vstack#72: probe owner cgroup memory inside the heartbeat cadence.
+	// Gated by FD_HEARTBEAT_OWNER_CGROUP (default on); silent on any
+	// failure so non-Linux / no-cgroup-v2 hosts keep the existing line.
+	const ownerCgroupProbeOn = ownerCgroupProbeEnabled();
+
+	// vstack#59: reconcile tracked entries every FD_RECONCILE_INTERVAL_SEC
+	// so the daemon picks up panes added mid-session without restart.
+	const reconcileIntervalSec = Math.max(1, Math.floor(reconcileIntervalFromEnv()));
+	let lastReconcileEpoch = Math.floor(Date.now() / 1000);
+	function reconcileNow(reason: string): void {
+		const entries = listTrackedEntriesForReconcile(opts.paneRegistryBin, opts.defaultHarness);
+		const result = reconcileTrackedEntries({
+			listTrackedEntries: () => entries,
+			activePaneIds: () => innerIds.values(),
+			spawnFor: (entry) => {
+				const target = entry.adapterMeta?.ocUrl || entry.paneId; // fallback if pane-target unknown
+				const resolvedTarget = resolvePaneTargetForEntry(opts.paneRegistryBin, entry.paneId) || target;
+				const spawned = entry.harness ? trySpawnSubscriberForPane(entry.paneId, resolvedTarget, entry.harness) : false;
+				if (spawned) {
+					paneHarness.set(entry.paneId, entry.harness);
+					ocPaneTarget.set(entry.paneId, resolvedTarget);
+					innerIds.push(entry.paneId);
+					seenInner.add(entry.paneId);
+					return { spawned: true };
+				}
+				return { spawned: false, reason: entry.harness ? "no-adapter-meta" : "missing-harness" };
+			},
+			reap: (paneId) => {
+				reapSubscriberForPane(paneId, "entry-removed");
+				const idx = innerIds.indexOf(paneId);
+				if (idx >= 0) innerIds.splice(idx, 1);
+				seenInner.delete(paneId);
+				paneHarness.delete(paneId);
+				ocPaneTarget.delete(paneId);
+			},
+			log: (tag, msg) => log(tag, `${msg} reason=${reason}`),
+		});
+		return void result;
+	}
+
+	function subscriberLogFor(harness: string, paneId: string): string {
+		const safe = paneId.replace(/^%/, "");
+		switch (harness) {
+			case "opencode": return `${logFile}.oc-sub-${safe}`;
+			case "claude":   return `${logFile}.cc-sub-${safe}`;
+			case "pi":       return `${logFile}.pi-sub-${safe}`;
+			case "codex":    return `${logFile}.cx-sub-${safe}`;
+			default: return "";
+		}
+	}
+
+	function reapSubscriberForPane(paneId: string, reason: string): void {
+		const h = paneHarness.get(paneId) ?? "";
+		const pidFile = subscriberPidFor(h, paneId);
+		const pid = subscriberPid.get(paneId) ?? null;
+		reapSubscriber(
+			{
+				paneId,
+				reason,
+				pidFile,
+				logFile: subscriberLogFor(h, paneId),
+				pid,
+				harness: h || undefined,
+			},
+			{ log },
+		);
+		ocSubscribed.delete(paneId);
+		subscriberPid.delete(paneId);
+		lastActivityFlag.delete(paneId);
+		lastHash.delete(paneId);
+		hashSince.delete(paneId);
+		notifiedHash.delete(paneId);
+		lastBellHash.delete(paneId);
+		firstSeen.delete(paneId);
+	}
 
 	function subscriberPidFor(harness: string, paneId: string): string {
 		switch (harness) {
@@ -324,6 +495,13 @@ export async function runLoop(opts: RunLoopOpts): Promise<void> {
 	}
 
 	while (true) {
+		// vstack#59: reconcile tracked entries every N seconds.
+		const nowReconcile = Math.floor(Date.now() / 1000);
+		if (nowReconcile - lastReconcileEpoch >= reconcileIntervalSec) {
+			lastReconcileEpoch = nowReconcile;
+			reconcileNow("tick");
+		}
+
 		// Round-4 #9: gate heartbeat file mtime by heartbeatTicks. The
 		// log line is already gated by the same counter; doing the file
 		// touch on every tick wasted a syscall when no other change
@@ -351,6 +529,22 @@ export async function runLoop(opts: RunLoopOpts): Promise<void> {
 		if (!paneCache.alive(masterId)) {
 			log("master-gone", `master ${masterId} gone; exiting`);
 			setDaemonExitReason("master-gone");
+			// vstack#70: write a structured recovery hint before exit so
+			// operators have a clear breadcrumb. Failure must not block exit.
+			try {
+				const hint = writeRecoveryHint({
+					sessionId: opts.sessionId,
+					sessionKey: opts.sessionKey,
+					masterPaneId: masterId,
+					masterPid: resolveMasterPidSafe(masterId),
+					stateDir: opts.stateDir,
+					eventsFile,
+				});
+				if (hint.ok) log("exit", `master-gone; recovery hint at ${hint.path}`);
+				else log("exit-warn", `master-gone; recovery hint write failed (${hint.error}); expected at ${hint.path}`);
+			} catch (err) {
+				log("exit-warn", `master-gone; recovery hint write threw: ${(err as Error)?.message ?? err}; expected at ${recoveryHintPath(opts.stateDir, opts.sessionKey)}`);
+			}
 			break;
 		}
 
@@ -399,6 +593,18 @@ export async function runLoop(opts: RunLoopOpts): Promise<void> {
 			else if (evTag === BG_TASK_EXIT_CLASSIFIER_TAG) src = "pi-bg-task-exit-event";
 
 			if (isCanonicalTag(evTag)) {
+				// vstack#69: respect notifyOnExit / notifyMode on bg-task-exit
+				// events so engineer-scaffolding tasks (smoke tests, daemon
+				// mocks) don't wake master. The event row is still appended to
+				// WAKE_EVENTS_LOG by the subscriber for the dashboard.
+				if (evTag === BG_TASK_EXIT_CLASSIFIER_TAG) {
+					const bgDecision = shouldEmitBgTaskExitWake({ task: ev.task as any });
+					if (!bgDecision.emit) {
+						if (opts.verbose) log("bg-task-drop", `${evPid} reason=${bgDecision.reason}`);
+						notifiedHash.set(evPid, evHash);
+						continue;
+					}
+				}
 				let extraJson = "null";
 				if (evTag === "oc-question" || evTag === "pi-question") {
 					extraJson = JSON.stringify({ event_type: ev.event_type, request_id: ev.request_id, question: ev.question, harness: ev.harness });
@@ -433,7 +639,17 @@ export async function runLoop(opts: RunLoopOpts): Promise<void> {
 		for (const innerId of innerIds) {
 			if (!paneCache.alive(innerId)) {
 				const lastGone = lastGoneLog.get(innerId) ?? 0;
-				if (now - lastGone > 30) {
+				if (lastGone === 0) {
+					// vstack#58: first pane-gone observation reaps the orphaned
+					// subscriber so its bash sleep loop and pid/log files don't
+					// accumulate across long sessions. Subsequent ticks keep the
+					// 30s log-only cadence.
+					log("pane-gone", `${innerId} no longer exists; reaping subscriber`);
+					if (ocSubscribed.has(innerId) || subscriberPid.has(innerId)) {
+						reapSubscriberForPane(innerId, "pane-gone");
+					}
+					lastGoneLog.set(innerId, now);
+				} else if (now - lastGone > 30) {
 					log("pane-gone", `${innerId} no longer exists; skipping`);
 					lastGoneLog.set(innerId, now);
 				}
@@ -502,6 +718,25 @@ export async function runLoop(opts: RunLoopOpts): Promise<void> {
 			if (bell === 1 && lastBellHash.get(innerId) !== hash) {
 				touchOcBellMarker(innerId);
 				const tag = classifyBuffer(buf, { classifierBin: opts.classifierBin });
+				// vstack#68: filter bell wakes. Non-canonical tags drop entirely
+				// (a plain BEL with no prompt visible is terminal noise);
+				// canonical tags are rate-limited per pane to suppress storms
+				// during normal agent iteration.
+				const bellDecision = shouldEmitBellWake(bellWakeState, {
+					paneId: innerId,
+					tag,
+					isCanonical: isCanonicalTag(tag),
+					intervalSec: bellWakeIntervalSec,
+					nowSec: now,
+				});
+				if (!bellDecision.emit) {
+					if (opts.verbose) log("bell-drop", `${innerId} tag=${tag} reason=${bellDecision.reason}`);
+					lastHash.set(innerId, hash);
+					hashSince.set(innerId, now);
+					lastBellHash.set(innerId, hash);
+					if (winId) clearBellForWindow(opts.sessionId, winId);
+					continue;
+				}
 				// Round-4 #6: gate wake-reason recording on append success.
 				const appended = appendEvent({
 					paneId: innerId, hash, tag, reason: "bell",
@@ -509,6 +744,7 @@ export async function runLoop(opts: RunLoopOpts): Promise<void> {
 					sessionLock, eventsFile, wakePending, lastEventKey,
 				});
 				if (appended) {
+					recordBellWake(bellWakeState, innerId, now);
 					tickActivity.push({ classifier_tag: tag, event_type: tag, hash, harness, pane_id: innerId });
 					tickReasons.push(`bell:${innerId}:${tag}`);
 					tickPending.push({ paneId: innerId, hash, tag, isBell: true });
@@ -563,7 +799,18 @@ export async function runLoop(opts: RunLoopOpts): Promise<void> {
 			for (const id of innerIds) if (paneCache.alive(id)) alive += 1;
 			const wpState = existsSync(wakePending) ? "in-flight" : "absent";
 			const bfState = existsSync(busyFile) ? "held" : "unlocked";
-			log("heartbeat", `panes=${innerIds.length} alive=${alive} wake_pending=${wpState} busy_lock=${bfState}`);
+			let ownerMemFields = "";
+			if (ownerCgroupProbeOn) {
+				try {
+					const masterPid = resolveMasterPidSafe(masterId);
+					if (masterPid) {
+						const snapshot = probeOwnerCgroupMem(masterPid);
+						const fields = ownerMemHeartbeatFields(snapshot);
+						if (fields) ownerMemFields = ` ${fields}`;
+					}
+				} catch { /* observability-only; never block heartbeat */ }
+			}
+			log("heartbeat", `panes=${innerIds.length} alive=${alive} wake_pending=${wpState} busy_lock=${bfState}${ownerMemFields}`);
 		}
 
 		// 4) Wake delivery + post-success state updates.

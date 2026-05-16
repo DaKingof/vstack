@@ -144,11 +144,10 @@ pub fn refresh_items_in_scope(
         // Required skills: project list (if present) merged with source additions.
         let source_skills = mapping.skills_for_agent(&agent.name, &agent.role, &installed_skills);
         let project_required = project_config.agent_skills_for(&agent.name);
-        let (skill_names, added) = merge_upstream(
-            project_required.as_deref().map(|v| &v[..]),
-            &source_skills,
-            |s| s.clone(),
-        );
+        let (skill_names, added) =
+            merge_upstream(project_required.map(|v| &v[..]), &source_skills, |s| {
+                s.clone()
+            });
         if !added.is_empty() {
             project_config
                 .agent_skills
@@ -335,7 +334,11 @@ fn run_one(global: bool, verbose: bool) -> Result<()> {
             .flat_map(|dir| crate::hook::discover_hooks(&dir.join("hooks")).unwrap_or_default())
             .collect();
         let mut pruned_any = false;
-        for entry in lock.entries.values_mut().filter(|e| e.kind == ItemKind::Hook) {
+        for entry in lock
+            .entries
+            .values_mut()
+            .filter(|e| e.kind == ItemKind::Hook)
+        {
             let Some(hook) = source_hooks_for_prune.iter().find(|h| h.name == entry.name) else {
                 continue;
             };
@@ -499,13 +502,12 @@ fn run_one(global: bool, verbose: bool) -> Result<()> {
     }
     let mut changes: Vec<(ItemKind, String, String, String, String)> = Vec::new();
     for entry in lock.entries.values_mut() {
-        if resolve_single_source(&entry.source).is_none() {
-            if let Some(replacement) = &fallback_source {
-                if &entry.source != replacement {
-                    entry.source = replacement.clone();
-                    repaired_sources += 1;
-                }
-            }
+        if resolve_single_source(&entry.source).is_none()
+            && let Some(replacement) = &fallback_source
+            && &entry.source != replacement
+        {
+            entry.source = replacement.clone();
+            repaired_sources += 1;
         }
         let old_hash = entry.source_hash.clone();
         entry.installed_at = now.clone();
@@ -616,24 +618,24 @@ fn resolve_sources(lock: &config::LockFile) -> Vec<PathBuf> {
         }
         seen.insert(entry.source.clone());
 
-        if let Some(dir) = resolve_single_source(&entry.source) {
-            if !sources.contains(&dir) {
-                sources.push(dir);
-            }
+        if let Some(dir) = resolve_single_source(&entry.source)
+            && !sources.contains(&dir)
+        {
+            sources.push(dir);
         }
     }
 
     // Fallback: walk up from CWD to find a vstack source repo
-    if sources.is_empty() {
-        if let Ok(mut dir) = std::env::current_dir() {
-            loop {
-                if crate::resolve::is_vstack_source(&dir) {
-                    sources.push(dir);
-                    break;
-                }
-                if !dir.pop() {
-                    break;
-                }
+    if sources.is_empty()
+        && let Ok(mut dir) = std::env::current_dir()
+    {
+        loop {
+            if crate::resolve::is_vstack_source(&dir) {
+                sources.push(dir);
+                break;
+            }
+            if !dir.pop() {
+                break;
             }
         }
     }
@@ -643,10 +645,10 @@ fn resolve_sources(lock: &config::LockFile) -> Vec<PathBuf> {
         let reg_path = config::source_registry_path();
         if let Ok(registry) = config::SourceRegistry::load(&reg_path) {
             for entry in registry.current.iter().chain(registry.entries.iter()) {
-                if let Some(dir) = resolve_single_source(entry) {
-                    if !sources.contains(&dir) {
-                        sources.push(dir);
-                    }
+                if let Some(dir) = resolve_single_source(entry)
+                    && !sources.contains(&dir)
+                {
+                    sources.push(dir);
                 }
             }
         }

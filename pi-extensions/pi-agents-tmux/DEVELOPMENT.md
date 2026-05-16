@@ -92,6 +92,14 @@ For vstack#38, bg subagent runs detect `session_compact → agent_end{content:[]
 `cwdSnapshot` reads are bounded and read-only: each git call has a 5s timeout, uses `GIT_OPTIONAL_LOCKS=0` and `--no-optional-locks`, and must not write to the worker repo.
 The detector is mutually exclusive with the `context_length_exceeded` throw-path retry from PR #35: retry logic handles thrown overflows first, and compact-then-empty only classifies attempts that did not trigger that retry path. Retry detection only trusts error envelopes/stderr; normal tool output or assistant text that mentions `context_length_exceeded` must not trigger a retry.
 
+## Agent-end watchdog (vstack#66)
+
+Fallback for the silent-abandonment case where a child agent's turn ends — pane goes idle, transcript settles — but no `complete_subagent` outbox JSON was written. The existing child `agent_end` handler only synthesizes a needs_completion outbox when the task was inbox-delivered (`childCurrentTaskFile` is set); bridge-delivered follow-ups left the parent waiting forever.
+
+Implementation: `extensions/subagent/agent-end-watchdog.ts` exposes `createAgentEndWatchdog(deps)`. On `agent_end`, the child also scans the task registry for active (`queued`/`running`/`unknown`) records belonging to its agent and schedules a watchdog check per task. After `VSTACK_AGENT_END_WATCHDOG_GRACE_SEC` (default 10s) the watchdog confirms the outbox is still missing, the task record is still active, and the pane is `ctx.isIdle()` before writing a synthetic outbox via `O_EXCL` open at `completionPath(runtimeRoot, agent, taskId)` with `status: "needs_completion"`, `reason: "turn-ended-without-complete-subagent"`, and `synthetic: true`. Successful synthesis also calls `markTaskNeedsCompletion`, so the parent's existing wake/poll path picks the outbox up unchanged.
+
+Race safety: the default writer uses `fs.open(path, "wx")` so a real `complete_subagent` that races the watchdog always wins. Successive `agent_end` events for the same task are deduped by an in-process `fired` set; pending grace timers are deduped by a `pending` map. Failures are warn-logged, never thrown. Disable entirely with `VSTACK_AGENT_END_WATCHDOG=0`.
+
 ## Dashboard widget internals
 
 `alt+a` cycles the widget hidden → compact → expanded. `alt+shift+a` / `f3` opens the full `/agents` popup.

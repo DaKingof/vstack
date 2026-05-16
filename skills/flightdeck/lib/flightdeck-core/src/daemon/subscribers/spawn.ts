@@ -138,6 +138,8 @@ export interface SpawnPiOpts extends BaseSpawnEnv {
 	piPid: string;
 	piSocket: string;
 	piLastAssistantJq: string;
+	entryKind?: string;
+	entryHarness?: string;
 	log: (tag: string, msg: string) => void;
 }
 
@@ -151,9 +153,11 @@ export function spawnPiSubscriber(opts: SpawnPiOpts): { pid: number; reattached:
 	const env: NodeJS.ProcessEnv = {
 		...baseEnv(opts),
 		PI_LAST_ASSISTANT_JQ: opts.piLastAssistantJq,
+		FD_ENTRY_KIND: opts.entryKind ?? "",
+		FD_ENTRY_HARNESS: opts.entryHarness ?? "pi",
 	};
 	const pid = spawnSub(["pi", opts.paneId, opts.piPid, opts.piSocket, String(opts.parentPid)], env, pidFile);
-	opts.log("pi-subscriber-spawn", `pane=${opts.paneId} pid=${pid} pi_pid=${opts.piPid} socket=${opts.piSocket}`);
+	opts.log("pi-subscriber-spawn", `pane=${opts.paneId} pid=${pid} pi_pid=${opts.piPid} socket=${opts.piSocket} entry_kind=${opts.entryKind ?? "unknown"}`);
 	return { pid, reattached: false };
 }
 

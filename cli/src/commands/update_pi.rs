@@ -170,8 +170,9 @@ fn plan_for_scope(global: bool) -> Result<Vec<PlanItem>> {
     for (name, entry) in &index {
         let installed_dir = crate::config::pi_packages_dir(global).join(name);
         let installed_present = installed_set.contains(name);
-        let installed_version =
-            installed_present.then(|| read_installed_version(&installed_dir)).flatten();
+        let installed_version = installed_present
+            .then(|| read_installed_version(&installed_dir))
+            .flatten();
 
         if !installed_present {
             planned.insert(
@@ -223,8 +224,7 @@ fn plan_for_scope(global: bool) -> Result<Vec<PlanItem>> {
         }
 
         let source_path = entry.source_path.as_ref().map(PathBuf::from);
-        let (latest, _resolved_dir) =
-            read_source_version(&repo, source_path.as_deref(), name);
+        let (latest, _resolved_dir) = read_source_version(&repo, source_path.as_deref(), name);
         let status = if is_newer(latest.as_deref(), installed_version.as_deref()) {
             Status::Outdated
         } else if latest.is_some() {
@@ -276,8 +276,7 @@ fn plan_for_scope(global: bool) -> Result<Vec<PlanItem>> {
                 latest_version: None,
                 status: Status::Unknown,
                 note: Some(
-                    "no source index entry; reinstall via `vstack add` to track"
-                        .to_string(),
+                    "no source index entry; reinstall via `vstack add` to track".to_string(),
                 ),
             },
         );
@@ -337,7 +336,9 @@ fn npm_installed_version(name: &str) -> Option<String> {
 
 fn npm_root_candidates() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Ok(out) = std::process::Command::new("npm").args(["root", "-g"]).output()
+    if let Ok(out) = std::process::Command::new("npm")
+        .args(["root", "-g"])
+        .output()
         && out.status.success()
         && let Ok(s) = String::from_utf8(out.stdout)
     {
@@ -442,10 +443,7 @@ fn execute(plan: &[PlanItem]) -> Result<()> {
         let extensions = match discover_pi_extensions(&repo.join("pi-extensions")) {
             Ok(list) => list,
             Err(e) => {
-                eprintln!(
-                    "  ✗ failed to scan {} ({scope_label}): {e}",
-                    repo.display()
-                );
+                eprintln!("  ✗ failed to scan {} ({scope_label}): {e}", repo.display());
                 for name in names {
                     failed.push(format!("{name} ({scope_label})"));
                 }
@@ -490,9 +488,7 @@ fn execute(plan: &[PlanItem]) -> Result<()> {
 
     for (global, name) in &stale_clean {
         if let Err(e) = drop_stale_index_entry(name, *global) {
-            eprintln!(
-                "  ! could not drop stale index entry for {name}: {e}"
-            );
+            eprintln!("  ! could not drop stale index entry for {name}: {e}");
         } else {
             let scope_label = if *global { "global" } else { "project" };
             println!("  · cleaned stale source index entry: {name} ({scope_label})");
@@ -555,7 +551,9 @@ pub fn run(check: bool, scope: Option<String>) -> Result<()> {
             .filter(|p| matches!(p.status, Status::Outdated))
             .count();
         if outdated > 0 {
-            println!("\n{outdated} package(s) have updates available. Run without --check to apply.");
+            println!(
+                "\n{outdated} package(s) have updates available. Run without --check to apply."
+            );
         }
         return Ok(());
     }
@@ -585,7 +583,12 @@ mod tests {
         sandbox
     }
 
-    fn write_source_pkg(repo: &Path, dir_name: &str, manifest_name: &str, version: &str) -> PathBuf {
+    fn write_source_pkg(
+        repo: &Path,
+        dir_name: &str,
+        manifest_name: &str,
+        version: &str,
+    ) -> PathBuf {
         let dir = repo.join("pi-extensions").join(dir_name);
         std::fs::create_dir_all(dir.join("extensions")).unwrap();
         std::fs::write(dir.join("extensions").join("mini.ts"), "// noop\n").unwrap();
@@ -684,7 +687,9 @@ mod tests {
                 SourceIndexEntry {
                     source_repo: Some(repo.to_string_lossy().into_owned()),
                     source_path: Some(
-                        repo.join("pi-extensions/pi-foo").to_string_lossy().into_owned(),
+                        repo.join("pi-extensions/pi-foo")
+                            .to_string_lossy()
+                            .into_owned(),
                     ),
                     source_version: Some("0.1.0".into()),
                     ..Default::default()
@@ -694,7 +699,10 @@ mod tests {
 
         with_pi_dir(&pi_dir, || {
             let plan = plan_for_scope(true).unwrap();
-            let item = plan.iter().find(|p| p.name == "pi-foo").expect("foo present");
+            let item = plan
+                .iter()
+                .find(|p| p.name == "pi-foo")
+                .expect("foo present");
             assert!(matches!(item.status, Status::Outdated));
             assert_eq!(item.installed_version.as_deref(), Some("0.1.0"));
             assert_eq!(item.latest_version.as_deref(), Some("0.2.0"));
@@ -802,7 +810,10 @@ mod tests {
 
         with_pi_dir(&pi_dir, || {
             let plan = plan_for_scope(true).unwrap();
-            let item = plan.iter().find(|p| p.name == "pi-orphan").expect("present");
+            let item = plan
+                .iter()
+                .find(|p| p.name == "pi-orphan")
+                .expect("present");
             assert!(matches!(item.status, Status::Unknown));
             assert_eq!(item.installed_version.as_deref(), Some("0.1.0"));
         });
@@ -871,7 +882,7 @@ mod tests {
             let plan = plan_for_scope(true).unwrap();
             execute(&plan).unwrap();
             let idx = read_source_index(true).unwrap();
-            assert!(idx.get("pi-ghost").is_none());
+            assert!(!idx.contains_key("pi-ghost"));
         });
         std::fs::remove_dir_all(&sandbox).ok();
     }

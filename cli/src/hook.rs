@@ -262,7 +262,10 @@ echo "hello"
 echo ok
 "#;
         let meta = parse_hook_frontmatter(content).unwrap();
-        assert_eq!(meta.harnesses.as_deref(), Some(&["claude-code".to_string()][..]));
+        assert_eq!(
+            meta.harnesses.as_deref(),
+            Some(&["claude-code".to_string()][..])
+        );
     }
 
     #[test]

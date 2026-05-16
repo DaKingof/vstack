@@ -161,7 +161,8 @@ mod tests {
 
     #[test]
     fn omits_effort_when_unset() {
-        let dir = std::env::temp_dir().join(format!("vstack_codex_no_effort_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("vstack_codex_no_effort_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

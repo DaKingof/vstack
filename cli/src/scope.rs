@@ -4,7 +4,7 @@
 //! flag. The legacy `--global`/`-g` flag is kept as a shorthand for
 //! `--scope global`. When both are passed and disagree, `--scope` wins.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScopeFilter {

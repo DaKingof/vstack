@@ -208,6 +208,133 @@ fn build_source_options(
 }
 
 #[cfg(test)]
+mod auto_include_agent_skills_tests {
+    use super::*;
+    use crate::agent::{Agent, AgentRole};
+    use crate::mapping::MappingConfig;
+    use crate::skill::{Skill, SkillDep};
+    use std::path::PathBuf;
+
+    fn skill(name: &str, deps: &[&str]) -> Skill {
+        Skill {
+            name: name.to_string(),
+            description: format!("skill {name}"),
+            license: None,
+            user_invocable: None,
+            dependencies: None,
+            body: String::new(),
+            source_dir: PathBuf::from(format!("/skills/{name}")),
+            resolved_deps: deps
+                .iter()
+                .map(|d| SkillDep {
+                    name: (*d).into(),
+                    optional: false,
+                })
+                .collect(),
+        }
+    }
+
+    fn agent(name: &str, role: AgentRole) -> Agent {
+        Agent {
+            name: name.to_string(),
+            description: format!("agent {name}"),
+            model: "opus".into(),
+            role,
+            color: None,
+            effort: None,
+            body: String::new(),
+            source_path: PathBuf::from(format!("/agents/{name}.md")),
+        }
+    }
+
+    #[test]
+    fn auto_includes_role_skills_referenced_by_agent_role() {
+        // vstack#71 repro: reviewer-error declares engineer role and
+        // [role-skills] engineer = ["issue-lifecycle", "github"]. Without
+        // explicit --skill flags the agent's frontmatter still references
+        // issue-lifecycle, but the skill never lands on disk.
+        let mut mapping = MappingConfig::default();
+        mapping.role_skills.insert(
+            "engineer".into(),
+            vec!["issue-lifecycle".into(), "github".into()],
+        );
+        let all = vec![skill("issue-lifecycle", &[]), skill("github", &[])];
+        let agents = vec![agent("reviewer-error", AgentRole::Engineer)];
+        let mut selected = Vec::<Skill>::new();
+        let added = auto_include_agent_skills(&agents, &mapping, &all, &mut selected);
+        assert_eq!(
+            added,
+            vec!["github".to_string(), "issue-lifecycle".to_string()]
+        );
+        let names: Vec<&str> = selected.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"issue-lifecycle"));
+        assert!(names.contains(&"github"));
+    }
+
+    #[test]
+    fn already_selected_skills_are_not_duplicated() {
+        let mut mapping = MappingConfig::default();
+        mapping
+            .role_skills
+            .insert("engineer".into(), vec!["issue-lifecycle".into()]);
+        let all = vec![skill("issue-lifecycle", &[])];
+        let agents = vec![agent("rust", AgentRole::Engineer)];
+        let mut selected = vec![skill("issue-lifecycle", &[])];
+        let added = auto_include_agent_skills(&agents, &mapping, &all, &mut selected);
+        assert!(added.is_empty());
+        assert_eq!(selected.len(), 1);
+    }
+
+    #[test]
+    fn transitive_required_dependencies_are_pulled_in() {
+        // orchestration -> issue-lifecycle (required dep). Agent only references
+        // orchestration; auto-include must transitively pull in issue-lifecycle.
+        let mut mapping = MappingConfig::default();
+        mapping
+            .role_skills
+            .insert("engineer".into(), vec!["orchestration".into()]);
+        let all = vec![
+            skill("orchestration", &["issue-lifecycle"]),
+            skill("issue-lifecycle", &[]),
+        ];
+        let agents = vec![agent("planner", AgentRole::Engineer)];
+        let mut selected = Vec::<Skill>::new();
+        let added = auto_include_agent_skills(&agents, &mapping, &all, &mut selected);
+        assert!(added.contains(&"orchestration".into()));
+        assert!(added.contains(&"issue-lifecycle".into()));
+    }
+
+    #[test]
+    fn unknown_skill_in_role_mapping_is_silently_skipped() {
+        // Mapping references a skill that does not exist in canonical source;
+        // skills_for_agent already filters those out, so no panic / no add.
+        let mut mapping = MappingConfig::default();
+        mapping
+            .role_skills
+            .insert("engineer".into(), vec!["does-not-exist".into()]);
+        let all = vec![skill("github", &[])];
+        let agents = vec![agent("rust", AgentRole::Engineer)];
+        let mut selected = Vec::<Skill>::new();
+        let added = auto_include_agent_skills(&agents, &mapping, &all, &mut selected);
+        assert!(added.is_empty());
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn no_agents_selected_is_a_no_op() {
+        let mut mapping = MappingConfig::default();
+        mapping
+            .role_skills
+            .insert("engineer".into(), vec!["issue-lifecycle".into()]);
+        let all = vec![skill("issue-lifecycle", &[])];
+        let mut selected = Vec::<Skill>::new();
+        let added = auto_include_agent_skills(&[], &mapping, &all, &mut selected);
+        assert!(added.is_empty());
+        assert!(selected.is_empty());
+    }
+}
+
+#[cfg(test)]
 mod source_option_tests {
     use super::*;
 
@@ -275,6 +402,53 @@ mod source_option_tests {
     }
 }
 
+/// vstack#71: walk each agent's [agent-skills] + [role-skills] + transitive
+/// required dependencies; push any missing canonical skills into
+/// `selected_skills` so they get installed alongside the agents. Returns the
+/// sorted list of names that were added (empty if nothing changed).
+pub fn auto_include_agent_skills(
+    selected_agents: &[crate::agent::Agent],
+    mapping: &crate::mapping::MappingConfig,
+    all_skills: &[crate::skill::Skill],
+    selected_skills: &mut Vec<crate::skill::Skill>,
+) -> Vec<String> {
+    let all_skill_names: Vec<String> = all_skills.iter().map(|s| s.name.clone()).collect();
+    let dep_graph = skill::build_dependency_graph(all_skills);
+    let mut required: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for agent in selected_agents {
+        for skill_name in mapping.skills_for_agent(&agent.name, &agent.role, &all_skill_names) {
+            required.insert(skill_name);
+        }
+    }
+    let already_selected: std::collections::HashSet<String> =
+        selected_skills.iter().map(|s| s.name.clone()).collect();
+    let seeds: Vec<String> = required
+        .iter()
+        .filter(|name| !already_selected.contains(*name))
+        .cloned()
+        .collect();
+    if seeds.is_empty() {
+        return Vec::new();
+    }
+    let (expanded, _auto_deps) = skill::expand_dependencies(&seeds, &dep_graph);
+    let mut added: Vec<String> = Vec::new();
+    for skill_name in expanded {
+        if already_selected.contains(&skill_name) {
+            continue;
+        }
+        if selected_skills.iter().any(|s| s.name == skill_name) {
+            continue;
+        }
+        if let Some(skill) = all_skills.iter().find(|s| s.name == skill_name) {
+            selected_skills.push(skill.clone());
+            added.push(skill_name);
+        }
+    }
+    added.sort();
+    added.dedup();
+    added
+}
+
 fn resolve_source_for_app(
     source: Option<&str>,
     registry: &config::SourceRegistry,
@@ -300,29 +474,29 @@ fn resolve_source_for_app(
             // Prefer the source selected for THIS project. Source selection is
             // intentionally project-scoped: choosing a repo while working in
             // one project must not silently change the source used by another.
-            if let Some(current) = registry.current_for_project(project_root) {
-                if let Ok(dir) = resolve_source(Some(current)) {
-                    return Ok(ResolvedSource {
-                        source: current.to_string(),
-                        label: source_label(current),
-                        dir,
-                        persist: true,
-                    });
-                }
+            if let Some(current) = registry.current_for_project(project_root)
+                && let Ok(dir) = resolve_source(Some(current))
+            {
+                return Ok(ResolvedSource {
+                    source: current.to_string(),
+                    label: source_label(current),
+                    dir,
+                    persist: true,
+                });
             }
 
             // Existing projects already record installed item sources in the
             // lock file. Use that before any global/default source so a
             // project's repo choice remains stable across invocations.
-            if let Some(current) = source_from_project_lock(project_root) {
-                if let Ok(dir) = resolve_source(Some(&current)) {
-                    return Ok(ResolvedSource {
-                        label: source_label(&current),
-                        source: current,
-                        dir,
-                        persist: true,
-                    });
-                }
+            if let Some(current) = source_from_project_lock(project_root)
+                && let Ok(dir) = resolve_source(Some(&current))
+            {
+                return Ok(ResolvedSource {
+                    label: source_label(&current),
+                    source: current,
+                    dir,
+                    persist: true,
+                });
             }
 
             // Fallback: walk up from CWD looking for a vstack source
@@ -365,6 +539,7 @@ pub fn run(
     yes: bool,
     all: bool,
     clobber: bool,
+    no_auto_skills: bool,
 ) -> Result<()> {
     // Non-interactive global guard: `--global -y` (or `--global --harness ...
     // -y`) without an item filter would install the entire source catalog
@@ -456,7 +631,7 @@ source (e.g. switching vstack repos, or starting clean), pass --clobber:
     let (
         resolved_source,
         selected_agents,
-        selected_skills,
+        mut selected_skills,
         selected_hooks,
         selected_pi_extensions,
         harnesses,
@@ -669,6 +844,27 @@ source (e.g. switching vstack repos, or starting clean), pass --clobber:
 
     let source_dir = resolved_source.dir.clone();
     let mapping = crate::mapping::MappingConfig::load(&source_dir);
+
+    // vstack#71: auto-install skills referenced by selected agents.
+    // Without this, `vstack add --agent reviewer-error` produces a
+    // .agents/reviewer-error.md whose `skills:` frontmatter points at
+    // skills/issue-lifecycle/SKILL.md that was never copied to the
+    // install mirror. Walk each agent's mapping-resolved skill set
+    // (agent-skills + role-skills + prefix matches) plus transitive
+    // dependencies and add any missing canonical skills.
+    if !no_auto_skills && !selected_agents.is_empty() {
+        let skills_source_dir = source_dir.join("skills");
+        let all_skills = skill::discover_skills(&skills_source_dir).unwrap_or_default();
+        let added = auto_include_agent_skills(
+            &selected_agents,
+            &mapping,
+            &all_skills,
+            &mut selected_skills,
+        );
+        if !added.is_empty() {
+            eprintln!("Auto-installed dependent skills: {}", added.join(", "));
+        }
+    }
 
     // Whether we should write/update the project-level vstack.toml.
     // Suppress when:
@@ -1057,6 +1253,7 @@ source (e.g. switching vstack repos, or starting clean), pass --clobber:
                 yes,
                 all,
                 clobber,
+                no_auto_skills,
             );
         }
     } else {
@@ -1292,19 +1489,19 @@ fn reconcile_agents(
             .collect();
 
         for harness_id in &entry.harnesses {
-            if let Some(harness) = Harness::from_id(harness_id) {
-                if harnesses.contains(&harness) {
-                    let existing_path = harness
-                        .agents_dir(global)
-                        .join(harness.agent_filename(&agent.name));
-                    let file_extras = crate::resolve::read_existing_extras(&existing_path, harness);
-                    if writes_project_config {
-                        project_config.save_extracted(
-                            &config::project_root(),
-                            &agent.name,
-                            &file_extras,
-                        );
-                    }
+            if let Some(harness) = Harness::from_id(harness_id)
+                && harnesses.contains(&harness)
+            {
+                let existing_path = harness
+                    .agents_dir(global)
+                    .join(harness.agent_filename(&agent.name));
+                let file_extras = crate::resolve::read_existing_extras(&existing_path, harness);
+                if writes_project_config {
+                    project_config.save_extracted(
+                        &config::project_root(),
+                        &agent.name,
+                        &file_extras,
+                    );
                 }
             }
         }

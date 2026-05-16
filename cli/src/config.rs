@@ -567,10 +567,15 @@ fn hash_file_bytes(path: &Path) -> u64 {
 /// Compute a content hash for a directory (all files, sorted by relative path).
 fn hash_dir_bytes(dir: &Path) -> u64 {
     let mut state = FNV_OFFSET;
-    let mut walker = walkdir::WalkDir::new(dir).min_depth(1).sort_by_file_name().into_iter();
+    let mut walker = walkdir::WalkDir::new(dir)
+        .min_depth(1)
+        .sort_by_file_name()
+        .into_iter();
     while let Some(entry) = walker.next() {
         let Ok(entry) = entry else { continue };
-        if entry.file_type().is_dir() && should_skip_hash_dir(entry.file_name().to_string_lossy().as_ref()) {
+        if entry.file_type().is_dir()
+            && should_skip_hash_dir(entry.file_name().to_string_lossy().as_ref())
+        {
             walker.skip_current_dir();
             continue;
         }
@@ -863,13 +868,13 @@ pub fn scan_installed_skills_on_disk(global: bool) -> Vec<DiskItem> {
             if !path.join(".vstack-refreshed").exists() {
                 continue;
             }
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if seen.insert(name.to_string()) {
-                    items.push(DiskItem {
-                        name: name.to_string(),
-                        kind: ItemKind::Skill,
-                    });
-                }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && seen.insert(name.to_string())
+            {
+                items.push(DiskItem {
+                    name: name.to_string(),
+                    kind: ItemKind::Skill,
+                });
             }
         }
     }
@@ -878,9 +883,11 @@ pub fn scan_installed_skills_on_disk(global: bool) -> Vec<DiskItem> {
 }
 
 /// Reconcile the lock file with what's actually on disk.
-/// - Items on disk (with .vstack-refreshed marker) but missing from lock → re-add
-/// - Items in lock but missing from disk → remove from lock
-/// Returns true if the lock was modified.
+///
+/// - Items on disk (with `.vstack-refreshed` marker) but missing from lock are
+///   re-added.
+/// - Items in lock but missing from disk are removed from lock.
+/// - Returns true if the lock was modified.
 pub fn reconcile_lock_with_disk(lock: &mut LockFile, global: bool, source: &str) -> bool {
     let mut modified = false;
 
@@ -1395,11 +1402,8 @@ mod source_registry_tests {
                 version: 1,
                 ..Default::default()
             };
-            let modified = reconcile_lock_with_disk(
-                &mut lock,
-                true,
-                &source_repo.display().to_string(),
-            );
+            let modified =
+                reconcile_lock_with_disk(&mut lock, true, &source_repo.display().to_string());
             let recovered = lock.entries.get("@vanillagreen/pi-foo").cloned();
             (modified, recovered)
         });

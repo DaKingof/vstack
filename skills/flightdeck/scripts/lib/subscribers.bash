@@ -459,6 +459,40 @@ pi_subscriber_loop() {
                >> "$WAKE_EVENTS_LOG"
       )
       last_hash="$hash"
+
+      # vstack#61: adhoc Pi panes have no issue-mode prompt tags master
+      # can read; emit terminal-state-reached on isIdle:false->true
+      # transitions so session-watch advances waiting -> complete.
+      # Mirror of src/daemon/pi-adhoc-wake.ts decidePiAdhocWake() +
+      # src/classifier/pi-bridge-state.ts classifyPiBridgeState(): the
+      # canonical TS function is the source of truth, this bash check
+      # must stay in lock step.
+      if [[ "${FD_ENTRY_KIND:-}" == "adhoc" ]]; then
+        local pi_state_json terminal_idle term_hash
+        pi_state_json=$("$pi_bin" state "${pi_target_args[@]}" 2>/dev/null || true)
+        if [[ -n "$pi_state_json" ]]; then
+          terminal_idle=$(jq -r '(.isIdle == true) and ((.hasPendingMessages // false) == false)' <<< "$pi_state_json" 2>/dev/null)
+          if [[ "$terminal_idle" == "true" ]]; then
+            term_hash=$(printf '%s|adhoc-pi-idle|%s' "$pane_id" "$hash" | sha256sum | awk '{print substr($1,1,12)}')
+            if [[ "${last_terminal_hash:-}" != "$term_hash" ]]; then
+              last_terminal_hash="$term_hash"
+              printf '%s [pi-sub-adhoc-terminal] pane=%s hash=%s\n' \
+                "$(date -Iseconds)" "$pane_id" "$term_hash" \
+                >> "$sub_log" 2>/dev/null || true
+              ( exec 218>"$SESSION_LOCK"
+                flock 218
+                jq -nc --arg ts "$(date -Iseconds)" \
+                       --arg pid "$pane_id" \
+                       --arg harness "pi" \
+                       --arg tag "terminal-state-reached" \
+                       --arg h "$term_hash" \
+                       '{ts:$ts, pane_id:$pid, harness:$harness, last_assistant_text:"", classifier_tag:$tag, hash:$h}' \
+                       >> "$WAKE_EVENTS_LOG"
+              )
+            fi
+          fi
+        fi
+      fi
     done
 }
 

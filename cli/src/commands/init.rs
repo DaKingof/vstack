@@ -5,7 +5,7 @@
 //! become) a vstack source repo. End users iterating in their own project
 //! don't need this — they consume packages, they don't author them.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
