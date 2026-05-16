@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
 use crate::activity::format::{event_chip_for, severity_label};
-use crate::activity::{ActivityEvent, Importance, Severity};
+use crate::activity::{ActivityEvent, Severity};
 use crate::app::hitmap::{ClickAction, HitMap, ScrollSource};
 use crate::app::model::Model;
 use crate::app::motion::{Effect, EffectKind, EffectTarget};
@@ -129,12 +129,7 @@ fn row_for_event<'a>(event: &ActivityEvent, idx: usize, model: &Model, theme: &P
         .to_string();
     let type_style = if flash { theme.error() } else { theme.info() };
     let status_style = severity_style(event.severity, theme);
-    let importance = match event.importance {
-        Importance::Critical => "!!",
-        Importance::Important => "!",
-        Importance::Normal => "",
-        Importance::Noisy => "·",
-    };
+    let severity_icon = severity_icon(event.severity);
     Row::new(vec![
         Cell::from(time),
         Cell::from(event.session_label().to_owned()),
@@ -142,8 +137,8 @@ fn row_for_event<'a>(event: &ActivityEvent, idx: usize, model: &Model, theme: &P
         Cell::from(Span::styled(severity_label(event.severity), status_style)),
         Cell::from(Line::from(vec![
             Span::styled(accent.to_owned(), theme.info()),
-            Span::styled(importance.to_owned(), status_style),
-            Span::raw(if importance.is_empty() { "" } else { " " }),
+            Span::styled(severity_icon.to_owned(), status_style),
+            Span::raw(if severity_icon.is_empty() { "" } else { " " }),
             Span::raw(event.summary.clone()),
         ])),
     ])
@@ -178,6 +173,14 @@ pub(crate) fn severity_style(severity: Severity, theme: &Palette) -> Style {
         Severity::Success => theme.ok(),
         Severity::Warning => theme.warning(),
         Severity::Error => theme.error(),
+    }
+}
+
+pub(crate) fn severity_icon(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Debug | Severity::Info | Severity::Success => "",
+        Severity::Warning => "!",
+        Severity::Error => "✗",
     }
 }
 

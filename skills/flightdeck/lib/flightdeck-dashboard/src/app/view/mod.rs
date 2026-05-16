@@ -23,6 +23,16 @@ use crate::cost::{format_cost, format_summary};
 use crate::state::snapshot::Staleness;
 
 const HEADER_COMPACT_WIDTH: u16 = 200;
+const HEADER_OBSERVER_MIN_WIDTH: u16 = 120;
+const HEADER_COST_MIN_WIDTH: u16 = 100;
+
+struct OptionalChip {
+    separator: &'static str,
+    text: String,
+    compact: Option<String>,
+    style: ratatui::style::Style,
+    priority: u8,
+}
 
 pub fn render(frame: &mut Frame<'_>, model: &Model) {
     let mut hitmap = HitMap::default();
@@ -106,70 +116,139 @@ fn render_status(
     let daemon = daemon_label(model, compact).to_owned();
     let kind_counts = kind_counts_label(model);
     let staleness = staleness_label(snapshot.staleness(model.now));
+    let compact_cost_chip = format!(
+        "{} · {}t",
+        format_cost(model.cost_totals.grand.cost_usd),
+        model.cost_totals.grand.turns
+    );
     let cost_chip = if compact {
-        format!(
-            "{}/{}T",
-            format_cost(model.cost_totals.grand.cost_usd),
-            model.cost_totals.grand.turns
-        )
+        compact_cost_chip.clone()
     } else {
         format_summary(&model.cost_totals.grand)
     };
     let theme_chip = format!("{} ▾", model.theme.as_str());
 
-    let mut spans = vec![
+    let base_spans: Vec<Span<'static>> = vec![
         Span::styled(" Flightdeck ", theme.title()),
         Span::raw("  "),
         Span::styled("session ", theme.status_label()),
-        Span::raw(snapshot.session_id.as_str()),
+        Span::raw(snapshot.session_id.clone()),
         Span::raw("  ·  "),
         Span::raw(owner),
         Span::raw("  ·  "),
-        Span::styled(daemon.as_str().to_owned(), theme.muted()),
+        Span::styled(daemon.clone(), theme.muted()),
         Span::raw("  ·  "),
         Span::styled("uptime ", theme.status_label()),
         Span::raw(elapsed),
         Span::raw("  ·  "),
         Span::styled(kind_counts, theme.info()),
-        Span::raw("  ·  "),
-        Span::styled(staleness, theme.muted()),
     ];
+
+    let mut chips: Vec<OptionalChip> = Vec::new();
+    if !snapshot.terminated {
+        chips.push(OptionalChip {
+            separator: "  ·  ",
+            text: staleness,
+            compact: None,
+            style: theme.muted(),
+            priority: 30,
+        });
+    }
     if snapshot.terminated {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled("✔ session complete", theme.ok()));
+        chips.push(OptionalChip {
+            separator: "  ",
+            text: String::from("✔ session complete"),
+            compact: None,
+            style: theme.ok(),
+            priority: 95,
+        });
     }
-    if model.is_observer() {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled("observer", theme.warning()));
+    if model.is_observer() && area.width >= HEADER_OBSERVER_MIN_WIDTH {
+        chips.push(OptionalChip {
+            separator: "  ",
+            text: String::from("observer"),
+            compact: None,
+            style: theme.warning(),
+            priority: 20,
+        });
     }
-    spans.push(Span::raw("  "));
-    spans.push(Span::styled(cost_chip.clone(), theme.info()));
+    if area.width >= HEADER_COST_MIN_WIDTH {
+        let cost_compact = if cost_chip == compact_cost_chip {
+            None
+        } else {
+            Some(compact_cost_chip.clone())
+        };
+        chips.push(OptionalChip {
+            separator: "  ",
+            text: cost_chip.clone(),
+            compact: cost_compact,
+            style: theme.info(),
+            priority: 90,
+        });
+    }
     if model.cost_totals.unhealthy_sources > 0 {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!(
+        chips.push(OptionalChip {
+            separator: "  ",
+            text: format!(
                 "{} cost source unhealthy",
                 model.cost_totals.unhealthy_sources
             ),
-            theme.warning(),
-        ));
+            compact: None,
+            style: theme.warning(),
+            priority: 10,
+        });
     }
     if let Some(status) = &model.status_message {
-        spans.push(Span::raw("  "));
         let style = if status.success {
             theme.ok()
         } else {
             theme.warning()
         };
-        spans.push(Span::styled(status.message.clone(), style));
+        chips.push(OptionalChip {
+            separator: "  ",
+            text: status.message.clone(),
+            compact: None,
+            style,
+            priority: 70,
+        });
     }
     if let Some(error) = &model.error {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(format!("ERR {error}"), theme.error()));
+        chips.push(OptionalChip {
+            separator: "  ",
+            text: format!("ERR {error}"),
+            compact: None,
+            style: theme.error(),
+            priority: 100,
+        });
     }
 
     let inner_x = area.x.saturating_add(1);
     let inner_y = area.y.saturating_add(1);
+    let theme_width = u16::try_from(theme_chip.chars().count()).unwrap_or(u16::MAX);
+    let theme_rect = Rect::new(
+        area.x
+            .saturating_add(area.width.saturating_sub(theme_width.saturating_add(2))),
+        inner_y,
+        theme_width.min(area.width),
+        1,
+    );
+    hitmap.push(theme_rect, ClickAction::OpenThemePicker, 1);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.border_active())
+        .style(theme.panel())
+        .title(Span::styled(" Flightdeck ", theme.title()));
+    let status_area = block.inner(area);
+    let status_width = theme_rect
+        .x
+        .saturating_sub(status_area.x)
+        .saturating_sub(1)
+        .min(status_area.width);
+    let status_rect = Rect::new(status_area.x, status_area.y, status_width, 1);
+
+    let spans = assemble_header_spans(base_spans, chips, status_width);
+
     if let Some(daemon_x) = header_chip_x(&spans, &daemon) {
         hitmap.push(
             Rect::new(
@@ -194,28 +273,7 @@ fn render_status(
             1,
         );
     }
-    let theme_width = u16::try_from(theme_chip.chars().count()).unwrap_or(u16::MAX);
-    let theme_rect = Rect::new(
-        area.x
-            .saturating_add(area.width.saturating_sub(theme_width.saturating_add(2))),
-        inner_y,
-        theme_width.min(area.width),
-        1,
-    );
-    hitmap.push(theme_rect, ClickAction::OpenThemePicker, 1);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme.border_active())
-        .style(theme.panel())
-        .title(Span::styled(" Flightdeck ", theme.title()));
-    let status_area = block.inner(area);
-    let status_width = theme_rect
-        .x
-        .saturating_sub(status_area.x)
-        .saturating_sub(1)
-        .min(status_area.width);
-    let status_rect = Rect::new(status_area.x, status_area.y, status_width, 1);
     frame.render_widget(block, area);
     if status_rect.width > 0 {
         frame.render_widget(
@@ -411,6 +469,57 @@ fn staleness_label(staleness: Staleness) -> String {
         Staleness::WarnAfter(age) => format!("{} old", duration_label(age)),
         Staleness::StaleAfter(age) => format!("{} old · stale", duration_label(age)),
     }
+}
+
+fn assemble_header_spans(
+    base_spans: Vec<Span<'static>>,
+    mut chips: Vec<OptionalChip>,
+    status_width: u16,
+) -> Vec<Span<'static>> {
+    let available = status_width as usize;
+    let base_width: usize = base_spans
+        .iter()
+        .map(|span| span.content.chars().count())
+        .sum();
+    let mut kept: Vec<bool> = vec![true; chips.len()];
+    let total = |chips: &[OptionalChip], kept: &[bool]| -> usize {
+        base_width
+            + chips
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| kept[*idx])
+                .map(|(_, chip)| chip.separator.chars().count() + chip.text.chars().count())
+                .sum::<usize>()
+    };
+    for idx in 0..chips.len() {
+        if total(&chips, &kept) <= available {
+            break;
+        }
+        if let Some(compact) = chips[idx].compact.take() {
+            chips[idx].text = compact;
+        }
+    }
+    while total(&chips, &kept) > available {
+        let candidate = chips
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| kept[*idx])
+            .min_by_key(|(_, chip)| chip.priority)
+            .map(|(idx, _)| idx);
+        match candidate {
+            Some(idx) => kept[idx] = false,
+            None => break,
+        }
+    }
+    let mut spans = base_spans;
+    for (idx, chip) in chips.into_iter().enumerate() {
+        if !kept[idx] {
+            continue;
+        }
+        spans.push(Span::raw(chip.separator));
+        spans.push(Span::styled(chip.text, chip.style));
+    }
+    spans
 }
 
 fn header_chip_x(spans: &[Span<'_>], needle: &str) -> Option<u16> {

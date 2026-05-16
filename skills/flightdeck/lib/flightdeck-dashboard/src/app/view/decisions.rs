@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use ratatui::layout::{Alignment, Constraint, Rect};
-use ratatui::text::{Line, Span};
+use ratatui::text::Span;
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
@@ -73,10 +73,7 @@ pub fn render(
         .borders(Borders::ALL)
         .border_style(theme.border_active())
         .style(theme.panel())
-        .title(Line::from(vec![
-            Span::styled(" decisions ", theme.title()),
-            Span::styled("Enter opens answer detail", theme.muted()),
-        ]));
+        .title(Span::styled(" Decisions ", theme.title()));
     hitmap.push(area, ClickAction::ScrollDown(ScrollSource::Decisions), 0);
     for idx in 0..rows.len() {
         hitmap.push(

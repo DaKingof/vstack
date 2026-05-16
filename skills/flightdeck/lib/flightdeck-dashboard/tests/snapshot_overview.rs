@@ -92,6 +92,27 @@ fn terminated_fixture_overview() {
 }
 
 #[test]
+fn terminated_header_drops_chips_at_160_cols() {
+    let mut model = common::model_for_fixture("terminated", MotionLevel::Off);
+    model.cost_totals.unhealthy_sources = 1;
+    let rendered = common::render_model_with_size(&model, 160, common::SNAPSHOT_HEIGHT);
+    let header_line = rendered.lines().nth(1).unwrap_or("");
+    assert!(
+        !header_line.contains("old"),
+        "staleness chip should drop in terminated state: {header_line}"
+    );
+    assert!(
+        header_line.contains("✔ session complete"),
+        "✔ session complete chip must remain: {header_line}"
+    );
+    assert!(
+        !header_line.contains("1 cost source") || header_line.contains("1 cost source unhealthy"),
+        "cost-source-health chip must drop whole rather than truncate: {header_line}"
+    );
+    insta::assert_snapshot!("overview_terminated_160_cols", rendered);
+}
+
+#[test]
 fn paused_fixture_overview() {
     insta::assert_snapshot!("overview_paused", render_fixture("paused"));
 }

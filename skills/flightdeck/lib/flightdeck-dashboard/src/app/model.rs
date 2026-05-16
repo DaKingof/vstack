@@ -54,7 +54,7 @@ impl Tab {
             Self::Overview => "Overview",
             Self::Activity => "Activity",
             Self::Conversations => "Conversations",
-            Self::Merges => "Conflicts & merges",
+            Self::Merges => "Merges",
             Self::Decisions => "Decisions",
             Self::Costs => "Costs",
             Self::Daemon => "Daemon",
@@ -63,10 +63,7 @@ impl Tab {
 
     #[must_use]
     pub const fn issue_mode_label(self) -> &'static str {
-        match self {
-            Self::Merges => "Conflicts & merges (issue mode)",
-            _ => self.label(),
-        }
+        self.label()
     }
 
     #[must_use]
