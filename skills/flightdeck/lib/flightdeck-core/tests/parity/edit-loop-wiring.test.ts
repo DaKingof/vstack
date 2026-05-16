@@ -6,6 +6,7 @@
 // src/daemon/edit-loop-detector.ts (CLAUDE.md parity rule).
 
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,11 +44,13 @@ describe("edit-loop wiring: bash subscriber mirror (vstack#67)", () => {
 		expect(bashSrc).toMatch(new RegExp(`VSTACK_EDIT_LOOP_WINDOW_SEC:-${EDIT_LOOP_DEFAULT_WINDOW_SEC}`));
 	});
 
-	test("bash event filter matches tool_execution_end + toolName=edit + error", () => {
+	test("bash event filter matches tool_execution_end + toolName=edit + isError", () => {
+		// Round-2 fix: match upstream ToolExecutionEndEvent shape
+		// (.data.isError) instead of the prior guesses.
 		expect(bashSrc).toMatch(/event == "tool_execution_end"/);
 		expect(bashSrc).toMatch(/== "edit"/);
-		expect(bashSrc).toMatch(/data\.error/);
-		expect(bashSrc).toMatch(/data\.success/);
+		expect(bashSrc).toMatch(/\.data\.isError == true/);
+		expect(bashSrc).toMatch(/\.data\.toolName/);
 	});
 
 	test("bash emits classifier_tag=pi-edit-tool-loop with consecutive_failures + window_sec details", () => {
@@ -110,5 +113,63 @@ describe("edit-loop wiring: 5-in-window scenario (vstack#67)", () => {
 		}
 		decisions.push(evaluateEditLoop(state, { paneId: "%9", toolName: "edit", timestampMs: 200_000 }));
 		expect(decisions.every((d) => d === "track")).toBe(true);
+	});
+});
+
+// Round-2 fix (reviewer-error blocker): the prior jq filter guessed at
+// .data.error / .data.result.error / .data.success but pi-coding-agent's
+// real ToolExecutionEndEvent (dist/core/extensions/types.d.ts) exposes
+// the error flag at .data.isError. The next two tests pipe a synthetic
+// upstream payload through the exact same jq selector the subscriber
+// uses so the filter never drifts from the real event shape.
+const SELECT_FILTER = `
+select(
+  (.type == "event" and .event == "tool_execution_end" and ((.data.toolName // "") == "edit") and (.data.isError == true))
+)
+`;
+
+function jqMatches(filter: string, payload: unknown): boolean {
+	const r = spawnSync("jq", ["-c", filter], { encoding: "utf8", input: JSON.stringify(payload) });
+	if (r.status !== 0) return false;
+	return (r.stdout ?? "").trim().length > 0;
+}
+
+describe("edit-loop wiring: jq filter parity against real upstream event shape (vstack#67 blocker)", () => {
+	const editError = {
+		type: "event",
+		event: "tool_execution_end",
+		data: {
+			type: "tool_execution_end",
+			toolCallId: "call-1",
+			toolName: "edit",
+			isError: true,
+			result: { content: [{ type: "text", text: 'Validation failed for tool "edit":' }] },
+		},
+	};
+
+	test("matches real ToolExecutionEndEvent with isError:true and toolName:edit", () => {
+		expect(jqMatches(SELECT_FILTER, editError)).toBe(true);
+	});
+
+	test("does NOT match when isError is false (successful edit)", () => {
+		const ok = { ...editError, data: { ...editError.data, isError: false, result: { ok: true } } };
+		expect(jqMatches(SELECT_FILTER, ok)).toBe(false);
+	});
+
+	test("does NOT match a different tool with isError:true (only edit triggers loop)", () => {
+		const other = { ...editError, data: { ...editError.data, toolName: "bash" } };
+		expect(jqMatches(SELECT_FILTER, other)).toBe(false);
+	});
+
+	test("does NOT match when isError is missing entirely (legacy event)", () => {
+		const legacy = { type: "event", event: "tool_execution_end", data: { toolName: "edit" } };
+		expect(jqMatches(SELECT_FILTER, legacy)).toBe(false);
+	});
+
+	test("bash subscriber jq selector uses the same .data.isError shape", () => {
+		expect(bashSrc).toMatch(/\.data\.isError == true/);
+		expect(bashSrc).toMatch(/\.data\.toolName/);
+		// And no longer carries the wrong-field guesses.
+		expect(bashSrc).not.toMatch(/\.data\.error \/\/ \.data\.result\.error \/\/ \.data\.success/);
 	});
 });

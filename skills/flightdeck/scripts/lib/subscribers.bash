@@ -310,7 +310,7 @@ pi_subscriber_loop() {
         or
         (.type == "event" and .event == "message_end" and ((.data.message.customType // "") == "vstack-background-tasks:event"))
         or
-        (.type == "event" and .event == "tool_execution_end" and ((.data.toolName // .data.tool_name // .data.name // "") == "edit") and ((.data.error // .data.result.error // .data.success // null) | tostring | test("true|false|null"; "i") | not or (((.data.error // .data.result.error // null) != null) or ((.data.success // true) == false))))
+        (.type == "event" and .event == "tool_execution_end" and ((.data.toolName // "") == "edit") and (.data.isError == true))
         or
         (.type == "event" and .data.message.role == "assistant" and (.data.message.stopReason // "") != "")
       )' \
@@ -336,9 +336,14 @@ pi_subscriber_loop() {
       # src/daemon/edit-loop-detector.ts. On fire, emits a wake-event row
       # with classifier_tag=pi-edit-tool-loop so the daemon wakes master.
       if [[ "$event_name" == "tool_execution_end" && "$edit_loop_enabled" == "1" && "$edit_loop_fired" == "0" ]]; then
+        # vstack#67 wiring fix: upstream ToolExecutionEndEvent exposes
+        # error state via .data.isError (boolean) and tool name via
+        # .data.toolName. Earlier filters guessed at .data.error /
+        # .data.success / .data.result.error which never match the real
+        # event shape (pi-coding-agent dist/core/extensions/types.d.ts).
         local tool_name tool_error
-        tool_name=$(jq -r '.data.toolName // .data.tool_name // .data.name // ""' <<< "$line" 2>/dev/null)
-        tool_error=$(jq -r '((.data.error // .data.result.error // null) != null) or ((.data.success // true) == false)' <<< "$line" 2>/dev/null)
+        tool_name=$(jq -r '.data.toolName // ""' <<< "$line" 2>/dev/null)
+        tool_error=$(jq -r '.data.isError == true' <<< "$line" 2>/dev/null)
         if [[ "$tool_name" == "edit" && "$tool_error" == "true" ]]; then
           local edit_now edit_cutoff edit_count edit_fire edit_oldest
           edit_now=$(date +%s)
