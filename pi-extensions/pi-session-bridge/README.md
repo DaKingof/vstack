@@ -8,6 +8,7 @@ Control a running Pi session from outside the TUI. The interactive Pi terminal s
 
 - External clients send prompts, steering, follow-ups, and aborts over a structured socket; plain text and expanded skills avoid tmux key injection, while extension/TUI slash commands use a guarded own-pane tmux route.
 - Subscribe to live Pi events (messages, tool calls, agent end) without scraping panes.
+- Activity broker at `Symbol.for("vstack.pi.activity")` lets local extensions publish structured `vstack_activity` events to the bridge stream without chat noise.
 - Discover active Pi sessions through registry files; target by pid, cwd, session, or name.
 - `pi-bridge` CLI handles common operations; raw JSONL protocol is documented for any language.
 - When `pi-questions` is loaded, external clients can list, answer, and reject pending questions.
@@ -76,9 +77,10 @@ Example response and event:
 ```json
 {"type":"response","id":"1","command":"get_state","success":true,"data":{}}
 {"type":"event","event":"message_update","timestamp":"...","data":{}}
+{"type":"event","event":"vstack_activity","timestamp":"...","data":{"type":"agent.task_completed","source":"pi-agents","severity":"success","importance":"normal","summary":"agent done"}}
 ```
 
-Clients receive events by default. Send `{"type":"subscribe","enabled":false}` to mute them.
+Clients receive events by default. Send `{"type":"subscribe","enabled":false}` to mute them. `vstack_activity` rows are bridge events, not `sendMessage()` chat entries, so they do not render in the conversation.
 
 ## Slash command notes
 
