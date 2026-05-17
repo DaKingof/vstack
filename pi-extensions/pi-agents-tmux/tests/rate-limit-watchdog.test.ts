@@ -201,6 +201,17 @@ describe("subagent rate-limit watchdog (vstack#108)", () => {
 		expect(ctx.warnings.some((line) => line.includes("steer dispatch failed"))).toBe(true);
 	});
 
+	test("async steer dispatch rejections are logged (best-effort recovery)", async () => {
+		const ctx = makeDeps({
+			sendUserMessage: () => Promise.reject(new Error("agent still streaming")),
+		});
+		const watchdog = createSubagentRateLimitWatchdog(ctx.deps);
+		watchdog.onMessageEnd(CANONICAL_RATE_LIMIT_MESSAGE_END, "rust");
+		expect(() => watchdog.fireRetryNow("rust")).not.toThrow();
+		await Promise.resolve();
+		expect(ctx.warnings.some((line) => line.includes("steer dispatch failed") && line.includes("agent still streaming"))).toBe(true);
+	});
+
 	test("activity emit errors are swallowed (best-effort recovery)", () => {
 		const ctx = makeDeps({
 			emitActivity: () => {

@@ -167,6 +167,7 @@ import {
 	readPaneCompletionFile,
 	readPaneRegistry,
 	readTaskRegistry,
+	recordTaskDispatchFailure,
 	refreshTaskDiagnostics,
 	taskNeedsSummaryBackfill,
 	updateTaskRegistry,
@@ -421,13 +422,7 @@ export default function (pi: ExtensionAPI) {
 		isEnabled: () => rateLimitWatchdogEnabledFromEnv(),
 		maxAttempts: () => rateLimitMaxAttemptsFromEnv(),
 		backoffLadderSec: () => rateLimitBackoffLadderSecFromEnv(),
-		sendUserMessage: (message) => {
-			try {
-				pi.sendUserMessage(message);
-			} catch (error) {
-				console.warn(`rate-limit-watchdog: pi.sendUserMessage failed (${(error as Error)?.message ?? error})`);
-			}
-		},
+		sendUserMessage: (message) => pi.sendUserMessage(message, { deliverAs: "steer" }),
 		emitActivity: (eventName, payload) => {
 			emitSubagentEvent(pi, eventName, payload);
 		},
@@ -1189,7 +1184,15 @@ export default function (pi: ExtensionAPI) {
 						completionPath: completionPath(runtimeRoot, childAgentName, taskId),
 					});
 					ctx.ui.setStatus("agent", `${childAgentName} running ${file}`);
-					pi.sendUserMessage(prompt);
+					try {
+						await pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+					} catch (error) {
+						const diagnostic = `Unable to dispatch child task prompt: ${(error as Error)?.message ?? error}`;
+						console.warn(`subagent child inbox dispatch failed for ${childAgentName} ${taskId}: ${diagnostic}`);
+						childCurrentTaskFile = undefined;
+						await recordTaskDispatchFailure(runtimeRoot, taskId, { processing, source }, diagnostic);
+						ctx.ui.setStatus("agent", `${childAgentName} idle`);
+					}
 				})().finally(() => {
 					childPollInFlight = false;
 				});

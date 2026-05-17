@@ -9,7 +9,7 @@
  *   1. Picks a retry-at delay from the shared decideRateLimitRetry
  *      decision module in flightdeck-core (so the bash subscriber and
  *      this layer share the same backoff ladder + canonical detection).
- *   2. Schedules a `pi.sendUserMessage(STEER_MESSAGE)` for that retry
+ *   2. Schedules a `pi.sendUserMessage(STEER_MESSAGE, { deliverAs })` for that retry
  *      time. The fixed steer prose is mandated by the issue body so the
  *      child agent has a deterministic recovery signal.
  *   3. Emits agent.rate_limited (first detection per pane) and
@@ -54,7 +54,7 @@ export interface SubagentRateLimitWatchdogDeps {
 	isEnabled: () => boolean;
 	maxAttempts: () => number;
 	backoffLadderSec: () => readonly number[];
-	sendUserMessage: (message: string) => void;
+	sendUserMessage: (message: string) => void | Promise<void>;
 	emitActivity: (eventName: string, payload: Record<string, unknown>) => void;
 	onExhausted: (paneId: string, attempt: number, reason: string) => void;
 	logWarn: (message: string) => void;
@@ -205,7 +205,12 @@ export function createSubagentRateLimitWatchdog(
 				current.pendingTimer = null;
 				current.pendingRetry = null;
 				try {
-					deps.sendUserMessage(RATE_LIMIT_STEER_MESSAGE);
+					const dispatch = deps.sendUserMessage(RATE_LIMIT_STEER_MESSAGE);
+					if (dispatch && typeof (dispatch as PromiseLike<void>).then === "function") {
+						void Promise.resolve(dispatch).catch((error) => {
+							deps.logWarn(`rate-limit-watchdog: steer dispatch failed (${(error as Error)?.message ?? error})`);
+						});
+					}
 				} catch (error) {
 					deps.logWarn(`rate-limit-watchdog: steer dispatch failed (${(error as Error)?.message ?? error})`);
 				}

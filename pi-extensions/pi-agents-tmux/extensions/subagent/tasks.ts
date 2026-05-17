@@ -315,6 +315,38 @@ export async function markTaskNeedsCompletion(
 	return updated;
 }
 
+export async function recordTaskDispatchFailure(
+	runtimeRoot: string,
+	taskId: string,
+	paths: { source: string; processing: string },
+	diagnostic: string,
+): Promise<{ restoredToInbox: boolean; status?: PaneTaskStatus }> {
+	let restoredToInbox = false;
+	try {
+		await fs.promises.rename(paths.processing, paths.source);
+		restoredToInbox = true;
+	} catch {
+		// Keep the processing artifact for inspection when it cannot be safely restored.
+	}
+
+	let status: PaneTaskStatus | undefined;
+	await updateTaskRegistry(runtimeRoot, (records) => {
+		const existing = records[taskId];
+		if (!existing || isTerminalTaskStatus(existing.status)) return;
+		status = restoredToInbox ? "queued" : "needs_completion";
+		records[taskId] = {
+			...existing,
+			status,
+			inboxFile: restoredToInbox ? paths.source : existing.inboxFile,
+			processingFile: restoredToInbox ? undefined : paths.processing,
+			updatedAt: new Date().toISOString(),
+			diagnostics: appendUniqueDiagnostic(existing.diagnostics, diagnostic),
+		};
+	});
+
+	return { restoredToInbox, status };
+}
+
 export async function refreshTaskDiagnostics(runtimeRoot: string, record: PaneTaskRecord): Promise<{ record: PaneTaskRecord; diagnostics: string[] }> {
 	if (inferTaskRecordKind(runtimeRoot, record) !== "pane") {
 		const sanitized = sanitizedBgTaskRecord(record);
