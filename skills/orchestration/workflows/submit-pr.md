@@ -106,7 +106,8 @@ fi
 
    **Existing PR** (`$PR_NUM` set) → update body and ensure label. `gh pr edit` also supports `--body-file`:
    ```bash
-   gh pr edit "$PR_NUM" --body-file "$BODY_FILE" --add-label defer-ci 2>/dev/null || true
+   gh pr edit "$PR_NUM" --body-file "$BODY_FILE" 2>/dev/null || true
+   .agents/skills/github/scripts/commands/label-add.sh "$PR_NUM" defer-ci --reason "queue for bot review before CI" 2>/dev/null || true
    ```
 
    **Never** inline a PR body containing backticks or fenced code blocks via `--body "..."`. If you must produce one for tooling that lacks `--body-file`, write to a file and use `gh pr edit "$PR_NUM" --body-file "$BODY_FILE"` rather than constructing the argument in shell.
@@ -366,7 +367,7 @@ All bot review comments resolved (or max iterations). Verify no late-arriving th
 
 2. **Remove label**:
    ```bash
-   gh pr edit [PR_NUMBER] --remove-label defer-ci
+   .agents/skills/github/scripts/commands/label-remove.sh [PR_NUMBER] defer-ci --reason "bot review approved; running CI"
    ```
 
 3. **Wait for CI**:

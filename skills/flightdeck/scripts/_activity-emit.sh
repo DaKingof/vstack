@@ -39,10 +39,9 @@ flightdeck_activity_emit() {
             --check-name) check_name="${2:-}"; shift 2 ;;
             --branch) branch="${2:-}"; shift 2 ;;
             --details-json)
-                # Use an explicit fall-back so bash's ${VAR:-DEFAULT}
+                # Use a plain default fall-back so bash's ${VAR:-DEFAULT}
                 # brace-matching doesn't eat one of the JSON object's
-                # closing braces (e.g. {"a":1} would become {"a":1}}
-                # and silently reset to {} on jq validation).
+                # closing braces (e.g. {"a":1} would become {"a":1}}).
                 if [ -n "${2:-}" ]; then details_json="$2"; else details_json="{}"; fi
                 shift 2 ;;
             *) shift ;;
