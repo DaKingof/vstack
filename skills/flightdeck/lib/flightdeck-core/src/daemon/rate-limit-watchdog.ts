@@ -201,3 +201,47 @@ function readStopReason(event: unknown): string | null {
 	}
 	return null;
 }
+
+// CLI entry: `bun rate-limit-watchdog.ts decide --event <json> --pane <id> --attempt <n> [--now <ms>]`
+// Used by the bash pi subscriber (Layer B) so it can route rate-limit
+// events through the same decision module without re-implementing the
+// ladder math. Outputs the decision as JSON on stdout, exits 0.
+// `--event` accepts a JSON-encoded event payload; if omitted, the event
+// is read from stdin.
+if (import.meta.main) {
+	const args = process.argv.slice(2);
+	const action = args.shift();
+	if (action !== "decide") {
+		process.stderr.write("Usage: rate-limit-watchdog.ts decide --event <json> --pane <id> --attempt <n> [--now <ms>]\n");
+		process.exit(2);
+	}
+	let eventJson = "";
+	let paneId = "";
+	let attempt = 0;
+	let now = Date.now();
+	for (let i = 0; i < args.length; i += 1) {
+		const flag = args[i];
+		switch (flag) {
+			case "--event": eventJson = args[++i] ?? ""; break;
+			case "--pane": paneId = args[++i] ?? ""; break;
+			case "--attempt": attempt = Number(args[++i] ?? "0") || 0; break;
+			case "--now": now = Number(args[++i] ?? `${Date.now()}`) || Date.now(); break;
+			default:
+				process.stderr.write(`Unknown flag: ${flag}\n`);
+				process.exit(2);
+		}
+	}
+	if (!eventJson) {
+		eventJson = await Bun.stdin.text();
+	}
+	let event: unknown;
+	try {
+		event = JSON.parse(eventJson);
+	} catch (error) {
+		process.stderr.write(`invalid --event JSON: ${(error as Error).message}\n`);
+		process.exit(2);
+	}
+	const decision = decideRateLimitRetry({ attempt, event, lastRetryAt: null, now, paneId });
+	process.stdout.write(`${JSON.stringify(decision)}\n`);
+	process.exit(0);
+}
