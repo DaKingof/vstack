@@ -39,6 +39,8 @@ interface BatchToolDetails {
 
 const TOOL_BATCH_MAX_OUTPUT_BYTES = 50 * 1024;
 const TOOL_BATCH_MAX_OUTPUT_LINES = 2_000;
+const TOOL_BATCH_DEFAULT_CALL_TIMEOUT_MS = 120_000;
+const TOOL_BATCH_MIN_CALL_TIMEOUT_MS = 1_000;
 
 function utf8Length(text: string): number {
 	return Buffer.byteLength(text, "utf8");
@@ -268,11 +270,42 @@ export function registerToolBatch(pi: ExtensionAPI, agent: any, cwd: string): vo
 				};
 			}
 			const concurrency = Math.max(1, Math.min(calls.length, Math.floor(Number(params?.concurrency) || calls.length), maxCalls));
+			// vstack#96: per-call timeout so a single wedged inner tool can't block the
+			// aggregate forever. Default 120s, minimum 1s. Each inner gets its own
+			// AbortController so timeout aborts only that call (parent abort still
+			// propagates to all children via the addEventListener bridge).
+			const batchCallTimeoutMs = Math.max(
+				TOOL_BATCH_MIN_CALL_TIMEOUT_MS,
+				Math.floor(settingNumber("batchCallTimeoutMs", TOOL_BATCH_DEFAULT_CALL_TIMEOUT_MS, effectiveCwd)),
+			);
 			const items = await mapBatchWithConcurrency(calls, concurrency, async (call, index): Promise<BatchToolItem> => {
+				const childController = new AbortController();
+				const onParentAbort = () => childController.abort();
+				if (signal) {
+					if (signal.aborted) childController.abort();
+					else signal.addEventListener("abort", onParentAbort);
+				}
+				let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 				try {
 					const original = getBuiltInTool(agent, effectiveCwd, call.tool);
 					if (!original?.execute) throw new Error(`Built-in tool unavailable: ${call.tool}`);
-					const result = await original.execute(`${toolCallId}:${index}`, call.args, signal, undefined);
+					const timeoutPromise = new Promise<never>((_, reject) => {
+						timeoutHandle = setTimeout(() => {
+							// Reject the race promise BEFORE aborting so the timeout
+							// error wins over any AbortError the inner tool may raise
+							// in response to childController.abort().
+							reject(
+								new Error(
+									`tool_batch inner call ${call.tool} timed out after ${batchCallTimeoutMs}ms`,
+								),
+							);
+							childController.abort();
+						}, batchCallTimeoutMs);
+					});
+					const result = await Promise.race([
+						original.execute(`${toolCallId}:${index}`, call.args, childController.signal, undefined),
+						timeoutPromise,
+					]);
 					return {
 						args: call.args,
 						details: result?.details,
@@ -291,6 +324,9 @@ export function registerToolBatch(pi: ExtensionAPI, agent: any, cwd: string): vo
 						toolName: call.tool,
 						truncated: false,
 					};
+				} finally {
+					if (timeoutHandle) clearTimeout(timeoutHandle);
+					signal?.removeEventListener("abort", onParentAbort);
 				}
 			});
 			const cappedItems = capBatchItemsForAggregate(items);
