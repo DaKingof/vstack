@@ -137,6 +137,47 @@ fn mixed_conversations_tab() {
 }
 
 #[test]
+fn conversations_file_mode_renders_activity_panels() {
+    let mut model = common::model_for_fixture("mixed", MotionLevel::Off);
+    model.current_tab = Tab::Conversations;
+    let rendered = common::render_model(&model);
+    assert!(
+        rendered.contains("file-mode"),
+        "file-mode header missing:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("VST-101 · Fix dashboard state reader"),
+        "entry panel header missing:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("bash-permission-prompt → Allow cargo test in dashboard crate"),
+        "last decision missing:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("cleanup prompt needs operator policy"),
+        "last assistant excerpt missing:\n{rendered}"
+    );
+    insta::assert_snapshot!("tab_conversations_file_mode", rendered);
+}
+
+#[test]
+fn conversations_file_mode_empty_shows_slim_message() {
+    let mut model = common::model_for_fixture("mixed", MotionLevel::Off);
+    model.current_tab = Tab::Conversations;
+    model.set_activity_events(Vec::new());
+    let rendered = common::render_model(&model);
+    assert!(
+        rendered.contains("No activity events captured yet"),
+        "slim empty message missing:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("will appear here as they accumulate"),
+        "accumulation hint missing:\n{rendered}"
+    );
+    insta::assert_snapshot!("tab_conversations_file_mode_empty", rendered);
+}
+
+#[test]
 fn conversations_stream_newest_first() {
     let mut model = common::model_for_fixture("conversations", MotionLevel::Off);
     model.current_tab = Tab::Conversations;
