@@ -1,11 +1,13 @@
 export type TrackedEntryState =
 	| "waiting"
+	| "spawning"
 	| "prompting"
 	| "submitting"
 	| "ready"
 	| "complete"
 	| "cancelled"
 	| "dead"
+	| "failed"
 	// Issue-mode lifecycle states (issue-mode workflows tag kind=issue
 	// entries with these; renderers and handlers treat them as terminal
 	// or near-terminal alongside the generic enum).
@@ -59,9 +61,23 @@ export interface GithubIssueDomain {
 	[key: string]: unknown;
 }
 
+export interface PlanItemDomain {
+	plan_path: string;
+	plan_title: string;
+	item_id: string;
+	item_title: string;
+	depends_on: string[];
+	worktree: string;
+	pr_number: number | null;
+	merge_commit: string | null;
+	scope_files_actual?: number | null;
+	[key: string]: unknown;
+}
+
 export interface TrackedEntryDomain {
 	issue?: TrackedIssueDomain;
 	github_issue?: GithubIssueDomain;
+	plan_item?: PlanItemDomain;
 }
 
 export interface TrackedEntryLaunch {
@@ -104,8 +120,9 @@ export interface TrackedEntry {
 	/**
 	 * PR number for generic ad-hoc/workflow entries that create a pull
 	 * request outside the issue-domain model. Issue-mode entries keep the
-	 * canonical value under `domain.issue.pr_number`; readers should prefer
-	 * that and fall back to this field for non-issue rows.
+	 * canonical value under `domain.issue.pr_number`, `domain.github_issue.pr_number`,
+	 * or `domain.plan_item.pr_number`; readers should prefer those and fall back
+	 * to this field for non-domain rows.
 	 */
 	pr_number?: number | null;
 	/** Optional worktree override for non-issue rows. */

@@ -103,6 +103,30 @@ function sampleTrackedEntry(): TrackedEntry {
 	};
 }
 
+function samplePlanEntry(): TrackedEntry {
+	return {
+		cwd: "/repo/trees/flightdeck-plan-item-one",
+		decisions_log: [],
+		domain: {
+			plan_item: {
+				depends_on: ["setup-foundation"],
+				item_id: "item-one",
+				item_title: "Item one",
+				merge_commit: null,
+				plan_path: "/repo/docs/plans/plan.md",
+				plan_title: "Plan title",
+				pr_number: null,
+				worktree: "/repo/trees/flightdeck-plan-item-one",
+			},
+		},
+		harness: "pi",
+		id: "item-one",
+		kind: "workflow",
+		state: "waiting",
+		title: "Item one",
+	};
+}
+
 function writePiBridgeStub(repoRoot: string, body: string): string {
 	const dir = join(repoRoot, "stub-bin");
 	mkdirSync(dir, { recursive: true });
@@ -235,6 +259,99 @@ describe("flightdeck-state CLI", () => {
 		const malformed = run(repo, ["write-entry", entry.id, JSON.stringify({ ...entry, domain: { issue: { ...entry.domain!.issue!, id: "bad id" } } })]);
 		expect(malformed.status).toBe(2);
 		expect(malformed.stderr).toContain("Error: invalid domain.issue.id: must be non-empty and match ^[A-Za-z0-9._-]+$");
+	});
+
+	test("write-entry accepts plan item domain entries", () => {
+		const entry = samplePlanEntry();
+		expect(() => writeTrackedEntry({}, entry.id, entry)).not.toThrow();
+		run(repo, ["init"]);
+		const write = run(repo, ["write-entry", entry.id, JSON.stringify(entry)]);
+		expect(write.status).toBe(0);
+		const tracked = parseRunJson<Record<string, TrackedEntry>>(run(repo, ["tracked-entries"]));
+		expect(tracked[entry.id]?.domain?.plan_item).toMatchObject({
+			depends_on: ["setup-foundation"],
+			item_id: "item-one",
+			merge_commit: null,
+			plan_path: "/repo/docs/plans/plan.md",
+			plan_title: "Plan title",
+			pr_number: null,
+			worktree: "/repo/trees/flightdeck-plan-item-one",
+		});
+	});
+
+	test("write-entry rejects plan item mixed with Linear or GitHub domains", () => {
+		const plan = samplePlanEntry();
+		const linear = sampleTrackedEntry().domain!.issue!;
+		const github = { merge_commit: null, number: 77, pr_number: null, url: "https://github.com/OWNER/REPO/issues/77", worktree: "/repo/trees/issue-77" };
+		expect(() => writeTrackedEntry({}, plan.id, { ...plan, domain: { issue: linear, plan_item: plan.domain!.plan_item! } })).toThrow(/mutually exclusive/);
+		expect(() => writeTrackedEntry({}, plan.id, { ...plan, domain: { github_issue: github, plan_item: plan.domain!.plan_item! } })).toThrow(/mutually exclusive/);
+
+		run(repo, ["init"]);
+		const withLinear = run(repo, ["write-entry", plan.id, JSON.stringify({ ...plan, domain: { issue: linear, plan_item: plan.domain!.plan_item! } })]);
+		expect(withLinear.status).toBe(2);
+		expect(withLinear.stderr).toContain("mutually exclusive");
+		const withGithub = run(repo, ["write-entry", plan.id, JSON.stringify({ ...plan, domain: { github_issue: github, plan_item: plan.domain!.plan_item! } })]);
+		expect(withGithub.status).toBe(2);
+		expect(withGithub.stderr).toContain("mutually exclusive");
+	});
+
+	test("write-entry rejects malformed plan item fields", () => {
+		const entry = samplePlanEntry();
+		expect(() => writeTrackedEntry({}, entry.id, { ...entry, domain: { plan_item: { ...entry.domain!.plan_item!, depends_on: ["bad dep"] } } })).toThrow(/domain.plan_item.depends_on/);
+		run(repo, ["init"]);
+		const missingMergeCommit = run(repo, ["write-entry", entry.id, JSON.stringify({ ...entry, domain: { plan_item: { ...entry.domain!.plan_item!, merge_commit: undefined } } })]);
+		expect(missingMergeCommit.status).toBe(2);
+		expect(missingMergeCommit.stderr).toContain("invalid domain.plan_item.merge_commit: missing required key");
+	});
+
+	test("raw set rejects adding plan_item beside Linear issue domain", () => {
+		const entry = sampleTrackedEntry();
+		const plan = samplePlanEntry().domain!.plan_item!;
+		run(repo, ["init"]);
+		expect(run(repo, ["write-entry", entry.id, JSON.stringify(entry)]).status).toBe(0);
+		const r = run(repo, ["set", `.entries[${JSON.stringify(entry.id)}].domain.plan_item`, JSON.stringify(plan)]);
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain("invalid domain mutation");
+		expect(r.stderr).toContain("mutually exclusive");
+		const tracked = parseRunJson<Record<string, TrackedEntry>>(run(repo, ["tracked-entries"]));
+		expect(tracked[entry.id]?.domain?.plan_item).toBeUndefined();
+	});
+
+	test("raw set rejects adding plan_item beside GitHub issue domain", () => {
+		const github: TrackedEntry = {
+			domain: { github_issue: { merge_commit: null, number: 77, pr_number: null, url: "https://github.com/OWNER/REPO/issues/77", worktree: "/repo/trees/issue-77" } },
+			id: "77",
+			kind: "issue",
+			state: "waiting",
+		};
+		const plan = samplePlanEntry().domain!.plan_item!;
+		run(repo, ["init"]);
+		expect(run(repo, ["write-entry", github.id, JSON.stringify(github)]).status).toBe(0);
+		const r = run(repo, ["set", `.entries[${JSON.stringify(github.id)}].domain.plan_item`, JSON.stringify(plan)]);
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain("invalid domain mutation");
+		expect(r.stderr).toContain("mutually exclusive");
+		const tracked = parseRunJson<Record<string, TrackedEntry>>(run(repo, ["tracked-entries"]));
+		expect(tracked[github.id]?.domain?.plan_item).toBeUndefined();
+	});
+
+	test("raw set rejects all three domain keys at once", () => {
+		const entry = samplePlanEntry();
+		const allDomains = {
+			github_issue: { merge_commit: null, number: 77, pr_number: null, url: "https://github.com/OWNER/REPO/issues/77", worktree: "/repo/trees/issue-77" },
+			issue: sampleTrackedEntry().domain!.issue!,
+			plan_item: entry.domain!.plan_item!,
+		};
+		run(repo, ["init"]);
+		expect(run(repo, ["write-entry", entry.id, JSON.stringify(entry)]).status).toBe(0);
+		const r = run(repo, ["set", `.entries[${JSON.stringify(entry.id)}].domain`, JSON.stringify(allDomains)]);
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain("invalid domain mutation");
+		expect(r.stderr).toContain("domain.issue, domain.github_issue, domain.plan_item are mutually exclusive");
+		const tracked = parseRunJson<Record<string, TrackedEntry>>(run(repo, ["tracked-entries"]));
+		expect(tracked[entry.id]?.domain?.issue).toBeUndefined();
+		expect(tracked[entry.id]?.domain?.github_issue).toBeUndefined();
+		expect(tracked[entry.id]?.domain?.plan_item?.item_id).toBe("item-one");
 	});
 
 	test("pi owner discovery failure warns and persists discovery_error", () => {
