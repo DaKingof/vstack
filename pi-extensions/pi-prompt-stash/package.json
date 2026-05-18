@@ -1,6 +1,6 @@
 {
   "name": "@vanillagreen/pi-prompt-stash",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Pi package for per-session prompt stash history with alt+s stash/restore workflow.",
   "license": "MIT",
   "keywords": [
