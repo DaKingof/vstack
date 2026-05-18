@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { npmCachePath } from "./paths.js";
+import { runCommand } from "./process.js";
 import { NPM_CACHE_TTL_MS, type NpmCache, type Scope, type SettingsFile, type SourceIndex, type SourceIndexEntry } from "./types.js";
 
 let npmCheckInFlight = false;
@@ -101,7 +101,7 @@ export function readSourceRepoVersion(repoRoot: string, packageName: string, sou
 function npmRoot(args: string[], cwd?: string): string | undefined {
 	const key = npmRootCacheKey(args, cwd);
 	if (npmRootMemo.has(key)) return npmRootMemo.get(key);
-	const result = spawnSync("npm", ["root", ...args], { encoding: "utf8", cwd });
+	const result = runCommand("npm", ["root", ...args], { cwd });
 	const value = result.error || (result.status ?? 1) !== 0 ? undefined : ((result.stdout ?? "").trim() || undefined);
 	npmRootMemo.set(key, value);
 	return value;

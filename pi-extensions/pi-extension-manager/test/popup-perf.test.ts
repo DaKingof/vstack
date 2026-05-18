@@ -13,7 +13,7 @@ const originalEnv = {
 
 const spawnSyncMock = mock(() => ({ status: 0, stdout: "", stderr: "", error: undefined, signal: null, output: [], pid: 0 }));
 
-mock.module("node:child_process", () => ({ spawnSync: spawnSyncMock }));
+mock.module("cross-spawn", () => ({ default: { sync: spawnSyncMock }, sync: spawnSyncMock }));
 
 function resetTmp(): void {
 	rmSync(rootTmp, { force: true, recursive: true });

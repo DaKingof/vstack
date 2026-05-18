@@ -6,7 +6,7 @@ const rootTmp = join(import.meta.dir, "..", "tmp", "actions-test");
 const originalEnv = { PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR };
 const spawnSyncMock = mock(() => ({ status: 0, stdout: "", stderr: "", error: undefined, signal: null, output: [], pid: 0 }));
 
-mock.module("node:child_process", () => ({ spawnSync: spawnSyncMock }));
+mock.module("cross-spawn", () => ({ default: { sync: spawnSyncMock }, sync: spawnSyncMock }));
 
 function writeJson(path: string, value: unknown): void {
 	mkdirSync(dirname(path), { recursive: true });

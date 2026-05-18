@@ -1,10 +1,10 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { mkdirSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { join, sep } from "node:path";
 import { removeAppendSystemBlockForUninstall, syncAppendSystemForPackage } from "./append-system.js";
 import { stringifyError } from "./format.js";
 import { normalizePackageEntry } from "./inventory.js";
+import { runCommand } from "./process.js";
 import { asRecord, defaultWriteScope, findSettingsFile, updateManagerState, writeSettingsFile } from "./settings.js";
 import { loadSourceIndex, npmPackageNameFromSource } from "./versions.js";
 import {
@@ -114,7 +114,7 @@ export function runUninstall(plan: UninstallPlan, inventory: Inventory): { ok: b
 	if (plan.method.kind === "vstack") {
 		const args = ["remove", plan.method.packageName];
 		if (plan.method.scope === "user") args.push("--global");
-		const result = spawnSync("vstack", args, { encoding: "utf8" });
+		const result = runCommand("vstack", args);
 		if (result.error) return { ok: false, message: `Failed to launch vstack: ${stringifyError(result.error)}` };
 		if ((result.status ?? 1) !== 0) {
 			const stderr = (result.stderr ?? "").trim() || (result.stdout ?? "").trim() || `exit ${result.status}`;
@@ -127,7 +127,7 @@ export function runUninstall(plan: UninstallPlan, inventory: Inventory): { ok: b
 		const args = ["uninstall", plan.method.npmName];
 		const prepared = ensureWorkingDir(plan.method.cwd);
 		if (!prepared.ok) return prepared;
-		const result = spawnSync(plan.method.command, [...plan.method.argsPrefix, ...args], { encoding: "utf8", cwd: plan.method.cwd });
+		const result = runCommand(plan.method.command, [...plan.method.argsPrefix, ...args], { cwd: plan.method.cwd });
 		if (result.error) return { ok: false, message: `Failed to launch ${plan.method.command}: ${stringifyError(result.error)}` };
 		if ((result.status ?? 1) !== 0) {
 			const stderr = (result.stderr ?? "").trim() || (result.stdout ?? "").trim() || `exit ${result.status}`;
@@ -178,7 +178,7 @@ export function runUpdate(plan: UpdatePlan): { ok: boolean; message: string } {
 		const args = ["add", plan.method.sourceRepo];
 		if (plan.method.scope === "user") args.push("--global");
 		args.push("--pi-extension", plan.method.packageName, "--harness", "pi", "-y");
-		const result = spawnSync("vstack", args, { encoding: "utf8" });
+		const result = runCommand("vstack", args);
 		if (result.error) return { ok: false, message: `Failed to launch vstack: ${stringifyError(result.error)}` };
 		if ((result.status ?? 1) !== 0) {
 			const stderr = (result.stderr ?? "").trim() || (result.stdout ?? "").trim() || `exit ${result.status}`;
@@ -189,7 +189,7 @@ export function runUpdate(plan: UpdatePlan): { ok: boolean; message: string } {
 	const args = ["install", `${plan.method.npmName}@latest`];
 	const prepared = ensureWorkingDir(plan.method.cwd);
 	if (!prepared.ok) return prepared;
-	const result = spawnSync(plan.method.command, [...plan.method.argsPrefix, ...args], { encoding: "utf8", cwd: plan.method.cwd });
+	const result = runCommand(plan.method.command, [...plan.method.argsPrefix, ...args], { cwd: plan.method.cwd });
 	if (result.error) return { ok: false, message: `Failed to launch ${plan.method.command}: ${stringifyError(result.error)}` };
 	if ((result.status ?? 1) !== 0) {
 		const stderr = (result.stderr ?? "").trim() || (result.stdout ?? "").trim() || `exit ${result.status}`;
