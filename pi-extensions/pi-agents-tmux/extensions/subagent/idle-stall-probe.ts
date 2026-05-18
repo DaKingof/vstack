@@ -21,7 +21,7 @@ export interface ProbePaneIdleDeps {
 		command: string,
 		args: string[],
 		options?: { cwd?: string; timeoutMs?: number },
-	) => Promise<{ code: number; stdout: string; stderr: string }>;
+	) => Promise<{ code: number; stdout: string; stderr: string; error?: unknown }>;
 	readPaneRegistryEntry: (agent: string) => Promise<PaneRegistryEntry | undefined>;
 	logWarn?: (msg: string) => void;
 	timeoutMs?: number;
@@ -56,6 +56,16 @@ function parseIsIdle(stdout: string): boolean | undefined {
 	}
 }
 
+function isBridgeSpawnMissing(error: unknown, expectedBin: string): boolean {
+	if (!error || typeof error !== "object") return false;
+	const candidate = error as { code?: unknown; syscall?: unknown; path?: unknown };
+	return candidate.code === "ENOENT" && candidate.syscall === "spawn" && candidate.path === expectedBin;
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 export async function probePaneIdle(
 	record: PaneTaskRecord,
 	deps: ProbePaneIdleDeps,
@@ -70,16 +80,20 @@ export async function probePaneIdle(
 	if (!bin) return { idle: false, reason: "bridge-bin-not-found" };
 	const args = socket ? ["state", "--socket", socket] : ["state", "--pid", String(pid)];
 	const timeoutMs = deps.timeoutMs ?? BRIDGE_IDLE_PROBE_DEFAULT_TIMEOUT_MS;
-	let result: { code: number; stdout: string; stderr: string };
+	let result: { code: number; stdout: string; stderr: string; error?: unknown };
 	try {
 		result = await deps.execCapture(bin, args, { cwd: entry.cwd, timeoutMs });
 	} catch (err) {
-		const message = (err as Error)?.message ?? String(err);
+		const message = errorMessage(err);
+		if (isBridgeSpawnMissing(err, bin)) return { idle: false, reason: "bridge-bin-not-found" };
 		deps.logWarn?.(`probePaneIdle: ${record.agent} exec threw: ${message}`);
 		return { idle: false, reason: /timeout|timed out/i.test(message) ? "bridge-timeout" : "bridge-error" };
 	}
 	if (result.code !== 0) {
-		deps.logWarn?.(`probePaneIdle: ${record.agent} pi-bridge state exit ${result.code}: ${(result.stderr || "").trim().slice(0, 200)}`);
+		const stderr = (result.stderr || "").trim();
+		if (isBridgeSpawnMissing(result.error, bin)) return { idle: false, reason: "bridge-bin-not-found" };
+		const detail = stderr || (result.error ? errorMessage(result.error) : "non-zero exit");
+		deps.logWarn?.(`probePaneIdle: ${record.agent} pi-bridge state exit ${result.code}: ${detail.slice(0, 200)}`);
 		return { idle: false, reason: "bridge-error" };
 	}
 	const idle = parseIsIdle(result.stdout);
