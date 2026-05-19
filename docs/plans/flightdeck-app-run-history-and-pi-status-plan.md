@@ -1,8 +1,8 @@
 # Flightdeck App, Run History, and Pi Status Plan
 
-## Pre-execution context (added 2026-05-18 after the flightdeck v2/v3 session)
+## Pre-execution context (updated 2026-05-19 after the cleanup/dashboard session)
 
-This plan was drafted before the flightdeck v2 architecture refactor and v3 plan-file orchestration lane landed in main. Most of the plan is still accurate; this section captures the deltas the executing agent must know.
+This plan was drafted before the flightdeck v2 architecture refactor, v3 plan-file orchestration lane, and cleanup/dashboard handoff landed in main. Most of the plan is still accurate; this section captures the deltas the executing agent must know before starting this next plan.
 
 **Architecture state in main now:**
 
@@ -12,20 +12,42 @@ This plan was drafted before the flightdeck v2 architecture refactor and v3 plan
   - `flightdeck session *` (generic, `workflows/shared/` + `flightdeck-session`)
   - `flightdeck plan start <path>` (plan-file orchestration; `workflows/plan/`). This plan document is itself a valid plan file under the loose convention in `skills/flightdeck/PLAN-FILE.md`, so `flightdeck plan start docs/plans/flightdeck-app-run-history-and-pi-status-plan.md` is a viable execution path.
 - `entry.domain` is a mutually-exclusive union of `issue` (linear) / `github_issue` (github) / `plan_item` (plan). Validator at `skills/flightdeck/lib/flightdeck-core/src/state/tracked-entry.ts` rejects multi-domain entries on both `write-entry` and raw `setEntryField` / `flightdeck-state set` paths (per PR #139 hardening commit `517fd332`).
-- SKILL.md is now 237 lines (down from 453). Reference docs live in `skills/flightdeck/` siblings: `SCHEMA.md`, `SCRIPTS.md`, `ENV.md`, `WATCHDOGS.md`, `PROMPT-TAGS.md`, `PLAN-FILE.md`.
+- SKILL.md is now compact (currently 259 lines in `origin/main`, down from the old 453-line version). Reference docs live in `skills/flightdeck/` siblings: `SCHEMA.md`, `SCRIPTS.md`, `ENV.md`, `WATCHDOGS.md`, `PROMPT-TAGS.md`, `PLAN-FILE.md`.
 
-**Filed issues that overlap with phases in this plan:**
+**Cleanup/dashboard handoff status (completed before this plan):**
 
-- **#140 (pi-flightdeck banner shows stale tracked sessions)** — directly addressed by Phase 6.5 "Startup stale-banner and prune policy" and Phase 6.6 "Trim @vanillagreen/pi-flightdeck to a status shell". Close #140 when Phase 6.5/6.6 land.
-- **#133 (pane/window name sync between registry, tmux, dashboard, master shorthand)** — NOT addressed by this plan. Independent UX fix. Track as separate work; the active handoff at `docs/plans/flightdeck-cleanup-and-dashboard-settings-handoff.md` already includes it.
-- **#126 (rate-limit watchdog observability), #129 (pi-session-bridge cache lifecycle), #130 (subagent stale-cwd), #135 (subscriber pi_pid miss-discovery), #136 (max-lifetime stale-pane respawn)** — unrelated to this plan; live in the cleanup-and-dashboard handoff bundle.
+The active handoff at `docs/plans/flightdeck-cleanup-and-dashboard-settings-handoff.md` has already been executed. These PRs are merged on `origin/main` and should be treated as baseline, not pending work:
+
+| PR | Merge commit | Result |
+|----|--------------|--------|
+| #142 | `f94ed1baaea5562c71bdf518dbfa17851f1839fc` | Flightdeck README keyhint trim |
+| #143 | `11767919b3650298bac700db94d4405b4a007091` | #140 stale standby/awaiting-watch hint guard |
+| #144 | `fe1e1cf7c1a37c6867a1706172884123df2542b5` | #129 pi-session-bridge skill cache eviction/bound |
+| #145 | `6548e073f5aacd24ce820884747460036ae0cc99` | #130 pi-agents-tmux stale cwd handling |
+| #146 | `d1cb9b1ce4681ecb39670e8d9055183aa0e4a1c6` | #136 daemon stale-pane handoff/respawn |
+| #147 | `ae87aa0ccb9ff1dd9875c89c4a936acd907ab78f` | #126 rate-limit skipped/retry/resolved/exhausted activity |
+| #148 | `26be898d730c5e406a5d47e3fad7165de6b0d366` | #133 tmux window-name sync (`window_name_current`) |
+| #149 | `41f1e55116022c0daafe0c5c28357790db74dbf8` | #135 Pi subscriber binding validation/process-group reap |
+| #150 | `6bd4bd6b21297339d921f5bc8b7929cb8020e6be` | Dashboard Settings popup |
+
+Issue state now:
+
+- **Closed:** #126, #129, #130, #133, #135, #136, #140.
+- **Open/deferred:** #151 — `Flightdeck daemon exited during plan execution; BACKUP-WAKE found no daemon`. This was filed during the cleanup/dashboard session after BACKUP-WAKE found a `daemon-exited` event with reason `other` and no replacement daemon. Treat it as live context for any daemon/run-history work; do not silently ignore daemon exits while executing this plan.
+
+Relevant merged deltas for this plan:
+
+- **#140 is partly handled, not fully obsolete.** PR #143 makes `pi-flightdeck` awaiting-watch/standby hints ignore tracked entries whose pane ids are proven stale. Phase 6.5 still owns the broader run-history behavior: terminated archives must not render as active mini-dashboard state, and history/archive views must be explicit.
+- **#133 is done.** PR #148 added `entry.window_name_current`, `pane-poll`/daemon refresh, dashboard current-title rendering, and `FLIGHTDECK_DISABLE_AUTO_RENAME`. Do not reimplement pane/window-name sync; build on these fields.
+- **#149 is load-bearing.** Pi subscriber binding now validates cwd + recorded `adapter.pi_session_id`, malformed `pi-bridge state` preflight fails open to stream attach, mismatched subscribers are quarantined/reaped by process group, positive-PID signal fallback was removed, and mismatch respawn preserves the registry harness. Do not regress these daemon/subscriber safety properties when changing run lifecycle.
+- **#150 added dashboard settings.** Rust dashboard has a Settings popup on `S` / `Alt+S`, with `skills/flightdeck/lib/flightdeck-dashboard/src/settings_catalog.rs` as catalog source, writes dashboard-scoped overrides to `<project-root>/tmp/flightdeck-settings.toml`, applies those overrides at dashboard command startup before logging/runtime thread creation, does not mutate the parent shell or live process env from popup actions, rejects NUL/invalid values, and uses path/symlink checks. Future dashboard env/default changes must update `settings_catalog.rs`, snapshots/tests, and `ENV.md`/README docs.
 
 **Standards from the v2/v3 session that this plan should follow (re-stated for clarity):**
 
 - **Use the worktree skill**: `.agents/skills/worktree/scripts/worktree create <id>`. Never `git worktree add`.
 - **Self-contained child prompts** when spawning panes (see PLAN-FILE.md and `workflows/plan/start.md`). No `/skill:flightdeck plan start`, `/skill:flightdeck linear start`, etc. as child prompts — those are master-side workflow names, not user-input commands.
 - **Spawned pi panes use `openai-codex/gpt-5.5` model + `xhigh` thinking** (user directive from the v2/v3 session).
-- **Backup wake timer is mandatory first action** when starting orchestration: `bg_task spawn command:'while true; do sleep 2700; echo "BACKUP-WAKE $(date -u +%FT%TZ)"; done' notifyOnOutput:true notifyPattern:'BACKUP-WAKE'`. The previous session hit two daemon misfires (#135, #136) where the backup timer was the only thing preventing silent stalls. Stop the timer in final cleanup.
+- **Backup wake timer is mandatory first action** when starting orchestration: `bg_task spawn command:'while true; do sleep 2700; echo "BACKUP-WAKE $(date -u +%FT%TZ)"; done' notifyOnOutput:true notifyPattern:'BACKUP-WAKE'`. Previous sessions hit daemon misfires (#135, #136) and a later daemon exit (#151) where the backup timer was the only thing preventing silent stalls. On every BACKUP-WAKE, drain daemon events, check daemon status, run `pi-bridge state --socket <socket>` for every live tracked Pi pane, file/update a GitHub issue for daemon misfire or pane wedge, restart the daemon only after recording the diagnostic, and stop the timer in final cleanup.
 - **5-reviewer fan-out per substantive PR** (arch / test / doc / error / safety). Light scope (2 reviewers: doc + arch) for text-only or docs-only PRs. Reviewer prompts MUST include: "Do NOT act as flightdeck master. Do NOT produce session/cycle/dashboard status. JSON-only output."
 - **Recursion invariant for any new flightdeck lane/handler**: workflow files must NEVER emit `/skill:flightdeck <lane> (start|watch|close|terminate)` or `$flightdeck <lane> ...` or `/flightdeck <lane> ...` as a child-pane prompt. Add a parity test asserting zero hits (the v3 PR added `handler-guards.test.ts` lines 139-147 — use as template).
 - **CLEAN merge gate + `FLIGHTDECK_AUTO_MERGE=0` honored across ALL merge-answering handlers** (merge-now, merge-ready-but-unknown, force-merge-confirm). Authoritative `gh pr view --json state,mergeStateStatus,mergeCommit` verification before any close-item / close-issue cleanup. Strict force-merge predicate (APPROVED + green + disjoint + UNKNOWN-timer expired); not the weaker "approved or no pending reviewers".
@@ -37,9 +59,9 @@ This plan was drafted before the flightdeck v2 architecture refactor and v3 plan
 
 **Order-of-execution recommendation:**
 
-- Execute the active handoff at `docs/plans/flightdeck-cleanup-and-dashboard-settings-handoff.md` FIRST (it includes the 6 follow-up issues + README keyhint removal + dashboard settings popup + #140 pi-flightdeck banner fix). That handoff's #140 work makes Phase 6.5 mostly trivial (or already done) by the time this plan executes.
-- Then execute this plan. The state-mode and run-identity scaffolding (Phases 1-4) and History popup (Phase 5) are the load-bearing additions. Phase 6.5 may collapse to a small docs/cleanup task once #140 lands.
-- Phase 7 (post-merge main sync) is independent and could land any time.
+- The cleanup/dashboard handoff is already complete. Start this plan from `origin/main` after the #150 merge commit (`6bd4bd6b21297339d921f5bc8b7929cb8020e6be`) or later.
+- The state-mode and run-identity scaffolding (Phases 1-4) and History popup (Phase 5) remain the load-bearing additions. Phase 6.5 should be scoped to the remaining archive/history behavior because #143 already handled the stale awaiting-watch hint subset.
+- Phase 7 (post-merge main sync) is independent and could land any time, but use the real current example as a regression case: after the cleanup session the primary `main` checkout was clean but `ahead 8, behind 9`; the helper must report that as blocked/diverged and must not reset, stash, or discard local commits.
 
 ## Problem
 
@@ -101,9 +123,9 @@ These details were verified against the current code before expanding this plan:
 - The extension currently shells to `pane-registry remove <id>` only from the popup prune keybind. Once the popup is removed, live stale-entry pruning should move to the Rust app only.
 - The extension currently has no tool-output renderer registration and no `tool_call` / `tool_result` rendering logic. No Flightdeck-specific tool-output rendering needs to be preserved today. If future Pi tool renderers are added, keep only those renderer registrations and tests.
 - `flightdeck-dashboard launch` already no-ops outside tmux, starts the Rust app through `flightdeck-session start`, and records a `flightdeck-dashboard` tracked entry.
-- The current app tmux window default is `flightdeck`, configurable through `--window-name` or `FLIGHTDECK_DASHBOARD_WINDOW`.
+- The current app tmux window default is `flightdeck`, configurable through `--window-name` or `FLIGHTDECK_DASHBOARD_WINDOW`; that env var is now also exposed in the Rust dashboard Settings popup and `settings_catalog.rs`. If this plan changes the default to ` FD` or adds an icon fallback knob, update the CLI/env docs, settings catalog definitions, validation, and dashboard snapshots together.
 - `flightdeck-session start` currently launches/verifies the app after registering the child entry. For desired tmux ordering, move app launch earlier and anchor insertion after the master window.
-- Current user-facing docs still describe `pi-flightdeck` as deprecated for new sessions. Confirmed stale locations include root `README.md` Pi extension catalog, `skills/flightdeck/README.md`, and `pi-extensions/pi-flightdeck/README.md`. Those docs must be rewritten: `pi-flightdeck` is optional Pi UI support for Flightdeck, not deprecated and not a dependency of the Flightdeck skill.
+- Current user-facing docs still describe `pi-flightdeck` as deprecated for new sessions in root `README.md` and `pi-extensions/pi-flightdeck/README.md` / package metadata. `skills/flightdeck/README.md` was updated by #150 to document the Rust dashboard and Settings popup, but Phase 6.6/11 should still audit it for optional Pi UI wording. Rewrite the stale docs: `pi-flightdeck` is optional Pi UI support for Flightdeck, not deprecated and not a dependency of the Flightdeck skill.
 
 ### Storage layout
 
@@ -419,6 +441,7 @@ Keep existing fields for compatibility.
 
 - Add a History popup/modal opened by keybind (for example `H`), not a top-level tab.
 - Implement scrollable run/snapshot list, filter input, inline snapshot expansion, open active, and open archived snapshot controls.
+- Avoid global key conflicts with the new Settings popup: `S` / `Alt+S` is already a dashboard-wide Settings key from #150. Any History action using `S` (for example summary-path copy/open) must be modal-local only, clearly documented in the History footer, and covered by key-handling tests.
 - Add help text and keybind docs.
 - Add tests/snapshots for popup closed/open, filtered history, empty history, selected archived run, expanded snapshot list, and active run return.
 
@@ -430,7 +453,7 @@ Keep existing fields for compatibility.
 
 ### Phase 6.5 — Startup stale-banner and prune policy
 
-Current pi-flightdeck behavior intentionally keeps completed sessions visible from the newest terminated archive and offers manual `p`/`del` prune for pane-gone live entries. That was useful for post-completion visibility, but wrong for the new run model because it makes a fresh Pi session look like Flightdeck is still supervising old pane-gone work.
+Current pi-flightdeck behavior intentionally keeps completed sessions visible from the newest terminated archive and offers manual `p`/`del` prune for pane-gone live entries. That was useful for post-completion visibility, but wrong for the new run model because it makes a fresh Pi session look like Flightdeck is still supervising old pane-gone work. PR #143 already added a narrow stale-pane guard for never-started/awaiting-watch hints: if tmux proves every tracked pane id is dead, the extension no longer renders a misleading "start supervising" hint. This phase still owns the broader policy for terminated archives, active-run-only mini-dashboard rows, and explicit History/archive browsing.
 
 New policy:
 
@@ -492,7 +515,7 @@ Tasks:
 - Add stable focus logic: app pane id → window id → `tmux select-window -t <window-id>`.
 - Keep launch idempotent: if the app entry/pane is alive, do not spawn a duplicate.
 - Change default app window title from `flightdeck` to ` FD`.
-- Keep `--window-name` / `FLIGHTDECK_DASHBOARD_WINDOW` override, and add a plain-title fallback knob (`FLIGHTDECK_DASHBOARD_WINDOW_ICON=0` or equivalent) that uses `FD`.
+- Keep `--window-name` / `FLIGHTDECK_DASHBOARD_WINDOW` override, and add a plain-title fallback knob (`FLIGHTDECK_DASHBOARD_WINDOW_ICON=0` or equivalent) that uses `FD`. Because #150 made dashboard env vars editable from the Settings popup, this title/default work must update `settings_catalog.rs`, per-setting validation, Settings popup snapshots/help, `ENV.md`, and user-facing README text in the same PR.
 - Extend `flightdeck-session start` with an insertion target such as `--after-window-id <tmux-window-id>` and pass it to `tmux new-window -a -t <window-id>`.
 - Move automatic dashboard launch earlier in `flightdeck-session start`: after argument validation/stale-state archival, before the child window is created, and never when the requested entry is the dashboard itself.
 - Capture the master window id before spawning children and use it so the app sits immediately after the master window.
@@ -501,7 +524,7 @@ Tasks:
 
 Tests:
 
-- Default app window title is ` FD`; env/flag override can produce plain `FD`.
+- Default app window title is ` FD`; env/flag/Settings override can produce plain `FD`.
 - App launch outside tmux is a no-op/error, not a crash.
 - `focus-or-launch --json` returns `focused` for an existing live app pane.
 - `focus-or-launch --json` returns `launched` and focuses the new pane when missing.
@@ -565,7 +588,7 @@ Tests:
 - Fast-forward local main after a synthetic origin update.
 - Clean no-op when already synced.
 - Blocked result when local main is dirty.
-- Blocked result when local main is ahead/diverged.
+- Blocked result when local main is ahead/diverged; include a regression matching the cleanup session state `main...origin/main [ahead 8, behind 9]`, where the worktree is clean but a fast-forward is unsafe.
 - Queued auto-merge does not trigger sync until merged state is observed.
 - Activity row emitted for success/block/failure.
 
@@ -932,9 +955,10 @@ If any Pi extension behavior changes:
 - `pi-codex-minimal-tools` terminal provider errors preserve HTTP status codes for retry classification.
 - `pi-skills-manager` browse rows clamp to terminal height without breaking large-terminal configured row counts.
 - Optional Codex text-only fixture cleanup, if done, changes only test names/IDs and not runtime behavior.
-- Tests cover lifecycle, migration, dashboard rendering, Pi mini-dashboard banner behavior, Pi app focus/open behavior, tmux app placement, and read-only safety.
-- After Flightdeck merges a PR, the primary local `main` checkout is either fast-forwarded to `origin/main` or Flightdeck clearly reports why sync was blocked and what operator choice is needed.
+- Tests cover lifecycle, migration, dashboard rendering, Pi mini-dashboard banner behavior, Pi app focus/open behavior, tmux app placement, Settings popup/catalog interactions when dashboard env defaults change, and read-only/settings-write safety.
+- After Flightdeck merges a PR, the primary local `main` checkout is either fast-forwarded to `origin/main` or Flightdeck clearly reports why sync was blocked and what operator choice is needed; never reset the kind of divergent local-main state observed after the cleanup session (`ahead 8, behind 9`).
 - After any implementation PR is merged, local `main` is fetched and fast-forwarded or a blocking sync reason is recorded before the work is called complete.
+- Open daemon issue #151 is either fixed, explicitly descoped in the PR body, or carried forward with fresh diagnostics if daemon/run-history work touches related lifecycle paths.
 
 ## Validation plan
 
