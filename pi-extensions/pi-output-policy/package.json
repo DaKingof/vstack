@@ -122,9 +122,9 @@
         {
           "key": "shellMinimizer.enabled",
           "label": "Reduce verbose shell output",
-          "description": "Compress repetitive git/npm/cargo/test output before truncation. Disabled by default to avoid hiding diagnostically important lines.",
+          "description": "Compress repetitive git/npm/cargo/test output before truncation. Keeps first/last lines plus warnings, errors, and test summaries so successful validation does not waste context.",
           "type": "boolean",
-          "default": false,
+          "default": true,
           "category": "Shell Minimizer",
           "apply": "live"
         },

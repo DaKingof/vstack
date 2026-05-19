@@ -10,7 +10,7 @@ Large-output policy for Pi tool results: minimization, bounded truncation, and f
 - Head truncation for search/listing tools; tail truncation for command/log tools.
 - Explicit truncation notices show size, line count, direction, and artifact path.
 - File reads, edit/write results, and detail payloads pass through unmodified by default — opt in per category.
-- Shell output minimizer compresses noisy git/npm/cargo/test output before truncation (off by default).
+- Shell output minimizer compresses noisy git/npm/cargo/test output before truncation while preserving warnings, errors, and summaries.
 
 ## Install
 
@@ -62,7 +62,7 @@ Open `/extensions:settings`; settings appear under the **Output Policy** tab.
 
 | Setting | What it does |
 | --- | --- |
-| Reduce verbose shell output | Compress git/npm/cargo/test output before truncation. Off by default. |
+| Reduce verbose shell output | Compress git/npm/cargo/test output before truncation. On by default; disable when you need full successful build logs inline. |
 | Allowlist | Comma-separated command families to minimize. |
 | Denylist | Comma-separated command families to leave alone. |
 | Max capture bytes | Skip minimizer on output larger than this; truncate directly. |

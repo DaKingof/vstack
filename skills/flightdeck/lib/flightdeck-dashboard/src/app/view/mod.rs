@@ -531,7 +531,7 @@ fn render_footer(
 fn kind_counts_label(model: &Model) -> String {
     let counts = &model.snapshot.counts;
     format!(
-        "Adhoc {} · Issue {} · Workflow {}",
+        "Adhoc {} · Issues {} · Tasks {}",
         counts.adhoc, counts.issue, counts.workflow
     )
 }
@@ -709,11 +709,11 @@ fn daemon_label(model: &Model, compact: bool) -> &str {
     {
         model.snapshot.daemon.label.as_str()
     } else {
-        "daemon: file-mode"
+        "state: live file"
     };
     if compact {
         match label.strip_prefix("daemon: ").unwrap_or(label) {
-            "file-mode" => "file",
+            "file-mode" => "state file",
             compact_label => compact_label,
         }
     } else {
@@ -727,14 +727,14 @@ fn owner_parts(model: &Model, compact: bool) -> (String, Option<String>) {
     };
     let harness = owner.harness.as_deref().unwrap_or("unknown");
     if compact {
-        return (format!("Master {harness}"), None);
+        return (format!("Supervisor {harness}"), None);
     }
     let cwd = owner
         .cwd
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| String::from("cwd?"));
-    (format!("Master {harness}"), Some(cwd))
+    (format!("Supervisor {harness}"), Some(cwd))
 }
 
 fn trim_for_header(value: &str, max_cells: usize) -> String {

@@ -72,13 +72,18 @@ fn legend_lines(theme: &Palette) -> Vec<Line<'static>> {
     vec![
         Line::from(""),
         Line::from(Span::styled("Legend", theme.header())),
-        Line::from("Kind badges     AH = Adhoc · ISS = Issue · WF = Workflow"),
+        Line::from("Kind badges     Adhoc · Issue · Task (plan/workflow item)"),
         Line::from("State counts    P = Needs input · S = Submitting · W = Running · R = Idle"),
         Line::from("                MR = Ready to merge · M = Merged · C = Completed"),
         Line::from("                D = Stopped · CA = Cancelled · AB = Aborted"),
         Line::from("Status chips    fresh / 1m old / 5m old · stale = how recent the state is"),
-        Line::from("                file-mode = reading the state file directly; observer = different tmux pane than master"),
-        Line::from("Spinners        Braille spinner next to a badge means transient work is being polled"),
+        Line::from(
+            "                state: live file = dashboard is watching the Flightdeck state file",
+        ),
+        Line::from("                observer = viewing a session owned by another supervisor pane"),
+        Line::from(
+            "Spinners        Braille spinner next to a badge means transient work is being polled",
+        ),
         Line::from("PR / path       Pull Request number and local git worktree/path"),
     ]
 }
@@ -291,8 +296,8 @@ pub fn render_session_detail(
             Line::from(""),
             Line::from(Span::styled("Location", theme.header())),
             Line::from(format!(
-                "pane {}",
-                session.pane_id.as_deref().unwrap_or("—")
+                "tmux tab {}",
+                session.tmux_tab_label().unwrap_or_else(|| "—".to_owned())
             )),
             Line::from(format!(
                 "cwd {}",
@@ -303,21 +308,27 @@ pub fn render_session_detail(
                     .unwrap_or_else(|| "—".to_owned())
             )),
         ];
-        if let Some(issue) = session.issue() {
+        if let Some(heading) = session.domain_heading() {
             lines.extend([
                 Line::from(""),
-                Line::from(Span::styled("Issue info", theme.header())),
+                Line::from(Span::styled(format!("{heading} info"), theme.header())),
+                Line::from(format!(
+                    "id {}",
+                    session
+                        .domain_identifier()
+                        .unwrap_or_else(|| "—".to_owned())
+                )),
                 Line::from(format!(
                     "PR {} on remote",
-                    issue
-                        .pr_number
+                    session
+                        .pr_number()
                         .map(|number| format!("#{number}"))
                         .unwrap_or_else(|| "—".to_owned())
                 )),
                 Line::from(format!(
                     "scope declared={} actual={}",
-                    issue.scope_files_declared.unwrap_or_default(),
-                    issue.scope_files_actual.unwrap_or_default()
+                    session.domain_scope_declared().unwrap_or_default(),
+                    session.domain_scope_actual().unwrap_or_default()
                 )),
             ]);
         }
@@ -346,10 +357,7 @@ pub fn render_session_detail(
         lines.push(Line::from(Span::styled("Actions", theme.header())));
         if session.pane_target.is_some() {
             let line = u16::try_from(lines.len()).unwrap_or(u16::MAX);
-            lines.push(Line::from(Span::styled(
-                "[ Focus tmux window ]",
-                theme.ok(),
-            )));
+            lines.push(Line::from(Span::styled("[ Focus tmux tab ]", theme.ok())));
             hitmap.push(
                 Rect::new(body.x, body.y.saturating_add(line), 22, 1),
                 ClickAction::PromptFocus(model.selected_index()),
@@ -491,7 +499,7 @@ pub fn render_event_detail(
             Line::from(""),
             Line::from(Span::styled("Session", theme.header())),
             Line::from(format!(
-                "{} · pane {} · harness {}",
+                "{} · debug pane id {} · harness {}",
                 event.session_label(),
                 event.pane_id.as_deref().unwrap_or("—"),
                 event.harness.as_deref().unwrap_or("—")

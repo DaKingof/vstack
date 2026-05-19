@@ -12,7 +12,7 @@ fn state_and_kind_label_round_trip() {
 
     assert_eq!(kind_label("adhoc"), "Adhoc");
     assert_eq!(kind_label("issue"), "Issue");
-    assert_eq!(kind_label("workflow"), "Workflow");
+    assert_eq!(kind_label("workflow"), "Task");
     assert_eq!(kind_label("other"), "other");
-    assert_eq!(kind_badge(&SessionKind::Workflow), "WF");
+    assert_eq!(kind_badge(&SessionKind::Workflow), "Task");
 }

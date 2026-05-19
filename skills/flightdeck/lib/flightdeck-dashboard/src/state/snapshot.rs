@@ -8,8 +8,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::schema::{
     AdapterMetadata, DecisionLogEntry, DomainBlock, LaunchInfo, MasterState, OwnerBlock,
-    TrackedEntry, TrackedIssueDomain,
+    TrackedEntry, TrackedGithubIssueDomain, TrackedIssueDomain, TrackedPlanItemDomain,
 };
+
+const DASHBOARD_ENTRY_ID: &str = "flightdeck-dashboard";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub enum SessionKind {
@@ -250,6 +252,7 @@ impl DashboardSnapshot {
         let mut sessions: Vec<TrackedSession> = state
             .entries
             .into_iter()
+            .filter(|(key, entry)| !is_dashboard_entry(key, entry))
             .map(|(key, entry)| TrackedSession::from_entry(key, entry))
             .collect();
         sort_sessions_for_operator(&mut sessions, paused_entry_id.as_deref());
@@ -536,9 +539,30 @@ impl TrackedSession {
     }
 
     #[must_use]
+    pub fn github_issue(&self) -> Option<&TrackedGithubIssueDomain> {
+        self.domain
+            .as_ref()
+            .and_then(|domain| domain.github_issue.as_ref())
+    }
+
+    #[must_use]
+    pub fn plan_item(&self) -> Option<&TrackedPlanItemDomain> {
+        self.domain
+            .as_ref()
+            .and_then(|domain| domain.plan_item.as_ref())
+    }
+
+    #[must_use]
+    pub fn has_routed_domain(&self) -> bool {
+        self.issue().is_some() || self.github_issue().is_some() || self.plan_item().is_some()
+    }
+
+    #[must_use]
     pub fn pr_number(&self) -> Option<u32> {
         self.issue()
             .and_then(|issue| issue.pr_number)
+            .or_else(|| self.github_issue().and_then(|issue| issue.pr_number))
+            .or_else(|| self.plan_item().and_then(|item| item.pr_number))
             .or(self.pr_number)
     }
 
@@ -546,13 +570,90 @@ impl TrackedSession {
     pub fn worktree(&self) -> Option<&PathBuf> {
         self.issue()
             .and_then(|issue| issue.worktree.as_ref())
+            .or_else(|| {
+                self.github_issue()
+                    .and_then(|issue| issue.worktree.as_ref())
+            })
+            .or_else(|| self.plan_item().and_then(|item| item.worktree.as_ref()))
             .or(self.worktree.as_ref())
+    }
+
+    #[must_use]
+    pub fn merge_commit(&self) -> Option<&str> {
+        self.issue()
+            .and_then(|issue| issue.merge_commit.as_deref())
+            .or_else(|| {
+                self.github_issue()
+                    .and_then(|issue| issue.merge_commit.as_deref())
+            })
+            .or_else(|| {
+                self.plan_item()
+                    .and_then(|item| item.merge_commit.as_deref())
+            })
+    }
+
+    #[must_use]
+    pub fn domain_scope_actual(&self) -> Option<u32> {
+        self.issue()
+            .and_then(|issue| issue.scope_files_actual)
+            .or_else(|| {
+                self.github_issue()
+                    .and_then(|issue| issue.scope_files_actual)
+            })
+            .or_else(|| self.plan_item().and_then(|item| item.scope_files_actual))
+    }
+
+    #[must_use]
+    pub fn domain_scope_declared(&self) -> Option<u32> {
+        self.issue().and_then(|issue| issue.scope_files_declared)
+    }
+
+    #[must_use]
+    pub fn domain_heading(&self) -> Option<&'static str> {
+        if self.issue().is_some() || self.github_issue().is_some() {
+            Some("Issue")
+        } else if self.plan_item().is_some() {
+            Some("Plan item")
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub fn domain_identifier(&self) -> Option<String> {
+        if let Some(issue) = self.issue() {
+            return Some(issue.id.clone());
+        }
+        if let Some(issue) = self.github_issue() {
+            return issue.number.map(|number| format!("#{number}"));
+        }
+        self.plan_item()
+            .and_then(|item| item.item_id.as_ref().cloned())
+    }
+
+    #[must_use]
+    pub fn tmux_tab_label(&self) -> Option<String> {
+        self.window_name_current
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+            .cloned()
+            .or_else(|| (!self.title.trim().is_empty()).then(|| self.title.clone()))
+            .or_else(|| {
+                self.window
+                    .as_ref()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| format!("window {value}"))
+            })
     }
 
     #[must_use]
     pub fn latest_decision(&self) -> Option<&DecisionLogEntry> {
         self.decisions_log.iter().max_by_key(|entry| entry.ts)
     }
+}
+
+fn is_dashboard_entry(key: &str, entry: &TrackedEntry) -> bool {
+    key == DASHBOARD_ENTRY_ID || entry.id == DASHBOARD_ENTRY_ID
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]

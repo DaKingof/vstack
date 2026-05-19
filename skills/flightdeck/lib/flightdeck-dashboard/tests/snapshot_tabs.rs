@@ -286,9 +286,9 @@ fn daemon_tab_file_mode_message() {
     model.snapshot.master_state_path =
         std::path::PathBuf::from("/mnt/Tertiary/dev/vstack/main/tmp/flightdeck-state-VS.json");
     let rendered = common::render_model(&model);
-    assert!(rendered.contains("Read mode"));
-    assert!(rendered.contains("file-watcher (no daemon socket)"));
-    assert!(rendered.contains("daemon: file-mode"));
+    assert!(rendered.contains("watching live state file"));
+    assert!(rendered.contains("state source"));
+    assert!(rendered.contains("state: live file"));
     insta::assert_snapshot!("tab_daemon_file_mode", rendered);
 }
 

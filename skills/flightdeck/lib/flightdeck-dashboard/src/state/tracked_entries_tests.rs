@@ -114,6 +114,44 @@ fn current_tmux_window_name_overrides_spawn_title_for_display() {
 }
 
 #[test]
+fn dashboard_self_entry_is_hidden_from_operator_sessions() {
+    let source = r#"{
+      "session_id": "HT",
+      "entries": {
+        "flightdeck-dashboard": {
+          "id": "flightdeck-dashboard",
+          "title": "flightdeck",
+          "kind": "workflow",
+          "state": "waiting",
+          "harness": "shell",
+          "decisions_log": []
+        },
+        "ISS-1": {
+          "id": "ISS-1",
+          "title": "User issue",
+          "kind": "issue",
+          "state": "ready",
+          "decisions_log": []
+        }
+      },
+      "merge_queue": [],
+      "conflict_graph": { "edges": [], "computed_at": null },
+      "paused_for_user": null
+    }"#;
+    let mut warnings = Vec::new();
+    let mut warn = |message: &str| warnings.push(message.to_owned());
+
+    let snapshot =
+        snapshot_from_str_with_warn(source, fixed_now(), &mut warn).expect("snapshot reads");
+
+    assert!(warnings.is_empty());
+    assert_eq!(snapshot.sessions.len(), 1);
+    assert_eq!(snapshot.sessions[0].id, "ISS-1");
+    assert_eq!(snapshot.counts.total, 1);
+    assert_eq!(snapshot.counts.workflow, 0);
+}
+
+#[test]
 fn read_tracked_entries_returns_vec() {
     let value: Value =
         serde_json::from_str(&fixture_source("entries-happy.json")).expect("json parses");
@@ -189,6 +227,78 @@ fn issue_domain_comes_from_domain_issue_not_top_level_fields() {
         Some(Path::new("/repo/worktrees/iss-7"))
     );
     assert_eq!(issue.merge_commit.as_deref(), Some("abc123"));
+}
+
+#[test]
+fn github_and_plan_domains_surface_pr_and_worktree() {
+    let source = r#"{
+      "session_id": "HT",
+      "entries": {
+        "141": {
+          "id": "141",
+          "title": "GitHub issue",
+          "kind": "issue",
+          "state": "ready",
+          "domain": {
+            "github_issue": {
+              "number": 141,
+              "url": "https://github.com/org/repo/issues/141",
+              "worktree": "/repo/trees/141",
+              "pr_number": 153,
+              "scope_files_actual": 4,
+              "merge_commit": "def456"
+            }
+          },
+          "decisions_log": []
+        },
+        "plan.item": {
+          "id": "plan.item",
+          "title": "Plan item",
+          "kind": "workflow",
+          "state": "ready",
+          "domain": {
+            "plan_item": {
+              "item_id": "plan.item",
+              "item_title": "Plan item",
+              "worktree": "/repo/trees/plan.item",
+              "pr_number": 154,
+              "scope_files_actual": 2
+            }
+          },
+          "decisions_log": []
+        }
+      },
+      "merge_queue": [],
+      "conflict_graph": { "edges": [], "computed_at": null },
+      "paused_for_user": null
+    }"#;
+    let mut warnings = Vec::new();
+    let mut warn = |message: &str| warnings.push(message.to_owned());
+
+    let snapshot =
+        snapshot_from_str_with_warn(source, fixed_now(), &mut warn).expect("snapshot reads");
+
+    assert!(warnings.is_empty());
+    let github = snapshot
+        .sessions
+        .iter()
+        .find(|entry| entry.id == "141")
+        .expect("github entry exists");
+    assert_eq!(github.pr_number(), Some(153));
+    assert_eq!(github.domain_identifier().as_deref(), Some("#141"));
+    assert_eq!(github.merge_commit(), Some("def456"));
+    assert_eq!(
+        github.worktree().map(|path| path.as_path()),
+        Some(Path::new("/repo/trees/141"))
+    );
+    let plan = snapshot
+        .sessions
+        .iter()
+        .find(|entry| entry.id == "plan.item")
+        .expect("plan entry exists");
+    assert_eq!(plan.pr_number(), Some(154));
+    assert_eq!(plan.domain_heading(), Some("Plan item"));
+    assert_eq!(plan.domain_identifier().as_deref(), Some("plan.item"));
 }
 
 #[test]

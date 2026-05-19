@@ -220,8 +220,8 @@ fn header_counts_fit_at_140_cols() {
         common::SNAPSHOT_HEIGHT,
     );
     assert!(rendered.contains("Adhoc 1"));
-    assert!(rendered.contains("Issue 1"));
-    assert!(rendered.contains("Workflow 1"));
+    assert!(rendered.contains("Issues 1"));
+    assert!(rendered.contains("Tasks 1"));
     assert!(!rendered.contains("P:1"));
     assert!(!rendered.contains("prompting:"));
     insta::assert_snapshot!("overview_header_counts_140_cols", rendered);
@@ -398,7 +398,7 @@ fn alt_m_renders_compact_overview() {
     assert!(model.ui.compact);
     let rendered = common::render_model(&model);
     assert!(
-        rendered.contains("AH:1") && rendered.contains("ISS:1"),
+        rendered.contains("Adhoc:1") && rendered.contains("Issues:1"),
         "compact mode summary missing:\n{rendered}"
     );
     insta::assert_snapshot!("overview_alt_m_compact", rendered);

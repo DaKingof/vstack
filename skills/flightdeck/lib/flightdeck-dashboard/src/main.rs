@@ -256,7 +256,7 @@ fn motion_level(args: &TuiArgs) -> MotionLevel {
 
 fn file_mode_daemon_status() -> SnapshotDaemonStatus {
     SnapshotDaemonStatus {
-        label: String::from("daemon: file-mode"),
+        label: String::from("state: live file"),
         healthy: Some(true),
         pid: None,
         last_heartbeat_at: None,

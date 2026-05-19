@@ -99,8 +99,8 @@ fn render_file_mode(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: &Pa
     let updated = model.snapshot.updated_at;
     let lines = vec![
         Line::from(vec![
-            Span::styled("Read mode      ", theme.status_label()),
-            Span::raw("file-watcher (no daemon socket)"),
+            Span::styled("Status        ", theme.status_label()),
+            Span::raw("watching live state file"),
         ]),
         Line::from(vec![
             Span::styled("State file     ", theme.status_label()),
@@ -116,14 +116,14 @@ fn render_file_mode(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: &Pa
         ]),
         Line::from(vec![
             Span::styled("Note           ", theme.status_label()),
-            Span::raw("Daemon socket not connected. Run `flightdeck-dashboard daemon start --session <name>` to populate daemon-side telemetry, then relaunch with `--socket $FD_STATE_DIR/dashboard-<key>.sock`."),
+            Span::raw("Dashboard is in normal state-file mode. Socket telemetry is optional and separate from the Flightdeck supervisor daemon that wakes the master."),
         ]),
     ];
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(theme.border_active())
         .style(theme.panel())
-        .title(Span::styled(" daemon file-mode ", theme.title()));
+        .title(Span::styled(" state source ", theme.title()));
     frame.render_widget(
         Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
         area,

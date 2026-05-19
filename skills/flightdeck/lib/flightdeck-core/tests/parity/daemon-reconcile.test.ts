@@ -15,6 +15,7 @@ interface LogLine { tag: string; msg: string }
 
 function buildHarness(initialEntries: ReconcileEntry[]) {
 	const active = new Set<string>();
+	const subscribed = new Set<string>();
 	const spawnLog: ReconcileEntry[] = [];
 	const reapLog: string[] = [];
 	const logs: LogLine[] = [];
@@ -22,15 +23,18 @@ function buildHarness(initialEntries: ReconcileEntry[]) {
 	const deps = {
 		listTrackedEntries: () => entriesNext,
 		activePaneIds: () => active.values(),
+		subscribedPaneIds: () => subscribed.values(),
 		spawnFor: (entry: ReconcileEntry) => {
 			spawnLog.push(entry);
 			if (!entry.harness) return { spawned: false, reason: "missing-harness" };
 			active.add(entry.paneId);
+			subscribed.add(entry.paneId);
 			return { spawned: true };
 		},
 		reap: (paneId: string) => {
 			reapLog.push(paneId);
 			active.delete(paneId);
+			subscribed.delete(paneId);
 		},
 		log: (tag: string, msg: string) => {
 			logs.push({ tag, msg });
@@ -39,6 +43,7 @@ function buildHarness(initialEntries: ReconcileEntry[]) {
 	return {
 		deps,
 		active,
+		subscribed,
 		spawnLog,
 		reapLog,
 		logs,
@@ -46,6 +51,10 @@ function buildHarness(initialEntries: ReconcileEntry[]) {
 			entriesNext = [...next];
 		},
 		seedActive(id: string): void {
+			active.add(id);
+			subscribed.add(id);
+		},
+		seedActiveWithoutSubscriber(id: string): void {
 			active.add(id);
 		},
 	};
@@ -120,6 +129,17 @@ describe("reconcileTrackedEntries (vstack#59)", () => {
 		harness.seedActive("%10");
 		reconcileTrackedEntries(harness.deps);
 		expect(harness.logs.find((line) => line.tag === "reconcile")).toBeUndefined();
+	});
+
+	test("spawns subscriber when pane is active but subscriber is missing", () => {
+		const harness = buildHarness([{ paneId: "%10", harness: "pi" }]);
+		harness.seedActiveWithoutSubscriber("%10");
+		const result = reconcileTrackedEntries(harness.deps);
+		expect(result.added).toEqual(["%10"]);
+		expect(result.reaped).toEqual([]);
+		expect(harness.spawnLog.map((entry) => entry.paneId)).toEqual(["%10"]);
+		expect(harness.active.has("%10")).toBe(true);
+		expect(harness.subscribed.has("%10")).toBe(true);
 	});
 
 	test("entries without harness are skipped (logged as missing-harness)", () => {

@@ -330,6 +330,11 @@ function pollOne(row: PollRow): string {
 		if (!Number.isFinite(parsed) || parsed <= 0) return 2000;
 		return Math.ceil(parsed * 1000);
 	}
+	function adapterMaxBufferBytes(): number {
+		const parsed = Number.parseFloat(process.env.FD_ADAPTER_MAX_BUFFER_MB ?? "16");
+		if (!Number.isFinite(parsed) || parsed <= 0) return 16 * 1024 * 1024;
+		return Math.ceil(parsed * 1024 * 1024);
+	}
 	// Adapter contract: if the adapter has fresh args AND the read
 	// succeeds (status 0, non-empty stdout, non-empty extracted buf),
 	// mark *Used so the tmux fallback below is skipped. If the read
@@ -373,7 +378,7 @@ function pollOne(row: PollRow): string {
 				// spawnSync's built-in `timeout` option — same semantics as
 				// timeout(1) (SIGTERM after the deadline) but in-process,
 				// dropping one fork per Pi pane per tick.
-				const r = spawnSync(bin, ["history", ...target, "50"], { encoding: "utf8", timeout: adapterTimeoutMs() });
+				const r = spawnSync(bin, ["history", ...target, "50"], { encoding: "utf8", maxBuffer: adapterMaxBufferBytes(), timeout: adapterTimeoutMs() });
 				if (r.status === 0 && r.stdout) {
 					const extracted = jqOut(PI_LAST_ASSISTANT_JQ, r.stdout);
 					if (extracted) { buf = extracted; piUsed = true; }

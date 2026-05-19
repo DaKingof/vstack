@@ -360,6 +360,7 @@ export async function runLoop(opts: RunLoopOpts): Promise<void> {
 		const result = reconcileTrackedEntries({
 			listTrackedEntries: () => entries,
 			activePaneIds: () => innerIds.values(),
+			subscribedPaneIds: () => ocSubscribed.keys(),
 			spawnFor: (entry) => {
 				const target = entry.adapterMeta?.ocUrl || entry.paneId; // fallback if pane-target unknown
 				const resolvedTarget = resolvePaneTargetForEntry(opts.paneRegistryBin, entry.paneId) || target;
@@ -367,8 +368,10 @@ export async function runLoop(opts: RunLoopOpts): Promise<void> {
 				if (spawned) {
 					paneHarness.set(entry.paneId, entry.harness);
 					ocPaneTarget.set(entry.paneId, resolvedTarget);
-					innerIds.push(entry.paneId);
-					seenInner.add(entry.paneId);
+					if (!seenInner.has(entry.paneId)) {
+						innerIds.push(entry.paneId);
+						seenInner.add(entry.paneId);
+					}
 					return { spawned: true };
 				}
 				return { spawned: false, reason: entry.harness ? "no-adapter-meta" : "missing-harness" };

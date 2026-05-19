@@ -803,6 +803,26 @@ pub const SETTING_DEFINITIONS: &[SettingDefinition] = &[
         true
     ),
     setting!(
+        "FLIGHTDECK_DASHBOARD_PI_HISTORY_EVENTS",
+        Some("25"),
+        "25",
+        "Pi bridge history event count for dashboard cost totals.",
+        Dashboard,
+        Number,
+        SettingValidation::PositiveInteger,
+        true
+    ),
+    setting!(
+        "FLIGHTDECK_DASHBOARD_PI_HISTORY_TIMEOUT_MS",
+        Some("1000"),
+        "1000",
+        "Per-entry timeout for dashboard Pi cost polling.",
+        Dashboard,
+        Number,
+        SettingValidation::PositiveInteger,
+        true
+    ),
+    setting!(
         "FLIGHTDECK_DASHBOARD_PRICING_FILE",
         None,
         "bundled table",
@@ -867,6 +887,16 @@ pub const SETTING_DEFINITIONS: &[SettingDefinition] = &[
         Some("2"),
         "2",
         "Bounds per-adapter read subprocesses.",
+        AdditionalTuning,
+        Number,
+        SettingValidation::PositiveNumber,
+        true
+    ),
+    setting!(
+        "FD_ADAPTER_MAX_BUFFER_MB",
+        Some("16"),
+        "16",
+        "Maximum stdout captured from adapter reads.",
         AdditionalTuning,
         Number,
         SettingValidation::PositiveNumber,

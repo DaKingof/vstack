@@ -146,6 +146,8 @@ pub struct AdapterMetadata {
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DomainBlock {
     pub issue: Option<TrackedIssueDomain>,
+    pub github_issue: Option<TrackedGithubIssueDomain>,
+    pub plan_item: Option<TrackedPlanItemDomain>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -157,6 +159,34 @@ pub struct TrackedIssueDomain {
     pub scope_files_actual: Option<u32>,
     pub orchestration_started: Option<bool>,
     pub merge_commit: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TrackedGithubIssueDomain {
+    pub number: Option<u32>,
+    pub url: Option<String>,
+    pub worktree: Option<PathBuf>,
+    pub pr_number: Option<u32>,
+    pub scope_files_actual: Option<u32>,
+    pub merge_commit: Option<String>,
+    pub outcome: Option<String>,
+    pub phase: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TrackedPlanItemDomain {
+    pub plan_path: Option<PathBuf>,
+    pub plan_title: Option<String>,
+    pub item_id: Option<String>,
+    pub item_title: Option<String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    pub worktree: Option<PathBuf>,
+    pub pr_number: Option<u32>,
+    pub merge_commit: Option<String>,
+    pub scope_files_actual: Option<u32>,
+    pub outcome: Option<String>,
+    pub phase: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

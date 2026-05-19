@@ -36,6 +36,7 @@ export interface ReconcileAdapterMeta {
 export interface ReconcileDeps {
 	listTrackedEntries: () => ReconcileEntry[];
 	activePaneIds: () => Iterable<string>;
+	subscribedPaneIds?: () => Iterable<string>;
 	spawnFor: (entry: ReconcileEntry) => { spawned: boolean; reason?: string };
 	reap: (paneId: string) => void;
 	log: (tag: string, msg: string) => void;
@@ -60,11 +61,13 @@ export function reconcileTrackedEntries(deps: ReconcileDeps): ReconcileResult {
 	const seen = new Set<string>();
 	const active = new Set<string>();
 	for (const id of deps.activePaneIds()) active.add(id);
+	const subscribed = new Set<string>();
+	for (const id of (deps.subscribedPaneIds ? deps.subscribedPaneIds() : active.values())) subscribed.add(id);
 	for (const entry of entries) {
 		if (!entry?.paneId) continue;
 		if (seen.has(entry.paneId)) continue;
 		seen.add(entry.paneId);
-		if (active.has(entry.paneId)) continue;
+		if (active.has(entry.paneId) && subscribed.has(entry.paneId)) continue;
 		try {
 			const outcome = deps.spawnFor(entry);
 			if (outcome.spawned) result.added.push(entry.paneId);

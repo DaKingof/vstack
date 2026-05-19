@@ -44,7 +44,7 @@ pub fn kind_label(kind: &str) -> &str {
     match kind {
         "adhoc" => "Adhoc",
         "issue" => "Issue",
-        "workflow" => "Workflow",
+        "workflow" => "Task",
         other => other,
     }
 }
@@ -57,9 +57,9 @@ pub fn kind_label_for(kind: &SessionKind) -> &str {
 #[must_use]
 pub const fn kind_badge(kind: &SessionKind) -> &'static str {
     match kind {
-        SessionKind::Adhoc => "AH",
-        SessionKind::Issue => "ISS",
-        SessionKind::Workflow => "WF",
+        SessionKind::Adhoc => "Adhoc",
+        SessionKind::Issue => "Issue",
+        SessionKind::Workflow => "Task",
         SessionKind::Other(_) => "??",
     }
 }

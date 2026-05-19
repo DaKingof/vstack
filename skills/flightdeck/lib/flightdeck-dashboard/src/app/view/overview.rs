@@ -12,7 +12,7 @@ use crate::app::model::{Model, ReadSourceState};
 use crate::app::theme::Palette;
 use crate::app::view::{fx, human_duration};
 use crate::cost::{format_compact, format_cost, format_tokens};
-use crate::state::snapshot::{SessionKind, SessionState, TrackedSession};
+use crate::state::snapshot::{SessionState, TrackedSession};
 use crate::state::tracked_entries::PRE_PURGE_BANNER;
 
 const RECENT_ACTIVITY_LIMIT: usize = 5;
@@ -169,7 +169,7 @@ fn render_single_column(
         Span::raw(snapshot.session_id.clone()),
         Span::raw("  ·  "),
         Span::raw(format!(
-            "AH:{}  ISS:{}  WF:{}",
+            "Adhoc:{}  Issues:{}  Tasks:{}",
             snapshot.counts.adhoc, snapshot.counts.issue, snapshot.counts.workflow
         )),
         Span::raw("  ·  "),
@@ -222,7 +222,7 @@ fn render_single_column(
             Span::styled(format!("{cursor} "), style),
             Span::styled(format!("{:<20}  ", session.id), style),
             Span::styled(
-                format!("{:<12}", state_label_for(&session.state)),
+                format!("{:<12}", state_label_for_session(session)),
                 theme.state(&session.state),
             ),
             Span::raw(" "),
@@ -244,7 +244,7 @@ fn render_single_column(
         .border_style(theme.border_active())
         .style(theme.panel())
         .title(Span::styled(
-            format!(" sessions ({} tracked) ", snapshot.counts.total),
+            format!(" tracked work ({} items) ", snapshot.counts.total),
             theme.title(),
         ));
     hitmap.push(area, ClickAction::ScrollDown(ScrollSource::Sessions), 0);
@@ -318,7 +318,7 @@ fn render_left_rail(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: &Pa
         .borders(Borders::ALL)
         .border_style(theme.border())
         .style(theme.panel())
-        .title(Span::styled(" left rail ", theme.muted()));
+        .title(Span::styled(" summary ", theme.muted()));
     frame.render_widget(
         Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
         area,
@@ -333,7 +333,7 @@ fn render_session_table(
     hitmap: &mut HitMap,
 ) {
     let header = Row::new([
-        Cell::from("Kind"),
+        Cell::from("Type"),
         Cell::from("State"),
         Cell::from("Harness"),
         Cell::from("Title"),
@@ -364,7 +364,7 @@ fn render_session_table(
                     Span::styled(fx::spinner(model, session), theme.info()),
                 ])),
                 Cell::from(Span::styled(
-                    truncate_end(state_label_for(&session.state), widths[1]),
+                    truncate_end(&state_label_for_session(session), widths[1]),
                     theme.state(&session.state),
                 )),
                 Cell::from(truncate_end(
@@ -390,7 +390,7 @@ fn render_session_table(
         .border_style(theme.border_active())
         .style(theme.panel())
         .title(Span::styled(
-            format!(" sessions ({} tracked) ", model.snapshot.counts.total),
+            format!(" tracked work ({} items) ", model.snapshot.counts.total),
             theme.title(),
         ));
     hitmap.push(area, ClickAction::ScrollDown(ScrollSource::Sessions), 0);
@@ -435,7 +435,7 @@ fn render_detail(
         .borders(Borders::ALL)
         .border_style(theme.border())
         .style(theme.panel())
-        .title(Span::styled(" detail ", theme.muted()));
+        .title(Span::styled(" selected work ", theme.muted()));
     for (line_index, action, width) in buttons {
         hitmap.push(
             Rect::new(
@@ -470,7 +470,7 @@ fn detail_lines(
             Span::raw(kind_label_for(&session.kind).to_owned()),
             Span::raw("  ·  "),
             Span::styled(
-                state_label_for(&session.state).to_owned(),
+                state_label_for_session(session),
                 theme.state(&session.state),
             ),
         ]),
@@ -483,8 +483,9 @@ fn detail_lines(
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled("Where", theme.header())));
     lines.push(Line::from(vec![
-        Span::styled("pane    ", theme.status_label()),
-        Span::raw(session.pane_id.clone().unwrap_or_else(|| "—".to_owned())),
+        Span::styled("tmux tab", theme.status_label()),
+        Span::raw(" "),
+        Span::raw(session.tmux_tab_label().unwrap_or_else(|| "—".to_owned())),
     ]));
     if let Some(worktree) = session.worktree() {
         lines.push(Line::from(Span::styled("worktree", theme.status_label())));
@@ -502,7 +503,7 @@ fn detail_lines(
             Span::raw(branch.to_owned()),
         ]));
     }
-    if session.issue().is_none() {
+    if !session.has_routed_domain() {
         if let Some(pr) = session.pr_number() {
             lines.push(Line::from(vec![
                 Span::styled("PR      ", theme.status_label()),
@@ -511,22 +512,31 @@ fn detail_lines(
         }
     }
 
-    if let Some(issue) = session.issue() {
+    if let Some(heading) = session.domain_heading() {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("Issue", theme.header())));
+        lines.push(Line::from(Span::styled(heading, theme.header())));
+        if let Some(identifier) = session.domain_identifier() {
+            lines.push(Line::from(vec![
+                Span::styled("id      ", theme.status_label()),
+                Span::raw(identifier),
+            ]));
+        }
         lines.push(Line::from(
-            issue
-                .pr_number
+            session
+                .pr_number()
                 .map(|pr| format!("PR #{pr}"))
                 .unwrap_or_else(|| String::from("PR —")),
         ));
         lines.push(Line::from(format!(
             "scope declared={} actual={}{}",
-            optional_count(issue.scope_files_declared),
-            optional_count(issue.scope_files_actual),
-            scope_ratio(issue.scope_files_declared, issue.scope_files_actual)
+            optional_count(session.domain_scope_declared()),
+            optional_count(session.domain_scope_actual()),
+            scope_ratio(
+                session.domain_scope_declared(),
+                session.domain_scope_actual()
+            )
         )));
-        if let Some(commit) = &issue.merge_commit {
+        if let Some(commit) = session.merge_commit() {
             lines.push(Line::from(format!("merge commit {commit}")));
         }
     }
@@ -549,27 +559,25 @@ fn detail_lines(
     lines.push(Line::from(""));
     lines.extend(cost_lines(model, session, theme));
 
-    if matches!(session.kind, SessionKind::Adhoc | SessionKind::Workflow) {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("Recent activity", theme.header())));
-        let mut rendered = 0usize;
-        for event in recent_activity_for_entry(model, &session.id, RECENT_ACTIVITY_LIMIT) {
-            let age = age_label(Some(event.ts), model.now);
-            let chip = event_chip_for(event);
-            let summary = truncate_end(&event.summary, 56);
-            lines.push(Line::from(vec![
-                Span::styled(format!("{age:<6} "), theme.muted()),
-                Span::styled(format!("{chip:<8} "), theme.info()),
-                Span::raw(summary),
-            ]));
-            rendered += 1;
-        }
-        if rendered == 0 {
-            lines.push(Line::from(Span::styled(
-                "no activity events yet",
-                theme.muted(),
-            )));
-        }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Recent activity", theme.header())));
+    let mut rendered = 0usize;
+    for event in recent_activity_for_entry(model, &session.id, RECENT_ACTIVITY_LIMIT) {
+        let age = age_label(Some(event.ts), model.now);
+        let chip = event_chip_for(event);
+        let summary = truncate_end(&event.summary, 56);
+        lines.push(Line::from(vec![
+            Span::styled(format!("{age:<6} "), theme.muted()),
+            Span::styled(format!("{chip:<8} "), theme.info()),
+            Span::raw(summary),
+        ]));
+        rendered += 1;
+    }
+    if rendered == 0 {
+        lines.push(Line::from(Span::styled(
+            "no activity events yet",
+            theme.muted(),
+        )));
     }
 
     lines.push(Line::from(""));
@@ -589,10 +597,7 @@ fn detail_lines(
     lines.push(Line::from(Span::styled("Actions", theme.header())));
     if session.pane_target.is_some() {
         let line = lines.len();
-        lines.push(Line::from(Span::styled(
-            "[ Focus tmux window ]",
-            theme.ok(),
-        )));
+        lines.push(Line::from(Span::styled("[ Focus tmux tab ]", theme.ok())));
         buttons.push((line, ClickAction::PromptFocus(model.selected_index()), 22));
     }
     if model.session_is_stale(session) {
@@ -701,6 +706,17 @@ fn cost_lines(model: &Model, session: &TrackedSession, theme: &Palette) -> Vec<L
     ]
 }
 
+fn state_label_for_session(session: &TrackedSession) -> String {
+    if session.pr_number().is_some() {
+        match session.state {
+            SessionState::Waiting | SessionState::Ready => return String::from("PR open"),
+            SessionState::MergeReady => return String::from("Merge ready"),
+            _ => {}
+        }
+    }
+    state_label_for(&session.state).to_owned()
+}
+
 fn optional_count(value: Option<u32>) -> String {
     value
         .map(|count| count.to_string())
@@ -724,7 +740,7 @@ fn issue_label(session: &TrackedSession) -> String {
         .branch
         .as_deref()
         .filter(|name| !name.is_empty() && !is_default_branch(name));
-    let has_issue = session.issue().is_some();
+    let has_issue = session.has_routed_domain();
     let pr = session.pr_number().map(|number| format!("PR #{number}"));
     let worktree = session
         .worktree()

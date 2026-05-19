@@ -67,6 +67,8 @@ Rust dashboard env vars:
 | `FLIGHTDECK_DAEMON_RUST` | `0` | Opt-in to the Rust daemon wake side / subscriber absorption. Default off keeps the canonical TypeScript daemon in charge of wake delivery. |
 | `FLIGHTDECK_DASHBOARD_BELL` | `1` | Set to `0` to suppress the terminal bell on a new pause-for-user edge. The dashboard never auto-focuses tmux windows. |
 | `FLIGHTDECK_DASHBOARD_COST_POLL_SECS` | `5` | Cost-source poll interval in seconds. |
+| `FLIGHTDECK_DASHBOARD_PI_HISTORY_EVENTS` | `25` | Number of Pi bridge history events sampled per Pi entry for dashboard cost totals. |
+| `FLIGHTDECK_DASHBOARD_PI_HISTORY_TIMEOUT_MS` | `1000` | Per-entry timeout for dashboard Pi cost polling so a slow bridge cannot freeze rendering. |
 | `FLIGHTDECK_DASHBOARD_PRICING_FILE` | bundled table | Optional pricing TOML override for dashboard cost calculations; malformed files warn and fall back to bundled rates. |
 | `FLIGHTDECK_DASHBOARD_QUICK_FOCUS` | `0` | Set to `1` to let `g` focus the selected tmux window without a confirmation popup. |
 | `TMUX_PROBE_TTL` | `5` | Cached `tmux list-panes` TTL used to mark stale dashboard rows. |
@@ -83,12 +85,14 @@ daemon and do not affect master operation directly, but two are
 consulted on the master poll path through the TS `pane-poll`:
 `FD_ADAPTER_READ_TIMEOUT_SEC` (default `2`, fractional values honored)
 caps each adapter read subprocess so one stale adapter cannot dominate
-a tick, and `FD_ADAPTER_FRESHNESS_TTL` (default `5`) gates freshness
-probe caching.
+a tick, `FD_ADAPTER_MAX_BUFFER_MB` (default `16`) caps captured adapter
+stdout for large Pi histories, and `FD_ADAPTER_FRESHNESS_TTL` (default
+`5`) gates freshness probe caching.
 
 Additional tuning:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `FD_ADAPTER_READ_TIMEOUT_SEC` | `2` | Bounds per-adapter read subprocesses in `pane-poll` (fractional values honored). Stale adapters fall through to tmux capture rather than wedging the tick. |
+| `FD_ADAPTER_MAX_BUFFER_MB` | `16` | Maximum stdout captured from adapter reads such as `pi-bridge history`; prevents Node's default 1 MiB buffer from forcing a tmux fallback on long Pi sessions. |
 | `FD_ADAPTER_FRESHNESS_TTL` | `5` | Freshness probe cache TTL in seconds for adapter reads; set `0` to disable cache reuse. |

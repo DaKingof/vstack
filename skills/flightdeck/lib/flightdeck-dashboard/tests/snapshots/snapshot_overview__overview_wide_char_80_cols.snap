@@ -3,13 +3,13 @@ source: tests/snapshot_overview.rs
 expression: narrow
 ---
 "┌ Flightdeck ──────────────────────────────────────────────────────────────────┐"
-"│ Flightdeck   session demo-wide-char  ·  Master pi  ·  file            moon ▾ │"
+"│ Flightdeck   session demo-wide-char  ·  Supervisor pi                 moon ▾ │"
 "└──────────────────────────────────────────────────────────────────────────────┘"
 "┌ tabs ────────────────────────────────────────────────────────────────────────┐"
 "│ Ov │ Act │ Conv │ Merg │ Dec │ Cost │ Daem                                   │"
 "└──────────────────────────────────────────────────────────────────────────────┘"
-"┌ sessions (2 tracked) ────────────────────────────────────────────────────────┐"
-"│Session demo-wide-char  ·  AH:1  ISS:1  WF:0  ·  1h10m                        │"
+"┌ tracked work (2 items) ──────────────────────────────────────────────────────┐"
+"│Session demo-wide-char  ·  Adhoc:1  Issues:1  Tasks:0  ·  1h10m               │"
 "│                                                                              │"
 "│› WIDE-1                Needs input  opencode 🚀 ship it · 测试 dashboard     │" Hidden by multi-width symbols: [(48, " "), (61, " "), (63, " ")]
 "│rendering   PR #1                                                             │"

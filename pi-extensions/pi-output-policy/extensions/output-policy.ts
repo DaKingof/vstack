@@ -13,6 +13,7 @@ const DEFAULT_MAX_TEXT_BLOCK_KB = 200;
 const DEFAULT_MAX_LINE_COUNT = 8_000;
 const DEFAULT_MAX_LINE_WIDTH = 20_000;
 const DEFAULT_MINIMIZER_MAX_CAPTURE_BYTES = 1024 * 1024;
+const DEFAULT_SHELL_MINIMIZER_ENABLED = true;
 
 type VstackConfig = Record<string, unknown>;
 type Direction = "head" | "tail";
@@ -249,7 +250,7 @@ function listSetting(key: string, cwd?: string): string[] {
 }
 
 function shouldMinimize(command: string, cwd?: string): boolean {
-	if (!settingBoolean("shellMinimizer.enabled", false, cwd)) return false;
+	if (!settingBoolean("shellMinimizer.enabled", DEFAULT_SHELL_MINIMIZER_ENABLED, cwd)) return false;
 	const family = commandFamily(command);
 	const defaults = ["git", "npm", "pnpm", "yarn", "bun", "cargo", "pytest", "go", "mvn", "gradle"];
 	const only = listSetting("shellMinimizer.only", cwd);
@@ -258,7 +259,7 @@ function shouldMinimize(command: string, cwd?: string): boolean {
 	return only.length > 0 ? only.includes(family) : defaults.includes(family);
 }
 
-function minimizeShellOutput(text: string, command: string, cwd?: string): { text: string; dropped: number } {
+export function minimizeShellOutput(text: string, command: string, cwd?: string): { text: string; dropped: number } {
 	if (!shouldMinimize(command, cwd)) return { dropped: 0, text };
 	if (byteLength(text) > settingNumber("shellMinimizer.maxCaptureBytes", DEFAULT_MINIMIZER_MAX_CAPTURE_BYTES, cwd)) {
 		return { dropped: 0, text };
