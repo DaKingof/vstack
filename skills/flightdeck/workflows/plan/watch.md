@@ -48,6 +48,9 @@ For each item id in the active plan graph:
 | `spawning` | `spawning` | atomic spawn claim held; worktree/pane transaction in progress |
 | `in-progress` | `submitting` | child work in progress |
 | `prompting` | `prompting` | `substate=<tag>` |
+| `pre-pr-reviewing` | `submitting` | `domain.plan_item.review_status = "pre-pr-reviewing"`, `review_rounds`, `review_reports` populated by `workflows/shared/pre-pr-review.md` |
+| `pre-pr-fixing` | `submitting` | `domain.plan_item.review_status = "pre-pr-fixing"`, child applying round-N findings |
+| `pre-pr-approved` | `submitting` | `domain.plan_item.review_status = "pre-pr-approved"`, child instructed to open PR |
 | `merge-ready` | `ready` | `domain.plan_item.phase = "merge-ready"` |
 | `merged` | `complete` | `domain.plan_item.phase = "merged"`, `merge_commit` set |
 | `aborted` | `cancelled` | `domain.plan_item.phase = "aborted"` |
@@ -72,6 +75,7 @@ POLL_INPUT=$(jq '[.[]
 ```
 
 Plan PR tags shared with the GitHub lane:
+- `pre-pr-ready-for-review`
 - `cleanup-prompt`
 - `bot-review-wait-stuck`
 - `rebase-multi-choice`
@@ -86,6 +90,8 @@ Plan PR tags shared with the GitHub lane:
 Do not route Linear-only tags in plan mode: `audit-relation-prompt`, `descope-related`, `external-fix-suggestions`, `cycle-fix-suggestions`. If one appears, set `paused_for_user = {entry_id:<ITEM_ID>, reason:"domain-mismatch", prompt_text:<excerpt>}`.
 
 `terminal-state-reached` on a plan entry invokes `⤵ workflows/plan/close-item.md <ITEM_ID>` after generic completion detection. If the `pane-poll` row includes `detected_pr_number` / `detected_pr_url` and `entry.domain.plan_item.pr_number` is null, validate with `gh pr view <PR> --json url,headRefName,state` before invoking close: URL must match the detected URL and the head branch must match the plan item worktree branch. On success, persist `pane-registry set <ITEM_ID> pr_number <PR>`; on `gh` failure follow § 6 and pause rather than closing from pane text alone.
+
+Pre-PR review gate: when `FLIGHTDECK_PRE_PR_REVIEW != 0` and `entry.domain.plan_item.review_status != "pre-pr-approved"`, do NOT record a detected PR number or invoke close-item from a `terminal-state-reached` PR-URL on this entry. The child opened a PR before review approval. Set `paused_for_user = {entry_id:<ITEM_ID>, reason:"pre-pr-review-bypassed", prompt_text:"<detected_pr_url> opened before pre-pr-approved"}` and return without closing the item.
 
 ---
 
@@ -162,7 +168,7 @@ After `workflows/plan/close-item.md` verifies an item merged:
    - Refuse to spawn if a live pane is already registered for this entry.
 4. Create the dependent item's worktree.
 5. Write its `<worktree>/tmp/brief.md` from the verified immutable brief artifact and check the write return code. Omitted orchestration context must not be reintroduced for dependency-spawned items.
-6. Spawn via `flightdeck-session start --kind workflow --prompt "Read tmp/brief.md and execute end-to-end. Print the PR URL as the LAST line."` and check the return code.
+6. Spawn via `flightdeck-session start --kind workflow --prompt "Read tmp/brief.md and execute end-to-end. Follow its supervisor-handshake instructions. Print only what the brief tells you to print as the LAST line."` (matches `plan/start.md` § 4 step 5) and check the return code.
 7. Re-register / restore `entry.domain.plan_item` while preserving launch metadata, then transition item to in-progress with `state="submitting"` and `domain.plan_item.phase="in-progress"`.
 8. On any create/write/spawn/register failure, remove the brief if written, kill any spawned-but-unregistered pane, mark `state="failed"` with `domain.plan_item.error = {phase:"<PHASE>", reason:"<REASON>", stderr:"<STDERR>"}`, emit activity, and continue to the next unblocked item.
 9. Yield.
@@ -209,8 +215,9 @@ On re-entry:
 1. Run generic recovery from `session-watch.md` first.
 2. Re-read `entry.domain.plan_item` for item id, dependencies, PR, merge commit, worktree, and actual file count.
 3. Preserve `unknown_since` so the UNKNOWN timer does not reset.
-4. Re-run `gh pr view` for open PRs unless `gh` is unavailable; unavailable follows § 6.
-5. Re-evaluate dependency edges and `paused_for_user`; if the user fixed the issue in the pane or via GitHub, reclassify and proceed.
+4. Re-read `entry.domain.plan_item.review_status` and `review_rounds`; if `review_status == "pre-pr-fixing"`, await the next `pre-pr-ready-for-review` signal instead of re-invoking the loop. If `review_status == "pre-pr-reviewing"`, the prior reviewer fan-out did not complete; rerun `workflows/shared/pre-pr-review.md` at the same round.
+5. Re-run `gh pr view` for open PRs unless `gh` is unavailable; unavailable follows § 6.
+6. Re-evaluate dependency edges and `paused_for_user`; if the user fixed the issue in the pane or via GitHub, reclassify and proceed.
 
 ## Returns
 

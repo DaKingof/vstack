@@ -44,21 +44,33 @@ Applies to `gh pr view`, `gh pr edit`, and any label/check inspection.
 
 ---
 
-## § 3: Reused GitHub PR handlers
+## § 3: Handler — `pre-pr-ready-for-review`
+
+Child has pushed commits and is waiting for the supervisor to gate PR creation. Mirrors `workflows/github/handle-prompt.md` § 3, adapted to `domain.plan_item`.
+
+1. If `FLIGHTDECK_PRE_PR_REVIEW=0`, run the disabled-review approval steps with the same checked-write contract as `workflows/shared/pre-pr-review.md` § 6: atomic-write `<WT>/tmp/pre-pr-approved.md` with body `Pre-PR review disabled by FLIGHTDECK_PRE_PR_REVIEW=0` (on failure set `paused_for_user.reason="pre-pr-review-error"` and return), `pane-respond` the approval instruction from § 6 step 2 with the PR body wording adjusted to reference the plan path + item id (on failure set `paused_for_user.reason="pre-pr-review-error"` and return), then set `domain.plan_item.review_status = "pre-pr-approved"`. Return.
+2. Otherwise initialize-only on first entry: if `domain.plan_item.review_status` is null/unset, set it to `"pre-pr-reviewing"` and `domain.plan_item.review_reports = []`. Do NOT touch `domain.plan_item.review_rounds`; the shared workflow owns it (`workflows/shared/pre-pr-review.md` § 1, § 7).
+3. Invoke `⤵ workflows/shared/pre-pr-review.md <ITEM_ID> plan_item`.
+4. The shared workflow sets `review_status` to `pre-pr-approved`, `pre-pr-fixing`, or sets `paused_for_user.reason` to `pre-pr-review-loop-stalled` / `pre-pr-review-error` / `pre-pr-review-empty-diff` and pane-responds accordingly. Do not duplicate that logic here.
+5. Return to `plan/watch.md` § 4 without further action.
+
+---
+
+## § 4: Reused GitHub PR handlers
 
 For these tags, follow the named section in `workflows/github/handle-prompt.md`, adapted only by replacing the domain reads/writes:
 
 | Tag | GitHub handler section | Plan adaptation |
 |-----|------------------------|-----------------|
-| `merge-now` | § 3 | Read/write `entry.domain.plan_item.pr_number`; require `mergeStateStatus === "CLEAN"` before answering Merge. |
-| `merge-ready-but-unknown` | § 4 | Preserve `entry.unknown_since`; gate wait, Merge, and force-merge transition with `FLIGHTDECK_AUTO_MERGE=0`. |
-| `force-merge-confirm` | § 5 | Re-run the strict force-merge predicate immediately before answering; `FLIGHTDECK_AUTO_MERGE=0` pauses instead of answering. |
-| `bot-review-wait-stuck` and issue `pi-bg-task-exit` | § 6 | Use plan PR number; never call Linear or project-management. |
-| `rebase-multi-choice` | § 7 | Same preserve / apply / verify triplet; plan item worktree is `domain.plan_item.worktree`. |
-| `force-push-prompt` | § 8 | Branch must be the current plan item branch / worktree; never approve sibling item force pushes. |
-| `cleanup-prompt`, `stale-no-pr-branch`, `stale-orphan-worktree` | § 9 | Cleanup only when target equals `domain.plan_item.worktree` or this item branch, and terminal PR merge is already authoritative. |
-| `multi-select-tabbed` | § 10 | Handle GitHub review, merge, rebase, and cleanup choices only. Linear audit/relation tabs are domain mismatch. |
-| `bash-permission-prompt` issue extension | § 11 | Allow only read-only `gh` inspection; writes require the specific prompt tags above. |
+| `merge-now` | § 4 | Read/write `entry.domain.plan_item.pr_number`; require `mergeStateStatus === "CLEAN"` before answering Merge. |
+| `merge-ready-but-unknown` | § 5 | Preserve `entry.unknown_since`; gate wait, Merge, and force-merge transition with `FLIGHTDECK_AUTO_MERGE=0`. |
+| `force-merge-confirm` | § 6 | Re-run the strict force-merge predicate immediately before answering; `FLIGHTDECK_AUTO_MERGE=0` pauses instead of answering. |
+| `bot-review-wait-stuck` and issue `pi-bg-task-exit` | § 7 | Use plan PR number; never call Linear or project-management. |
+| `rebase-multi-choice` | § 8 | Same preserve / apply / verify triplet; plan item worktree is `domain.plan_item.worktree`. |
+| `force-push-prompt` | § 9 | Branch must be the current plan item branch / worktree; never approve sibling item force pushes. |
+| `cleanup-prompt`, `stale-no-pr-branch`, `stale-orphan-worktree` | § 10 | Cleanup only when target equals `domain.plan_item.worktree` or this item branch, and terminal PR merge is already authoritative. |
+| `multi-select-tabbed` | § 11 | Handle GitHub review, merge, rebase, and cleanup choices only. Linear audit/relation tabs are domain mismatch. |
+| `bash-permission-prompt` issue extension | § 12 | Allow only read-only `gh` inspection; writes require the specific prompt tags above. |
 
 Load-bearing safety rules inherited from the GitHub handler:
 
@@ -70,7 +82,7 @@ Load-bearing safety rules inherited from the GitHub handler:
 
 ---
 
-## § 4: Handler — `dependency-edge-resolution`
+## § 5: Handler — `dependency-edge-resolution`
 
 This is a plan-only internal routing step used by `workflows/plan/watch.md` after one item merges.
 
@@ -90,7 +102,7 @@ This is a plan-only internal routing step used by `workflows/plan/watch.md` afte
      - On refusal, leave the entry unchanged, emit activity `plan-spawn-refused item=<ITEM_ID> reason=<reason>`, and continue to the next unblocked item.
    - Create its worktree with the worktree skill.
    - Write `<worktree>/tmp/brief.md` with the same header and verified immutable brief artifact documented in `workflows/plan/start.md` § 4; do not reintroduce omitted orchestration context. Track whether the brief was written so failure cleanup can remove it.
-   - Spawn with `flightdeck-session start --kind workflow --prompt "Read tmp/brief.md and execute end-to-end. Print the PR URL as the LAST line."` and record the spawned pane id/entry metadata if creation succeeds.
+   - Spawn with `flightdeck-session start --kind workflow --prompt "Read tmp/brief.md and execute end-to-end. Follow its supervisor-handshake instructions. Print only what the brief tells you to print as the LAST line."` (matches `plan/start.md` § 4 step 5) and record the spawned pane id/entry metadata if creation succeeds.
    - Re-register / restore `entry.domain.plan_item` while preserving launch metadata, then transition item to in-progress with `state="submitting"` and `domain.plan_item.phase="in-progress"`.
    - On any create/write/spawn/register failure, remove `<worktree>/tmp/brief.md` if it was written, kill any spawned-but-unregistered pane, mark the entry `state="failed"` with `domain.plan_item.error = {phase:"<PHASE>", reason:"<REASON>", stderr:"<STDERR>"}`, emit activity `plan-spawn-failed item=<ITEM_ID> phase=<PHASE> reason=<REASON>`, and continue to the next unblocked item.
 5. Yield after all now-unblocked items either spawn, fail, or are refused.
@@ -99,7 +111,7 @@ Never ask a child pane to run a master-side plan command. Spawned item prompts a
 
 ---
 
-## § 5: Plan-specific cleanup scope
+## § 6: Plan-specific cleanup scope
 
 Plan cleanup may affect only the tracked item's own resources:
 
@@ -110,4 +122,4 @@ Plan cleanup may affect only the tracked item's own resources:
 
 ## Returns
 
-To `plan/watch.md` § 4.
+To `plan/watch.md` § 4 (or back to it after the shared review workflow returns).

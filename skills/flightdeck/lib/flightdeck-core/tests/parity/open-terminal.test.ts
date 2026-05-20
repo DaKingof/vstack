@@ -262,7 +262,11 @@ describe("open-terminal smoke", () => {
 			expect(pane.window_name).toBe("120");
 			const launchLine = pane.sent_keys!.find((line) => line.includes(harness === "claude" ? "claude" : harness))!;
 			expect(launchLine).toContain("Read tmp/brief.md and execute");
-			expect(launchLine).toContain("Print the PR URL as the LAST line");
+			// vstack#180+: child brief now drives the final-line contract through
+			// the supervisor-handshake instructions in tmp/brief.md, so the
+			// launch-line pointer no longer hardcodes "Print the PR URL".
+			expect(launchLine).toContain("Follow its supervisor-handshake instructions");
+			expect(launchLine).toContain("Print only what the brief tells you to print as the LAST line");
 			expect(launchLine).not.toContain("Fix GitHub issue owner/repo#120");
 			for (const forbidden of forbiddenSupervisorSubstrings()) expect(launchLine).not.toContain(forbidden);
 			if (harness === "opencode") expect(launchLine).toContain("--prompt");
@@ -277,6 +281,16 @@ describe("open-terminal smoke", () => {
 			const brief = readFileSync(join(repo, "tmp", "brief.md"), "utf8");
 			expect(brief).toContain("Fix GitHub issue owner/repo#120");
 			expect(brief).toContain("Body for github issue");
+			// vstack#182: default brief drives the supervisor-handshake pre-PR
+			// review loop. Verify the brief asks the child to push without
+			// opening a PR, emits the PRE-PR-REVIEW-READY sentinel, and waits
+			// for tmp/pre-pr-approved.md / tmp/pre-pr-review/round-<N>.md.
+			expect(brief).toContain("Do NOT open a PR yet.");
+			expect(brief).toContain("PRE-PR-REVIEW-READY: tmp/ready-for-review.txt");
+			expect(brief).toContain("tmp/pre-pr-approved.md");
+			expect(brief).toContain("tmp/pre-pr-review/round-<N>.md");
+			expect(brief).toContain("<<<ISSUE_BODY_BEGIN>>>");
+			expect(brief).toContain("<<<ISSUE_BODY_END>>>");
 			for (const forbidden of forbiddenSupervisorSubstrings()) expect(brief).not.toContain(forbidden);
 
 			const state = JSON.parse(readFileSync(stateFile(repo), "utf8"));

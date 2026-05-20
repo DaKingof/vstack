@@ -33,7 +33,7 @@ const GENERIC_PROMPT = `Choose the next action.
 Enter to select
 `;
 
-const ISSUE_ONLY_CASES: Array<{ tag: string; fixture: string }> = [
+const ISSUE_ONLY_CASES: Array<{ tag: string; fixture: string; extraArgs?: string[] }> = [
 	{ tag: "force-merge-confirm", fixture: "12-force-merge-confirm.buffer" },
 	{ tag: "merge-ready-but-unknown", fixture: "13-merge-ready-but-unknown.buffer" },
 	{ tag: "merge-now", fixture: "14-merge-now.buffer" },
@@ -48,6 +48,9 @@ const ISSUE_ONLY_CASES: Array<{ tag: string; fixture: string }> = [
 	{ tag: "external-fix-suggestions", fixture: "21-external-fix-suggestions.buffer" },
 	{ tag: "cycle-fix-suggestions", fixture: "22-cycle-fix-suggestions.buffer" },
 	{ tag: "multi-select-tabbed", fixture: "23-multi-select-tabbed.buffer" },
+	// Adapter-only sentinel: child prints `PRE-PR-REVIEW-READY: <path>` on the
+	// last non-empty line. Only fires when caller passes --no-footer-gate.
+	{ tag: "pre-pr-ready-for-review", fixture: "34-pre-pr-ready.buffer", extraArgs: ["--no-footer-gate"] },
 ];
 
 function fixture(file: string): string {
@@ -312,13 +315,14 @@ function expectTag(input: string, args: string[], expected: string): ReturnType<
 }
 
 describe("handler domain guards", () => {
-	for (const { tag, fixture: fixtureName } of ISSUE_ONLY_CASES) {
+	for (const { tag, fixture: fixtureName, extraArgs } of ISSUE_ONLY_CASES) {
 		test(`${tag} on adhoc escalates, on issue routes normally`, () => {
 			const input = fixture(fixtureName);
-			const adhoc = expectTag(input, ["--entry-kind", "adhoc"], "domain-mismatch");
+			const base = extraArgs ?? [];
+			const adhoc = expectTag(input, [...base, "--entry-kind", "adhoc"], "domain-mismatch");
 			expect(adhoc.stderr).toContain(`issue-only prompt tag ${tag}`);
 
-			const issue = expectTag(input, ["--entry-kind", "issue"], tag);
+			const issue = expectTag(input, [...base, "--entry-kind", "issue"], tag);
 			expect(issue.stderr).toBe("");
 		});
 	}
@@ -464,7 +468,11 @@ describe("handler domain guards", () => {
 		const spawnPrompts = combined.match(/--prompt "[^"]*"/g) ?? [];
 		expect(combined).toContain("flightdeck-session start");
 		expect(combined).toContain("--kind workflow");
-		expect(combined).toContain("Read tmp/brief.md and execute end-to-end. Print the PR URL as the LAST line.");
+		// vstack#182: plan spawn prompts now defer the final-line contract to
+		// the brief's supervisor-handshake instructions so the pre-PR review
+		// gate is wired in for both first-spawn and dependency-edge spawns.
+		expect(combined).toContain("Read tmp/brief.md and execute end-to-end. Follow its supervisor-handshake instructions. Print only what the brief tells you to print as the LAST line.");
+		expect(combined).not.toContain("Read tmp/brief.md and execute end-to-end. Print the PR URL as the LAST line.");
 		expect(spawnPrompts.length).toBeGreaterThan(0);
 		expect(spawnPrompts.join("\n")).not.toMatch(/\/skill:flightdeck plan|\$flightdeck plan|\/flightdeck plan (start|watch|close|terminate)/);
 		expect(spawnPrompts.join("\n")).not.toContain("/skill:");
