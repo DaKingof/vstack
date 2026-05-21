@@ -155,7 +155,7 @@ Rust and performance reference material now lives directly in the `rust`, `revie
 
 | Skill | Brief |
 |---|---|
-| [`iced-rs`](skills/iced-rs/) | Iced 0.14 patterns, reactive UI rules, and Elm-style structure. |
+| [`iced-rs`](skills/iced-rs/) | Iced 0.14 GUI expertise with bundled full-API reference and all upstream examples (incl. `iced_wgpu` source). |
 | [`iced-shadcn`](skills/iced-shadcn/) | shadcn Base UI component planning, family decomposition, and parity audits for Iced. |
 | [`price-handling`](skills/price-handling/) | Price rounding, epsilon comparison, and market-price handling. |
 | [`trading-design`](skills/trading-design/) | Dense, professional trading-style interface design guidance. |
@@ -166,16 +166,16 @@ Rust and performance reference material now lives directly in the `rust`, `revie
 |---|---|
 | [`decider`](skills/decider/)* | Architectural decision document management and indexing. |
 | [`deep-research`](skills/deep-research/) | Exa-powered deep research and portable findings report generation. |
-| [`flightdeck`](skills/flightdeck/)* | Master session lifecycle for multi-issue parallel dev work; tmux-only, with structured activity JSONL for dashboard/live inspection. |
-| [`github`](skills/github/)* | GitHub PR, thread, review, CI, and merge workflows. |
+| [`flightdeck`](skills/flightdeck/)* | Generic tmux session supervisor for AI harness panes; optional Linear/GitHub/plan-file modes with structured activity JSONL and Rust dashboard. |
+| [`github`](skills/github/)* | Bash CLI over the GitHub API for PR operations: threads, comments, reviews, CI logs, merging, and cross-PR analysis. |
 | [`html-artifact`](skills/html-artifact/) | Standalone HTML artifacts for plans, reports, reviews, explainers, prototypes, and custom editors. |
 | [`issue-lifecycle`](skills/issue-lifecycle/)* | Delegated implementation and review-fix issue workflows for dev agents. |
 | [`linear`](skills/linear/)* | Bash CLI over Linear's GraphQL API with local cache, mutation syncing, and structured output (issues, cycles, milestones, projects). |
-| [`linear-orch`](skills/linear-orch/)* | Per-issue lifecycle inside a worktree: dev → review → submit → merge. |
+| [`linear-orch`](skills/linear-orch/)* | Linear issue lifecycle workflows inside a worktree: dev → review → submit → merge, with specialist delegation and review pipelines. |
 | [`project-management`](skills/project-management/)* | TPM-driven planning, audits, roadmaps, and research-backed decomposition. |
 | [`reviewer`](skills/reviewer/)* | Code-review and QA-review workflows + the canonical finding/verdict JSON schema. Loaded by any `reviewer-*` agent. |
 | [`second-opinion`](skills/second-opinion/) | Cross-model review via the opposite AI CLI (Claude ↔ Codex). |
-| [`worktree`](skills/worktree/)* | Git worktree creation, env/config linkage, and isolated workflows. |
+| [`worktree`](skills/worktree/)* | Git worktree create/list/remove with env/config symlinks and per-worktree bot identity. |
 
 ### Hooks
 
