@@ -1,5 +1,14 @@
-# vstack.toml — skill/hook mapping configuration
+# vstack.toml — skill/hook mapping configuration (vstack source repo catalog)
 # The CLI reads this from the source repo root during installation.
+#
+# `is_source_catalog = true` marks this file as the canonical catalog. The CLI
+# routes per-project install state (auto-populated `[agent-skills]` merges,
+# per-agent `[agent-frontmatter.<harness>]` scaffolding, etc.) to a sibling
+# `vstack-local.toml` instead of mutating this file. That keeps downstream
+# projects from inheriting whatever the vstack maintainer has installed for
+# local testing. Downstream projects' `vstack.toml` files omit this key and
+# behave normally.
+is_source_catalog = true
 #
 # [agent-skills] is the single source of truth for which skills appear in each
 # agent's frontmatter.  When an agent has an explicit entry here, prefix matching

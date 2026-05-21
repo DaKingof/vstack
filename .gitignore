@@ -49,3 +49,4 @@ Thumbs.db
 
 # Local vstack install state (per-checkout absolute paths; do not commit)
 .vstack-lock.json
+vstack-local.toml

@@ -1,6 +1,37 @@
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Resolve the path where project install state (`[agent-skills]`,
+/// `[agent-launch-instructions]`, `[agent-frontmatter.<harness>]`, etc.)
+/// should be read from and written to for the given project root.
+///
+/// Normally returns `<root>/vstack.toml`. If the project root's
+/// `vstack.toml` is a source-catalog file (top-level `is_source_catalog = true`),
+/// returns `<root>/vstack-local.toml` instead so self-installs in the
+/// vstack source repo never mutate the canonical catalog that downstream
+/// projects clone and read.
+pub fn project_config_path(project_root: &Path) -> PathBuf {
+    let catalog = project_root.join("vstack.toml");
+    if is_source_catalog(&catalog) {
+        project_root.join("vstack-local.toml")
+    } else {
+        catalog
+    }
+}
+
+fn is_source_catalog(vstack_toml: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(vstack_toml) else {
+        return false;
+    };
+    let Ok(parsed) = toml::from_str::<toml::Value>(&content) else {
+        return false;
+    };
+    parsed
+        .get("is_source_catalog")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
 
 /// Project-level agent customization config.
 ///
@@ -143,7 +174,7 @@ impl ProjectConfig {
     /// Load project config from a directory's `vstack.toml`.
     /// Returns default (empty) if the file is missing or unparseable.
     pub fn load(project_root: &Path) -> Self {
-        let path = project_root.join("vstack.toml");
+        let path = project_config_path(project_root);
         if !path.exists() {
             return Self::default();
         }
@@ -303,7 +334,7 @@ impl ProjectConfig {
         }
 
         // Write back to vstack.toml surgically — preserve comments and structure
-        let path = project_root.join("vstack.toml");
+        let path = project_config_path(project_root);
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
         let mut out = existing.clone();
 
@@ -673,7 +704,7 @@ pub fn merge_upstream_agent_skills(project_root: &Path, updates: &HashMap<String
     if updates.is_empty() {
         return;
     }
-    let path = project_root.join("vstack.toml");
+    let path = project_config_path(project_root);
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(_) => return,
@@ -774,7 +805,7 @@ fn replace_toml_array_value(
 /// This must be called AFTER `ensure_project_config` and AFTER the skill
 /// mapping is computed.
 pub fn write_agent_skills(project_root: &Path, agent_skill_map: &HashMap<String, Vec<String>>) {
-    let path = project_root.join("vstack.toml");
+    let path = project_config_path(project_root);
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
 
     // Parse the existing file to discover which agents already have entries.
@@ -840,7 +871,7 @@ pub fn write_agent_frontmatter_defaults(
         return;
     }
 
-    let path = project_root.join("vstack.toml");
+    let path = project_config_path(project_root);
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut content = ensure_agent_frontmatter_scaffold(&existing);
     let mut existing_config = project_config_from_content(&content);
@@ -1375,7 +1406,7 @@ fn upsert_missing_inline_table_fields(
 /// - If the file exists, appends commented placeholders for any new agents/skills
 ///   not already mentioned. Never modifies existing user content.
 pub fn ensure_project_config(project_root: &Path, agents: &[String], skills: &[String]) {
-    let path = project_root.join("vstack.toml");
+    let path = project_config_path(project_root);
 
     if path.exists() {
         migrate_section_names(&path);
