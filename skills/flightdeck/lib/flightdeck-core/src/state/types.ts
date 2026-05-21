@@ -70,8 +70,8 @@ export interface PlanItemDomain {
 	worktree: string;
 	pr_number: number | null;
 	merge_commit: string | null;
-	/** Decomposition mode used to produce immutable item briefs. Present for new plan-lane entries; legacy rows may use h2-items/phase-style. */
-	parse_mode?: "h2-items" | "phase-style" | string | null;
+	/** Decomposition mode used to produce immutable item briefs. Canonical values: explicit-items, inferred-items, mixed-items. Legacy rows may use h2-items or phase-style. Field name kept as `parse_mode` for state-file backward compatibility. */
+	parse_mode?: "explicit-items" | "inferred-items" | "mixed-items" | "h2-items" | "phase-style" | string | null;
 	/** sha256:<hex> hash of the frozen source plan text used at plan start. */
 	plan_snapshot_sha256?: string | null;
 	/** Absolute path to the sanitized immutable item brief artifact stored under Flightdeck state. */

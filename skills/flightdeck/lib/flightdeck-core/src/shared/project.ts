@@ -205,12 +205,11 @@ export function loadDotEnvIntoProcess(projectRoot: string): void {
 		if (eq <= 0) continue;
 		const key = entry.slice(0, eq);
 		if (!declared.has(key)) continue;
-		// Bash `source .env` overwrites inherited environment by
-		// default. Mirror that — the previous skip-if-set behavior
-		// silently diverged from bash on every project that had a
-		// preset FD_STATE_DIR or FLIGHTDECK_STATE_DIR in the outer
-		// shell, sending state files to different directories between
-		// the two implementations.
+		// Project .env values must overwrite inherited environment
+		// (matching `bash -c "set -a; source .env"` semantics). A previous
+		// skip-if-set approach silently sent state files to different
+		// directories whenever the outer shell had a preset FD_STATE_DIR
+		// or FLIGHTDECK_STATE_DIR.
 		(process.env as Record<string, string>)[key] = entry.slice(eq + 1);
 	}
 }
