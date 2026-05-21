@@ -105,9 +105,7 @@ When executing a command's workflow, follow ALL [Workflow Execution](#workflow-e
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `workflows/initialize.md` | `initialize` | Team setup, auth, cache, state init |
-| `workflows/start.md` | `start` (from main repo) | Dashboard, issue selection, research eval, worktree creation |
 | `workflows/start-worktree.md` | `start` (from worktree) | Full session: dev → review → submit → finalize |
-| `workflows/start-new.md` | `start-new` | Create new issue, spawn worktree session |
 
 ### Development
 
