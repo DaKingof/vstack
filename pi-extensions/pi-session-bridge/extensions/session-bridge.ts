@@ -21,6 +21,20 @@ import * as path from "node:path";
 
 import { installPiActivityBridgePublisher } from "./activity-broker.js";
 import { resolveSessionId } from "./child-session-id.js";
+import {
+	DEFAULT_MAX_EVENT_BYTES,
+	DEFAULT_MAX_HISTORY_BYTES,
+	DEFAULT_MAX_HISTORY_RESPONSE_BYTES,
+	DEFAULT_PREVIEW_BYTES,
+	sanitizeBridgeEvent,
+} from "./event-sanitizer.js";
+import {
+	BridgeHistory,
+	cleanupStaleSpills,
+	type HistoryEnvelope,
+} from "./event-history.js";
+
+const DEFAULT_MAX_RAW_SPILL_BYTES = 16 * 1024 * 1024;
 
 const PROTOCOL = "pi-session-bridge.v1";
 const INSTALL_SYMBOL = Symbol.for("vstack.pi-session-bridge.installed");
@@ -159,13 +173,29 @@ export default function sessionBridge(pi: ExtensionAPI) {
 	if (!settingBoolean("enabled", true)) return;
 
 	const clients = new Set<BridgeClient>();
-	const history: JsonObject[] = [];
 	const historyLimit = readPositiveInt(process.env.PI_BRIDGE_HISTORY, settingNumber("historyLimit", DEFAULT_HISTORY_LIMIT));
 	const bridgeDir = getBridgeDir();
 	const instancesDir = path.join(bridgeDir, "instances");
+	const rawDir = path.join(bridgeDir, "raw");
+	const rawSpillPath = path.join(rawDir, `${process.pid}.jsonl`);
 	const socketPath = path.join(bridgeDir, `pi-${process.pid}.sock`);
 	const registryPath = path.join(instancesDir, `${process.pid}.json`);
 	const startedAt = new Date().toISOString();
+	let rawSpillWarned = false;
+	const history = new BridgeHistory(
+		rawSpillPath,
+		() => ({
+			historyLimit,
+			maxHistoryBytes: Math.max(0, settingNumber("maxHistoryBytes", DEFAULT_MAX_HISTORY_BYTES, currentCtx?.cwd)),
+			maxRawSpillBytes: Math.max(0, settingNumber("maxRawSpillBytes", DEFAULT_MAX_RAW_SPILL_BYTES, currentCtx?.cwd)),
+			spillEnabled: settingBoolean("spillRawEvents", true, currentCtx?.cwd),
+		}),
+		(where, error) => {
+			if (rawSpillWarned) return;
+			rawSpillWarned = true;
+			broadcast({ type: "bridge_error", error: stringifyError(error), where });
+		},
+	);
 
 	let server: net.Server | undefined;
 	let currentCtx: ExtensionContext | undefined;
@@ -263,6 +293,7 @@ export default function sessionBridge(pi: ExtensionAPI) {
 
 		await fs.promises.mkdir(bridgeDir, { recursive: true, mode: 0o700 });
 		await fs.promises.mkdir(instancesDir, { recursive: true, mode: 0o700 });
+		cleanupStaleSpills(rawDir, isPidAlive);
 		await unlinkIfExists(socketPath);
 
 		server = net.createServer((socket) => addClient(socket));
@@ -329,6 +360,8 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		exitHandler = undefined;
 		await unlinkIfExists(socketPath);
 		await unlinkIfExists(registryPath);
+		history.cleanup();
+		rawSpillWarned = false;
 		currentCtx = undefined;
 		stopping = false;
 	}
@@ -337,8 +370,19 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		try {
 			fs.rmSync(socketPath, { force: true });
 			fs.rmSync(registryPath, { force: true });
+			fs.rmSync(rawSpillPath, { force: true });
 		} catch {
 			// Best-effort process-exit cleanup; registry clients also stale-check pid/socket.
+		}
+	}
+
+	function isPidAlive(pid: number): boolean {
+		if (!Number.isInteger(pid) || pid <= 0) return false;
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch (error) {
+			return (error as NodeJS.ErrnoException).code === "EPERM";
 		}
 	}
 
@@ -396,7 +440,22 @@ export default function sessionBridge(pi: ExtensionAPI) {
 					break;
 				case "history": {
 					const requested = readPositiveInt(command.limit, historyLimit);
-					sendResponse(client, id, "history", true, { events: history.slice(-Math.min(requested, historyLimit)) });
+					const wantRaw = command.raw === true || command.verbose === true;
+					const eventFilter = typeof command.event === "string" && command.event.trim().length > 0 ? command.event.trim() : undefined;
+					const since = typeof command.since === "string" && command.since.trim().length > 0 ? command.since.trim() : undefined;
+					const responseCwd = currentCtx?.cwd;
+					const maxResponseBytes = readPositiveInt(
+						command.maxBytes ?? command.max_bytes,
+						Math.max(0, settingNumber("maxHistoryResponseBytes", DEFAULT_MAX_HISTORY_RESPONSE_BYTES, responseCwd)),
+					);
+					const response = history.buildResponse({
+						limit: Math.min(requested, historyLimit),
+						maxBytes: maxResponseBytes,
+						event: eventFilter,
+						since,
+						raw: wantRaw,
+					});
+					sendResponse(client, id, "history", true, response);
 					break;
 				}
 				case "get_commands":
@@ -544,10 +603,26 @@ export default function sessionBridge(pi: ExtensionAPI) {
 	}
 
 	function publish(event: string, data: unknown) {
-		const envelope = toJsonable({ type: "event", event, timestamp: new Date().toISOString(), data });
-		history.push(envelope);
-		if (history.length > historyLimit) history.splice(0, history.length - historyLimit);
-		broadcast(envelope);
+		const cwd = currentCtx?.cwd;
+		const sanitizerConfig = {
+			maxEventBytes: Math.max(0, settingNumber("maxEventBytes", DEFAULT_MAX_EVENT_BYTES, cwd)),
+			previewBytes: Math.max(0, settingNumber("eventPreviewBytes", DEFAULT_PREVIEW_BYTES, cwd)),
+		};
+		const sanitized = sanitizeBridgeEvent(event, data, sanitizerConfig);
+		const envelope = toJsonable({
+			type: "event",
+			event,
+			timestamp: new Date().toISOString(),
+			data: sanitized.data,
+		}) as HistoryEnvelope;
+
+		if (sanitized.truncated) {
+			envelope.truncated = true;
+			envelope.originalBytes = sanitized.originalBytes;
+		}
+
+		history.push(envelope, sanitized.truncated ? sanitized.raw : undefined);
+		broadcast(envelope as JsonObject);
 	}
 
 	function broadcast(payload: JsonObject) {
