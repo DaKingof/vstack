@@ -34,6 +34,8 @@ import {
 	DEFAULT_FORCED_BACKGROUND_WINDOW_MS,
 	DEFAULT_OUTPUT_ALERT_MAX_CHARS,
 	DEFAULT_OUTPUT_SETTLE_MS,
+	DEFAULT_OUTPUT_WAKE_BUDGET_MAX_BYTES,
+	DEFAULT_OUTPUT_WAKE_BUDGET_MAX_WAKES,
 	DEFAULT_TIMEOUT_MS,
 	DEFAULT_WIDGET_FINISHED_RETENTION_MS,
 	DEFAULT_WIDGET_TOGGLE_SHORTCUT,
@@ -91,16 +93,20 @@ import type {
 } from "./types.js";
 import {
 	canEmitOutputWake,
+	emptyOutputWakeBudget,
+	ensureOutputWakeBudget,
 	ensureWakeState,
-	normalizeNotifyMode,
+	resolveNotifyMode,
 	recordScheduledOutputDrop,
 	scheduleTaskWake,
+	sendOutputWakeBudgetExhaustedNotice,
 	sendTaskWake,
 	shouldEmitOutputWake,
+	truncateForTranscript,
 	voidPendingTaskWakes,
+	WAKE_MANIFEST_FIELD_MAX_CHARS,
+	type OutputWakeBudgetLimits,
 } from "./wake-events.js";
-
-// TODO(structure): split scheduleOutputReaction and scheduled-drop handling into a focused module when next touched.
 
 /**
  * Clamp the rendered line count of an aboveEditor widget so it can never push
@@ -352,6 +358,26 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 		persistSnapshots();
 	};
 
+	const wakeBudgetLimits = (cwd?: string): OutputWakeBudgetLimits => ({
+		maxBytes: Math.max(0, Math.floor(settingNumber("outputWakeBudgetMaxBytes", DEFAULT_OUTPUT_WAKE_BUDGET_MAX_BYTES, cwd))),
+		maxWakes: Math.max(0, Math.floor(settingNumber("outputWakeBudgetMaxWakes", DEFAULT_OUTPUT_WAKE_BUDGET_MAX_WAKES, cwd))),
+	});
+
+	const announceWakeBudgetExhausted = (task: ManagedTask) => {
+		const limits = wakeBudgetLimits(activeCtx?.cwd);
+		const announced = sendOutputWakeBudgetExhaustedNotice({
+			logDiagnostic: logWakeDiagnostic,
+			messageType: BG_MESSAGE_TYPE,
+			rememberSnapshot,
+			sendMessage: (message, messageOptions) => pi.sendMessage(message as any, messageOptions as any),
+		}, task, limits);
+		if (announced) {
+			rememberSnapshot(task);
+			persistSnapshots();
+		}
+		return announced;
+	};
+
 	const sendTaskEvent = (
 		eventType: TaskEventType,
 		task: ManagedTask,
@@ -419,6 +445,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			}
 			const newOutputTail = tailText(unseenOutput, settingNumber("outputAlertMaxChars", DEFAULT_OUTPUT_ALERT_MAX_CHARS, activeCtx?.cwd));
 			const decisionDiagnostics: WakeDiagnostic[] = [];
+			const limits = wakeBudgetLimits(activeCtx?.cwd);
 			const shouldEmit = shouldEmitOutputWake(task, {
 				dedupeHashes: outputDedupeHashes,
 				eventAt: pending.eventAt,
@@ -427,12 +454,14 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 				newOutputTail,
 				patternMatched,
 				sequence: pending.sequence,
+				wakeBudgetLimits: limits,
 			});
 			if (!shouldEmit) {
 				const diagnostic = decisionDiagnostics[decisionDiagnostics.length - 1];
 				const reason = (diagnostic?.reason ?? "output-after-stop-suppressed") as WakeDropReason;
 				task.lastAnnouncedLength = output.length;
 				persistScheduledOutputDrop(task, pending, reason, diagnostic ?? {});
+				if (reason === "wake-budget-exhausted") announceWakeBudgetExhausted(task);
 				refreshUi();
 				return;
 			}
@@ -563,10 +592,15 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 		task.outputTimer = null;
 		persistSnapshots();
 
+		// Bound the command preview embedded in the stop message so a 100KB
+		// heredoc command cannot leak into the bg_task/bg_status stop tool
+		// result content (vstack#210 round 3).
+		const safeCommand = truncateForTranscript(task.command, WAKE_MANIFEST_FIELD_MAX_CHARS) ?? "";
+
 		const sent = killTaskProcess(task, "SIGTERM");
 		if (!sent) {
 			finalizeTask(task, task.exitCode, reason === "timeout" ? "timed_out" : "stopped");
-			return { ok: true, message: `Stopped ${task.id} (${task.command}).` };
+			return { ok: true, message: `Stopped ${task.id} (${safeCommand}).` };
 		}
 
 		const forceKillGraceMs = settingNumber("forceKillGraceMs", DEFAULT_FORCE_KILL_GRACE_MS, activeCtx?.cwd);
@@ -578,7 +612,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 		}, forceKillGraceMs);
 		task.forceKillTimer.unref?.();
 		refreshUi();
-		return { ok: true, message: `Stopping ${task.id} (${task.command}).` };
+		return { ok: true, message: `Stopping ${task.id} (${safeCommand}).` };
 	};
 
 	const spawnTask = (options: SpawnTaskOptions): ManagedTask => {
@@ -644,7 +678,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			notifyOnExit: options.notifyOnExit ?? true,
 			notifyOnOutput: options.notifyOnOutput ?? false,
 			notifyPattern: options.notifyPattern?.trim() || undefined,
-			notifyMode: normalizeNotifyMode(options.notifyMode),
+			notifyMode: resolveNotifyMode(options.notifyMode, options.notifyPattern),
 			dedupeKey: options.dedupeKey?.trim() || undefined,
 			output: "",
 			outputBytes: 0,
@@ -656,6 +690,7 @@ export default function backgroundTasks(pi: ExtensionAPI): void {
 			lastOutputDedupeHash: undefined,
 			lastOutputDedupeByKey: {},
 			outputPatternMatched: false,
+			outputWakeBudget: emptyOutputWakeBudget(),
 			outputTimer: null,
 			pid: spawnedPid,
 			startedAt: now,

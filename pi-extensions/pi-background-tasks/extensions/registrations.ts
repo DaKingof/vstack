@@ -21,7 +21,7 @@ import { formatRelativeTime, formatTaskLog, summarizeTaskStatus, taskLogTruncati
 import { makeToolResult, renderBgToolResult, renderEmpty } from "./render.js";
 import { bgToolResultTasks } from "./tool-result-details.js";
 import type { BackgroundTaskSnapshot, ManagedTask, SpawnTaskOptions } from "./types.js";
-import { NOTIFY_MODES } from "./wake-events.js";
+import { compactBackgroundTaskSnapshot, NOTIFY_MODES, WAKE_MANIFEST_FIELD_MAX_CHARS, truncateForTranscript } from "./wake-events.js";
 
 export interface RegistrationDeps {
 	getActiveCtx: () => ExtensionContext | null;
@@ -67,13 +67,13 @@ function registerTools(pi: ExtensionAPI, deps: RegistrationDeps): void {
 				const truncation = taskLogTruncation(output, task.logFile, cwd);
 				return makeToolResult(formatTaskLog(output, task.logFile, cwd), {
 					action: "log",
-					task: deps.rememberSnapshot(task),
-					...(truncation ? { fullOutputPath: task.logFile, truncation } : {}),
+					task: compactBackgroundTaskSnapshot(deps.rememberSnapshot(task)),
+					...(truncation ? { fullOutputPath: truncateForTranscript(task.logFile, WAKE_MANIFEST_FIELD_MAX_CHARS) ?? "", truncation } : {}),
 				});
 			}
 			const stopped = deps.requestStop(task, "user");
 			if (!stopped.ok) throw new Error(stopped.message);
-			return makeToolResult(stopped.message, { action: "stop", task: deps.rememberSnapshot(task) });
+			return makeToolResult(stopped.message, { action: "stop", task: compactBackgroundTaskSnapshot(deps.rememberSnapshot(task)) });
 		},
 		renderCall() { return renderEmpty(); },
 		renderResult(result: any, options: any, theme: Theme, context: any) {
@@ -105,7 +105,7 @@ function registerTools(pi: ExtensionAPI, deps: RegistrationDeps): void {
 			notifyOnOutput: Type.Optional(Type.Boolean({ description: "Wake the agent when new output arrives. Defaults to false." })),
 			notifyPattern: Type.Optional(Type.String({ description: "Substring or /regex/flags gate for output wakeups." })),
 			notifyMode: Type.Optional(StringEnum(NOTIFY_MODES, {
-				description: "Output wake mode: always=every output update, transition=only changed output tail hash, first-match-only=one notifyPattern match then suppress output wakes.",
+				description: "Output wake mode: always=every output update, transition=only changed output tail hash, first-match-only=one notifyPattern match then suppress output wakes. Default: first-match-only when notifyPattern is set, transition otherwise (set 'always' explicitly to opt into every-output wakes).",
 			})),
 			dedupeKey: Type.Optional(Type.String({ description: "Optional key used by notifyMode=transition to coalesce matching output wakes across tasks." })),
 			pid: Type.Optional(Type.Number({ description: "PID for action=log or action=stop" })),
@@ -133,13 +133,18 @@ function registerTools(pi: ExtensionAPI, deps: RegistrationDeps): void {
 					timeoutSeconds: params.timeoutSeconds,
 					title: params.title,
 				});
+				const safeCommand = truncateForTranscript(task.command, WAKE_MANIFEST_FIELD_MAX_CHARS) ?? "";
+				const safeCwd = truncateForTranscript(task.cwd, WAKE_MANIFEST_FIELD_MAX_CHARS) ?? "";
+				const safeLog = truncateForTranscript(task.logFile, WAKE_MANIFEST_FIELD_MAX_CHARS) ?? "";
+				const safePattern = truncateForTranscript(task.notifyPattern, WAKE_MANIFEST_FIELD_MAX_CHARS);
+				const safeDedupe = truncateForTranscript(task.dedupeKey, WAKE_MANIFEST_FIELD_MAX_CHARS);
 				return makeToolResult(
-					`Started ${task.id} (pid ${task.pid}) in the background.\nCommand: ${task.command}\nCwd: ${task.cwd}\nLog: ${task.logFile}\nExpiry: ${
+					`Started ${task.id} (pid ${task.pid}) in the background.\nCommand: ${safeCommand}\nCwd: ${safeCwd}\nLog: ${safeLog}\nExpiry: ${
 						task.expiresAt != null ? formatRelativeTime(task.expiresAt) : "none"
 					}\nWakeups: exit=${task.notifyOnExit ? "yes" : "no"}, output=${
-						task.notifyOnOutput ? (task.notifyPattern ?? "yes") : "no"
-					}, mode=${task.notifyMode ?? "always"}${task.dedupeKey ? `, dedupeKey=${task.dedupeKey}` : ""}`,
-					{ action: "spawn", task: deps.rememberSnapshot(task) },
+						task.notifyOnOutput ? (safePattern ?? "yes") : "no"
+					}, mode=${task.notifyMode ?? "always"}${safeDedupe ? `, dedupeKey=${safeDedupe}` : ""}`,
+					{ action: "spawn", task: compactBackgroundTaskSnapshot(deps.rememberSnapshot(task)) },
 				);
 			}
 			const task = deps.resolveTask(params.id, params.pid);
@@ -150,13 +155,13 @@ function registerTools(pi: ExtensionAPI, deps: RegistrationDeps): void {
 				const truncation = taskLogTruncation(output, task.logFile, cwd);
 				return makeToolResult(formatTaskLog(output, task.logFile, cwd), {
 					action: "log",
-					task: deps.rememberSnapshot(task),
-					...(truncation ? { fullOutputPath: task.logFile, truncation } : {}),
+					task: compactBackgroundTaskSnapshot(deps.rememberSnapshot(task)),
+					...(truncation ? { fullOutputPath: truncateForTranscript(task.logFile, WAKE_MANIFEST_FIELD_MAX_CHARS) ?? "", truncation } : {}),
 				});
 			}
 			const stopped = deps.requestStop(task, "user");
 			if (!stopped.ok) throw new Error(stopped.message);
-			return makeToolResult(stopped.message, { action: "stop", task: deps.rememberSnapshot(task) });
+			return makeToolResult(stopped.message, { action: "stop", task: compactBackgroundTaskSnapshot(deps.rememberSnapshot(task)) });
 		},
 		renderCall() { return renderEmpty(); },
 		renderResult(result: any, options: any, theme: Theme, context: any) {

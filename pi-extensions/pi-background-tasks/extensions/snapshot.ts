@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 
 import { parseOutputMatcher } from "./format.js";
 import type { BackgroundTaskSnapshot, ManagedTask, ProcessIdentity } from "./types.js";
-import { normalizeNotifyMode } from "./wake-events.js";
+import { normalizeNotifyMode, normalizeOutputWakeBudget } from "./wake-events.js";
 
 const liveSnapshots = new Map<string, BackgroundTaskSnapshot>();
 
@@ -32,6 +32,7 @@ export function taskSnapshot(task: ManagedTask): BackgroundTaskSnapshot {
 		lastOutputDedupeHash: task.lastOutputDedupeHash,
 		lastOutputDedupeByKey: task.lastOutputDedupeByKey,
 		outputPatternMatched: task.outputPatternMatched === true,
+		outputWakeBudget: task.outputWakeBudget ? normalizeOutputWakeBudget(task.outputWakeBudget) : undefined,
 		pid: task.pid,
 		procIdent: task.procIdent,
 		sessionId: task.sessionId,
@@ -245,6 +246,7 @@ export function restoredTaskFromSnapshot(snapshot: BackgroundTaskSnapshot, optio
 		notifyMode: normalizeNotifyMode(snapshot.notifyMode),
 		output: "",
 		outputPatternMatched: snapshot.outputPatternMatched === true,
+		outputWakeBudget: normalizeOutputWakeBudget(snapshot.outputWakeBudget),
 		outputTimer: null,
 		pendingWakes: [],
 		status: pidStillAlive ? "running" : (wasRunning ? "stopped" : snapshot.status),
