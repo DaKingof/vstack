@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 import { emitActivityWithPath } from "../activity/emit.ts";
 import { activityPathFromStatePath, resolveActivityPath } from "../activity/paths.ts";
+import { readActiveRun } from "../state/run-store.ts";
 import type { ActivityEventInput, ActivitySeverity } from "../activity/types.ts";
 import { BG_TASK_EXIT_CLASSIFIER_TAG } from "../events/bg-task-exit.ts";
 
@@ -510,8 +511,29 @@ function resolveMasterStatePath(sessionName: string): string | null {
 	if (gitCommonDir && gitCommonDir !== ".git") {
 		root = resolve(root, gitCommonDir, "..");
 	}
+	// vstack#227: read the active-run pointer instead of synthesizing
+	// a project-local path. Only "no active run for this project"
+	// scenarios are tolerated as a benign fallback path — everything
+	// else (corrupt project index, malformed active-run.json, etc.)
+	// must surface as a daemon warning so a silent fallback to the
+	// legacy tmp/ path doesn't mask the real problem.
+	try {
+		const active = readActiveRun(root);
+		if (active && active.active.tmux_session === sessionName) return active.active.state_path;
+		// `active === null` is the cold-start case — no run store
+		// initialized yet. Fall through to legacy lookup.
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		// Surface unexpected failures so daemon logs at least record
+		// the corruption. Do NOT fall through to legacy: a corrupt
+		// active-run pointer plus a stale tmp/ file would silently
+		// route daemon activity to the wrong file.
+		process.stderr.write(`Warning: daemon active-run lookup failed for session=${sessionName}: ${message}\n`);
+		return null;
+	}
 	const stateDir = process.env.FLIGHTDECK_STATE_DIR?.trim() || "tmp";
-	return resolve(root, stateDir, `flightdeck-state-${sessionName}.json`);
+	const legacy = resolve(root, stateDir, `flightdeck-state-${sessionName}.json`);
+	return existsSync(legacy) ? legacy : null;
 }
 
 function subagentActivityType(status: string): string {

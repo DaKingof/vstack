@@ -5,12 +5,19 @@ use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::state::tracked_entries;
 
-pub const OVERRIDE_RELATIVE_PATH: &str = "tmp/flightdeck-settings.toml";
+// vstack#227: settings file lives under the user-level run store so it
+// is no longer polluting `<project>/tmp/`. The basename inside the
+// project dir is still `settings.toml`; older callers asking for the
+// "relative path" get the new basename so existing UI hints stay
+// truthful.
+pub const OVERRIDE_FILE_BASENAME: &str = "settings.toml";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingCategory {
@@ -942,14 +949,206 @@ pub fn resolve_project_root() -> Result<PathBuf, SettingsError> {
 }
 
 pub fn resolve_project_root_from(cwd: &Path) -> Result<PathBuf, SettingsError> {
-    tracked_entries::resolve_project_root(cwd).map_err(|error| SettingsError::ProjectRoot {
-        message: error.to_string(),
-    })
+    let initial =
+        tracked_entries::resolve_project_root(cwd).map_err(|error| SettingsError::ProjectRoot {
+            message: error.to_string(),
+        })?;
+    // vstack#227: collapse worktree paths to the main repo root so the
+    // Rust dashboard and the TypeScript run-store derive the same
+    // project id. Mirrors `flightdeck-core/src/shared/project.ts`:
+    // `git rev-parse --git-common-dir` of a worktree points at the
+    // main repo's `.git`; its parent is the canonical main-repo root.
+    Ok(canonicalize_to_main_repo_root(&initial))
+}
+
+fn canonicalize_to_main_repo_root(initial: &Path) -> PathBuf {
+    let common = Command::new("git")
+        .arg("-C")
+        .arg(initial)
+        .args(["rev-parse", "--git-common-dir"])
+        .output();
+    let Ok(out) = common else {
+        return initial.to_path_buf();
+    };
+    if !out.status.success() {
+        return initial.to_path_buf();
+    }
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == ".git" {
+        return initial.to_path_buf();
+    }
+    let common_path = if Path::new(trimmed).is_absolute() {
+        PathBuf::from(trimmed)
+    } else {
+        initial.join(trimmed)
+    };
+    common_path
+        .parent()
+        .map(Path::to_path_buf)
+        .and_then(|p| p.canonicalize().ok())
+        .unwrap_or_else(|| initial.to_path_buf())
+}
+
+// vstack#227: settings live under the user-level run store, not the
+// project tmp/. Mirror the project_id hashing logic in
+// `flightdeck-core/state/run-store.ts::projectIdentityForRoot`.
+//
+// The env var `FLIGHTDECK_RUN_STORE_ROOT` overrides the storage root
+// for tests that need to redirect away from `$HOME/.vstack/flightdeck`.
+#[must_use]
+pub fn override_path(project_root: &Path) -> PathBuf {
+    project_dir(project_root).join(OVERRIDE_FILE_BASENAME)
 }
 
 #[must_use]
-pub fn override_path(project_root: &Path) -> PathBuf {
-    project_root.join(OVERRIDE_RELATIVE_PATH)
+pub fn project_dir(project_root: &Path) -> PathBuf {
+    flightdeck_run_store_root()
+        .join("projects")
+        .join(project_id(project_root))
+}
+
+#[must_use]
+pub fn flightdeck_run_store_root() -> PathBuf {
+    if let Some(override_root) = env::var("FLIGHTDECK_RUN_STORE_ROOT")
+        .ok()
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+    {
+        // vstack#227: absolutize the override before joining
+        // `projects/<id>` so a relative override doesn't redirect
+        // writes into the current working dir.
+        let raw = PathBuf::from(override_root);
+        return if raw.is_absolute() {
+            raw
+        } else {
+            env::current_dir().map(|cwd| cwd.join(&raw)).unwrap_or(raw)
+        };
+    }
+    let home = env::var("HOME")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "/".to_owned());
+    PathBuf::from(home).join(".vstack").join("flightdeck")
+}
+
+fn project_id(project_root: &Path) -> String {
+    let root_str = project_root.display().to_string();
+    let remote_url = git_remote_url(project_root);
+    let root_hash = sha256_hex(&root_str);
+    let name = remote_url
+        .as_deref()
+        .map(remote_repo_name)
+        .unwrap_or_else(|| {
+            project_root
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("project")
+                .to_owned()
+        });
+    let identity_material = match &remote_url {
+        Some(url) => format!("{url}\n{root_hash}"),
+        None => root_hash,
+    };
+    let identity_hash = sha256_hex(&identity_material);
+    let suffix = identity_hash.get(..16).unwrap_or(&identity_hash);
+    format!("{}-{suffix}", safe_segment(&name))
+}
+
+fn git_remote_url(project_root: &Path) -> Option<String> {
+    let origin = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["config", "--get", "remote.origin.url"])
+        .output()
+        .ok()?;
+    let origin_text = String::from_utf8(origin.stdout).ok()?;
+    let origin_trim = origin_text.trim();
+    if origin.status.success() && !origin_trim.is_empty() {
+        return Some(origin_trim.to_owned());
+    }
+    let first_remote = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .arg("remote")
+        .output()
+        .ok()?;
+    let remotes = String::from_utf8(first_remote.stdout).ok()?;
+    let remote = remotes
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let value = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["config", "--get", &format!("remote.{remote}.url")])
+        .output()
+        .ok()?;
+    if !value.status.success() {
+        return None;
+    }
+    let v = String::from_utf8(value.stdout).ok()?;
+    let trimmed = v.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+fn remote_repo_name(remote_url: &str) -> String {
+    let stripped = remote_url.trim();
+    let no_query = stripped.split(['?', '#']).next().unwrap_or(stripped);
+    let trimmed = no_query.strip_suffix(".git").unwrap_or(no_query);
+    trimmed
+        .split(['/', ':'])
+        .rfind(|s| !s.is_empty())
+        .unwrap_or("project")
+        .to_owned()
+}
+
+fn safe_segment(value: &str) -> String {
+    let lowered = value.trim().to_lowercase();
+    let mut out = String::with_capacity(lowered.len());
+    let mut last_dash = false;
+    for ch in lowered.chars() {
+        let ok = ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-';
+        if ok {
+            out.push(ch);
+            last_dash = ch == '-';
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    while out.starts_with('-') {
+        out.remove(0);
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.len() > 48 {
+        out.truncate(48);
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "project".to_owned()
+    } else {
+        out
+    }
+}
+
+fn sha256_hex(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest.iter() {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    hex
 }
 
 #[must_use]
@@ -1154,6 +1353,34 @@ fn validate_known_overrides(
 }
 
 fn read_override_file(path: &Path) -> Result<BTreeMap<String, String>, SettingsError> {
+    // vstack#227 round-3 P2.1: enforce strict 0600 + uid ownership +
+    // symlink rejection on the READ path before opening the file.
+    // A previously-trusted settings.toml that's been chmod'd to 0644
+    // or chown'd to another uid fails closed. (CWE-732 / CWE-276)
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(SettingsError::UnsafePath {
+                    path: path.to_path_buf(),
+                    message: String::from("settings file is a symlink"),
+                });
+            }
+            if !metadata.file_type().is_file() {
+                return Err(SettingsError::UnsafePath {
+                    path: path.to_path_buf(),
+                    message: String::from("settings path is not a regular file"),
+                });
+            }
+            assert_store_file_mode(&metadata, path)?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(source) => {
+            return Err(SettingsError::Read {
+                path: path.to_path_buf(),
+                source,
+            })
+        }
+    }
     let source = match fs::read_to_string(path) {
         Ok(source) => source,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
@@ -1167,6 +1394,42 @@ fn read_override_file(path: &Path) -> Result<BTreeMap<String, String>, SettingsE
     parse_override_content(path, &source)
 }
 
+// vstack#227 round-3: file-mode strict check. Mirrors
+// `run-store.ts::assertStoreOwnership` in "file strict" mode — exact
+// 0600 + uid ownership, no auto-chmod, no group/other bits.
+#[cfg(unix)]
+fn assert_store_file_mode(meta: &fs::Metadata, path: &Path) -> Result<(), SettingsError> {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
+    if let Some(uid) = current_uid() {
+        if meta.uid() != uid {
+            return Err(SettingsError::UnsafePath {
+                path: path.to_path_buf(),
+                message: format!("owned by uid {}, not {}", meta.uid(), uid),
+            });
+        }
+    }
+    let mode = meta.permissions().mode() & 0o777;
+    if mode & 0o022 != 0 {
+        return Err(SettingsError::UnsafePath {
+            path: path.to_path_buf(),
+            message: format!("group/other write bits set (mode={:o})", mode),
+        });
+    }
+    if mode != STORE_FILE_MODE {
+        return Err(SettingsError::UnsafePath {
+            path: path.to_path_buf(),
+            message: format!("mode={:o} expected {:o}", mode, STORE_FILE_MODE),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn assert_store_file_mode(_meta: &fs::Metadata, _path: &Path) -> Result<(), SettingsError> {
+    Ok(())
+}
+
 fn write_override_file(
     project_root: &Path,
     path: &Path,
@@ -1178,6 +1441,13 @@ fn write_override_file(
             path: project_root.to_path_buf(),
             source,
         })?;
+    // Use the canonical/worktree-collapsed root so it stays in lockstep
+    // with the TS run-store identity.
+    let project_root =
+        resolve_project_root_from(&project_root).map_err(|error| SettingsError::UnsafePath {
+            path: project_root.clone(),
+            message: error.to_string(),
+        })?;
     let expected_path = override_path(&project_root);
     if path != expected_path {
         return Err(SettingsError::UnsafePath {
@@ -1185,9 +1455,20 @@ fn write_override_file(
             message: format!("expected {}", expected_path.display()),
         });
     }
-    let tmp_dir = project_root.join("tmp");
-    ensure_safe_tmp_dir(&project_root, &tmp_dir)?;
-    ensure_safe_final_path(&project_root, path)?;
+    // vstack#227: ensure the run-store root + `projects/` ancestor are
+    // real (non-symlinked) user-owned directories before touching the
+    // per-project leaf, mirroring `run-store.ts::ensureStoreRootChain`.
+    ensure_store_root_chain(&flightdeck_run_store_root())?;
+    let store_dir = project_dir(&project_root);
+    // vstack#227 round-3 P2.2: lstat-first walk through the per-
+    // project leaf so a symlinked component is rejected BEFORE
+    // `mkdir`/`chmod`/`open` touches it. The previous
+    // `create_dir_all(&store_dir)` followed symlinks during creation
+    // and only ran the symlink check afterwards (CWE-22/CWE-59).
+    create_one_at_a_time(&store_dir)?;
+    enforce_store_dir_mode(&store_dir)?;
+    ensure_safe_directory(&store_dir)?;
+    ensure_safe_final_path_against(&store_dir, path)?;
 
     let mut out = String::from(
         "# Flightdeck dashboard settings override.\n# Edited by the dashboard settings popup. Values are process env strings.\n\n",
@@ -1202,7 +1483,10 @@ fn write_override_file(
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
-    options.custom_flags(libc::O_NOFOLLOW);
+    {
+        options.custom_flags(libc::O_NOFOLLOW);
+        options.mode(STORE_FILE_MODE);
+    }
     let mut file = options.open(path).map_err(|source| SettingsError::Write {
         path: path.to_path_buf(),
         source,
@@ -1211,80 +1495,262 @@ fn write_override_file(
         .map_err(|source| SettingsError::Write {
             path: path.to_path_buf(),
             source,
-        })
+        })?;
+    // vstack#227: force-tighten in case umask added extra bits on
+    // file creation.
+    enforce_store_file_mode(path)?;
+    Ok(())
 }
 
-fn ensure_safe_tmp_dir(project_root: &Path, tmp_dir: &Path) -> Result<(), SettingsError> {
-    match fs::symlink_metadata(tmp_dir) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(SettingsError::UnsafePath {
-                    path: tmp_dir.to_path_buf(),
-                    message: String::from("tmp directory is a symlink"),
-                });
-            }
-            if !metadata.is_dir() {
-                return Err(SettingsError::UnsafePath {
-                    path: tmp_dir.to_path_buf(),
-                    message: String::from("tmp path is not a directory"),
-                });
-            }
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir(tmp_dir).map_err(|source| SettingsError::Write {
-                path: tmp_dir.to_path_buf(),
-                source,
-            })?;
-        }
-        Err(source) => {
-            return Err(SettingsError::Write {
-                path: tmp_dir.to_path_buf(),
-                source,
-            })
-        }
+// vstack#227: store dirs must be 0700; settings.toml is 0600. We also
+// reject any existing dir that is a symlink, owned by another uid, or
+// has group/other write bits set, matching the TS run-store posture.
+const STORE_DIR_MODE: u32 = 0o700;
+const STORE_FILE_MODE: u32 = 0o600;
+
+#[cfg(unix)]
+fn current_uid() -> Option<u32> {
+    Some(unsafe { libc::getuid() })
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
+fn enforce_mode_unix(path: &Path, mode: u32, label: &str) -> Result<(), SettingsError> {
+    use std::os::unix::fs::PermissionsExt;
+    let permissions = fs::Permissions::from_mode(mode);
+    fs::set_permissions(path, permissions).map_err(|source| SettingsError::Write {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let _ = label;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn enforce_mode_unix(_path: &Path, _mode: u32, _label: &str) -> Result<(), SettingsError> {
+    Ok(())
+}
+
+fn enforce_store_dir_mode(path: &Path) -> Result<(), SettingsError> {
+    enforce_mode_unix(path, STORE_DIR_MODE, "store directory")
+}
+
+fn enforce_store_file_mode(path: &Path) -> Result<(), SettingsError> {
+    enforce_mode_unix(path, STORE_FILE_MODE, "store file")
+}
+
+// vstack#227 round-2: walk every ancestor of `root` with `lstat`
+// (`symlink_metadata`) BEFORE creating anything. Reject any symlink
+// in the chain (CWE-22/CWE-59) — `create_dir_all` would otherwise
+// follow it and silently redirect writes. Missing components get
+// created one at a time with `0700`.
+fn ensure_store_root_chain(root: &Path) -> Result<(), SettingsError> {
+    if !root.is_absolute() {
+        return Err(SettingsError::UnsafePath {
+            path: root.to_path_buf(),
+            message: String::from("run-store root must be an absolute path"),
+        });
     }
-    let canonical_tmp = tmp_dir
+    ensure_safe_ancestor_chain(root)?;
+    create_one_at_a_time(root)?;
+    enforce_store_dir_mode(root)?;
+    ensure_safe_directory(root)?;
+    let projects = root.join("projects");
+    create_one_at_a_time(&projects)?;
+    enforce_store_dir_mode(&projects)?;
+    ensure_safe_directory(&projects)?;
+    let real_root = root.canonicalize().map_err(|source| SettingsError::Write {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    let real_projects = projects
         .canonicalize()
         .map_err(|source| SettingsError::Write {
-            path: tmp_dir.to_path_buf(),
+            path: projects.clone(),
             source,
         })?;
-    if !canonical_tmp.starts_with(project_root) {
+    if !real_projects.starts_with(&real_root) {
         return Err(SettingsError::UnsafePath {
-            path: tmp_dir.to_path_buf(),
-            message: String::from("canonical tmp directory escapes project root"),
+            path: projects,
+            message: format!("canonical projects dir escapes {}", root.display()),
         });
     }
     Ok(())
 }
 
-fn ensure_safe_final_path(project_root: &Path, path: &Path) -> Result<(), SettingsError> {
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() {
-            return Err(SettingsError::UnsafePath {
-                path: path.to_path_buf(),
-                message: String::from("settings file is a symlink"),
-            });
-        }
-        if !metadata.is_file() {
-            return Err(SettingsError::UnsafePath {
-                path: path.to_path_buf(),
-                message: String::from("settings path is not a regular file"),
-            });
-        }
-        let canonical = path.canonicalize().map_err(|source| SettingsError::Write {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        if !canonical.starts_with(project_root) {
-            return Err(SettingsError::UnsafePath {
-                path: path.to_path_buf(),
-                message: String::from("canonical settings file escapes project root"),
-            });
+fn ensure_safe_ancestor_chain(target: &Path) -> Result<(), SettingsError> {
+    let mut current = PathBuf::from("/");
+    for component in target.components() {
+        if let std::path::Component::Normal(name) = component {
+            current.push(name);
+            match fs::symlink_metadata(&current) {
+                Ok(meta) => {
+                    if meta.file_type().is_symlink() {
+                        return Err(SettingsError::UnsafePath {
+                            path: target.to_path_buf(),
+                            message: format!(
+                                "ancestor {} is a symlink (CWE-22/CWE-59)",
+                                current.display()
+                            ),
+                        });
+                    }
+                    if !meta.file_type().is_dir() {
+                        return Err(SettingsError::UnsafePath {
+                            path: target.to_path_buf(),
+                            message: format!("ancestor {} is not a directory", current.display()),
+                        });
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => {
+                    return Err(SettingsError::Write {
+                        path: current.clone(),
+                        source: error,
+                    })
+                }
+            }
         }
     }
     Ok(())
 }
+
+fn create_one_at_a_time(target: &Path) -> Result<(), SettingsError> {
+    let mut current = PathBuf::from("/");
+    for component in target.components() {
+        if let std::path::Component::Normal(name) = component {
+            current.push(name);
+            match fs::symlink_metadata(&current) {
+                Ok(meta) => {
+                    if meta.file_type().is_symlink() {
+                        return Err(SettingsError::UnsafePath {
+                            path: target.to_path_buf(),
+                            message: format!("ancestor {} is a symlink", current.display()),
+                        });
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    fs::create_dir(&current).map_err(|source| SettingsError::Write {
+                        path: current.clone(),
+                        source,
+                    })?;
+                    enforce_store_dir_mode(&current)?;
+                }
+                Err(error) => {
+                    return Err(SettingsError::Write {
+                        path: current.clone(),
+                        source: error,
+                    })
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn assert_owner_and_mode(meta: &fs::Metadata, path: &Path) -> Result<(), SettingsError> {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
+    if let Some(uid) = current_uid() {
+        if meta.uid() != uid {
+            return Err(SettingsError::UnsafePath {
+                path: path.to_path_buf(),
+                message: format!("owned by uid {}, not {}", meta.uid(), uid),
+            });
+        }
+    }
+    // Fail closed only on group/other write bits — those allow another
+    // local user to tamper with settings. Read bits are tightened down
+    // by enforce_store_*_mode on each call rather than failing pre-
+    // existing files created under the default umask.
+    let mode = meta.permissions().mode() & 0o777;
+    if mode & 0o022 != 0 {
+        return Err(SettingsError::UnsafePath {
+            path: path.to_path_buf(),
+            message: format!("group/other write bits set (mode={:o})", mode),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn assert_owner_and_mode(_meta: &fs::Metadata, _path: &Path) -> Result<(), SettingsError> {
+    Ok(())
+}
+
+fn ensure_safe_directory(dir: &Path) -> Result<(), SettingsError> {
+    match fs::symlink_metadata(dir) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(SettingsError::UnsafePath {
+                    path: dir.to_path_buf(),
+                    message: String::from("settings directory is a symlink"),
+                });
+            }
+            if !metadata.file_type().is_dir() {
+                return Err(SettingsError::UnsafePath {
+                    path: dir.to_path_buf(),
+                    message: String::from("settings directory path is not a directory"),
+                });
+            }
+            assert_owner_and_mode(&metadata, dir)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(SettingsError::Write {
+            path: dir.to_path_buf(),
+            source: error,
+        }),
+    }
+}
+
+fn ensure_safe_final_path_against(parent_dir: &Path, path: &Path) -> Result<(), SettingsError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(SettingsError::UnsafePath {
+                    path: path.to_path_buf(),
+                    message: String::from("settings file is a symlink"),
+                });
+            }
+            if !metadata.file_type().is_file() {
+                return Err(SettingsError::UnsafePath {
+                    path: path.to_path_buf(),
+                    message: String::from("settings path is not a regular file"),
+                });
+            }
+            // Defense in depth: ensure the file lives inside the
+            // expected store dir (rejects any unusual path tricks).
+            if path.parent() != Some(parent_dir) {
+                return Err(SettingsError::UnsafePath {
+                    path: path.to_path_buf(),
+                    message: format!("settings file must be inside {}", parent_dir.display()),
+                });
+            }
+            // vstack#227 round-3 P2.1: strict 0600 + uid ownership on
+            // the WRITE path. A pre-existing file with wider perms
+            // fails closed; the writer never auto-chmods.
+            assert_store_file_mode(&metadata, path)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(SettingsError::Write {
+            path: path.to_path_buf(),
+            source: error,
+        }),
+    }
+}
+
+// vstack#227: legacy `ensure_safe_tmp_dir` / `ensure_safe_final_path`
+// validated that project-local `tmp/` and its settings file stayed
+// inside `project_root`. The unified settings now live under the
+// user-level run store; the equivalent guarantees are provided by
+// `ensure_safe_directory` + `ensure_safe_final_path_against` on the
+// new store dir.
 
 fn parse_override_content(
     path: &Path,
@@ -1425,6 +1891,61 @@ fn valid_env_key(key: &str) -> bool {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    use std::sync::Mutex;
+
+    // vstack#227: settings now live under FLIGHTDECK_RUN_STORE_ROOT. The
+    // env var is process-global; serialize the tests that mutate it so
+    // parallel test runs in this binary don't trample one another.
+    static SETTINGS_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct SettingsEnvGuard {
+        previous: Option<String>,
+    }
+
+    impl SettingsEnvGuard {
+        fn install(root: &Path) -> Self {
+            let previous = std::env::var("FLIGHTDECK_RUN_STORE_ROOT").ok();
+            std::env::set_var("FLIGHTDECK_RUN_STORE_ROOT", root);
+            Self { previous }
+        }
+    }
+
+    impl Drop for SettingsEnvGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(prev) => std::env::set_var("FLIGHTDECK_RUN_STORE_ROOT", prev),
+                None => std::env::remove_var("FLIGHTDECK_RUN_STORE_ROOT"),
+            }
+        }
+    }
+
+    fn settings_root(dir: &Path) -> PathBuf {
+        dir.join(".vstack-store")
+    }
+
+    // vstack#227 round-3: tolerant SETTINGS_ENV_LOCK acquisition.
+    // `.unwrap()` on the mutex propagates poisoning so a single panic
+    // tanks every later test. Tests just need mutual exclusion —
+    // recover the guard via `into_inner()` so the cascade stops at
+    // the original failure.
+    fn lock_settings_env() -> std::sync::MutexGuard<'static, ()> {
+        match SETTINGS_ENV_LOCK.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    // vstack#227 round-3: settings.toml lives at strict 0600 in
+    // production. Tempfile seeds default to umask-derived perms
+    // (commonly 0644); tighten before invoking the strict reader.
+    #[cfg(unix)]
+    fn ensure_test_settings_mode(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .expect("chmod settings test fixture");
+    }
+    #[cfg(not(unix))]
+    fn ensure_test_settings_mode(_path: &Path) {}
 
     #[test]
     fn parse_override_file_accepts_quoted_bare_and_booleans() {
@@ -1447,9 +1968,11 @@ FLIGHTDECK_STATE_DIR = 'tmp/custom'
 
     #[test]
     fn write_override_file_round_trips_strings() {
+        let _guard = lock_settings_env();
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("vstack.toml"), "").expect("marker");
-        let path = dir.path().join(OVERRIDE_RELATIVE_PATH);
+        let _env = SettingsEnvGuard::install(&settings_root(dir.path()));
+        let path = override_path(dir.path());
         let mut values = BTreeMap::new();
         values.insert(
             "FLIGHTDECK_LAUNCH_MODEL".to_owned(),
@@ -1462,8 +1985,10 @@ FLIGHTDECK_STATE_DIR = 'tmp/custom'
 
     #[test]
     fn settings_state_toggle_prepares_and_applies_boolean_override() {
+        let _guard = lock_settings_env();
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("vstack.toml"), "").expect("marker");
+        let _env = SettingsEnvGuard::install(&settings_root(dir.path()));
         let mut state = SettingsState::load(dir.path().to_path_buf(), BTreeMap::new());
         let index = state
             .entries
@@ -1521,10 +2046,15 @@ FLIGHTDECK_STATE_DIR = 'tmp/custom'
 
     #[test]
     fn invalid_override_file_surfaces_error() {
+        let _guard = lock_settings_env();
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join(OVERRIDE_RELATIVE_PATH);
-        std::fs::create_dir_all(path.parent().unwrap()).expect("tmp dir");
+        let _env = SettingsEnvGuard::install(&settings_root(dir.path()));
+        let path = override_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).expect("settings dir");
         std::fs::write(&path, "FLIGHTDECK_DEBOUNCE_CYCLES = -1\n").expect("write invalid");
+        // vstack#227 round-3: strict 0600 enforced on read; chmod the
+        // seed file so the parser path (not the perms path) trips.
+        ensure_test_settings_mode(&path);
         let state = SettingsState::load(dir.path().to_path_buf(), BTreeMap::new());
         assert!(state
             .last_error
@@ -1534,10 +2064,13 @@ FLIGHTDECK_STATE_DIR = 'tmp/custom'
 
     #[test]
     fn malformed_override_file_surfaces_error() {
+        let _guard = lock_settings_env();
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join(OVERRIDE_RELATIVE_PATH);
-        std::fs::create_dir_all(path.parent().unwrap()).expect("tmp dir");
+        let _env = SettingsEnvGuard::install(&settings_root(dir.path()));
+        let path = override_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).expect("settings dir");
         std::fs::write(&path, "not a setting line\n").expect("write malformed");
+        ensure_test_settings_mode(&path);
         let state = SettingsState::load(dir.path().to_path_buf(), BTreeMap::new());
         assert!(state
             .last_error
@@ -1559,12 +2092,43 @@ FLIGHTDECK_STATE_DIR = 'tmp/custom'
 
     #[test]
     #[cfg(unix)]
-    fn write_rejects_tmp_symlink_escape() {
+    fn write_rejects_store_dir_symlink_escape() {
         use std::os::unix::fs::symlink;
+        let _guard = lock_settings_env();
         let project = tempfile::tempdir().expect("project tempdir");
+        std::fs::write(project.path().join("vstack.toml"), "").expect("marker");
         let outside = tempfile::tempdir().expect("outside tempdir");
-        symlink(outside.path(), project.path().join("tmp")).expect("tmp symlink");
-        let path = project.path().join(OVERRIDE_RELATIVE_PATH);
+        // Point the resolved settings store dir at a symlink to escape
+        // the safe per-project directory.
+        let store_root = settings_root(project.path());
+        let _env = SettingsEnvGuard::install(&store_root);
+        let canonical_project = project.path().canonicalize().expect("canonicalize project");
+        let store_dir = project_dir(&canonical_project);
+        std::fs::create_dir_all(store_dir.parent().unwrap()).expect("projects parent");
+        symlink(outside.path(), &store_dir).expect("store dir symlink");
+        let path = override_path(&canonical_project);
+        let mut values = BTreeMap::new();
+        values.insert(String::from("FLIGHTDECK_AUTO_MERGE"), String::from("0"));
+        let error = write_override_file(project.path(), &path, &values)
+            .expect_err("reject symlink store dir");
+        assert!(error.to_string().contains("symlink"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn write_rejects_final_file_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let _guard = lock_settings_env();
+        let project = tempfile::tempdir().expect("project tempdir");
+        std::fs::write(project.path().join("vstack.toml"), "").expect("marker");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let _env = SettingsEnvGuard::install(&settings_root(project.path()));
+        let outside_file = outside.path().join("settings.toml");
+        std::fs::write(&outside_file, "").expect("outside file");
+        let canonical_project = project.path().canonicalize().expect("canonicalize project");
+        let path = override_path(&canonical_project);
+        std::fs::create_dir_all(path.parent().unwrap()).expect("store dir");
+        symlink(&outside_file, &path).expect("settings symlink");
         let mut values = BTreeMap::new();
         values.insert(String::from("FLIGHTDECK_AUTO_MERGE"), String::from("0"));
         let error =
@@ -1574,20 +2138,100 @@ FLIGHTDECK_STATE_DIR = 'tmp/custom'
 
     #[test]
     #[cfg(unix)]
-    fn write_rejects_final_file_symlink_escape() {
-        use std::os::unix::fs::symlink;
+    fn read_rejects_settings_file_with_wide_perms_no_auto_chmod() {
+        // vstack#227 round-3 P2.1: a settings.toml that's been chmod'd
+        // to 0644 must fail closed at read time (CWE-732/CWE-276); the
+        // reader never auto-chmods.
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = lock_settings_env();
         let project = tempfile::tempdir().expect("project tempdir");
-        let outside = tempfile::tempdir().expect("outside tempdir");
-        std::fs::create_dir(project.path().join("tmp")).expect("tmp dir");
-        let outside_file = outside.path().join("settings.toml");
-        std::fs::write(&outside_file, "").expect("outside file");
-        let path = project.path().join(OVERRIDE_RELATIVE_PATH);
-        symlink(&outside_file, &path).expect("settings symlink");
+        std::fs::write(project.path().join("vstack.toml"), "").expect("marker");
+        let _env = SettingsEnvGuard::install(&settings_root(project.path()));
+        let canonical_project = project.path().canonicalize().expect("canonicalize project");
+        let path = override_path(&canonical_project);
+        std::fs::create_dir_all(path.parent().unwrap()).expect("store dir");
+        std::fs::write(&path, "FLIGHTDECK_AUTO_MERGE = 1\n").expect("seed settings");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("widen perms");
+        let error = read_override_file(&path).expect_err("strict 0600 fail-closed");
+        let msg = error.to_string();
+        assert!(
+            msg.contains("mode=644") || msg.contains("group/other write"),
+            "unexpected error: {msg}"
+        );
+        // No auto-chmod happened.
+        let after = std::fs::metadata(&path)
+            .expect("stat after")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(after, 0o644, "read path must not auto-chmod existing file");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn write_rejects_pre_existing_settings_file_with_wide_perms() {
+        // vstack#227 round-3 P2.1 (write path): a pre-existing
+        // settings.toml at 0644 must reject the write call too. The
+        // writer does not silently fix permissions.
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = lock_settings_env();
+        let project = tempfile::tempdir().expect("project tempdir");
+        std::fs::write(project.path().join("vstack.toml"), "").expect("marker");
+        let _env = SettingsEnvGuard::install(&settings_root(project.path()));
+        let canonical_project = project.path().canonicalize().expect("canonicalize project");
+        let path = override_path(&canonical_project);
+        std::fs::create_dir_all(path.parent().unwrap()).expect("store dir");
+        std::fs::write(&path, "stale\n").expect("seed");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("widen perms");
         let mut values = BTreeMap::new();
         values.insert(String::from("FLIGHTDECK_AUTO_MERGE"), String::from("0"));
-        let error =
-            write_override_file(project.path(), &path, &values).expect_err("reject symlink");
-        assert!(error.to_string().contains("symlink"));
+        let error = write_override_file(project.path(), &path, &values)
+            .expect_err("write must fail closed on 0644 file");
+        let msg = error.to_string();
+        assert!(
+            msg.contains("mode=644") || msg.contains("group/other write"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn write_rejects_symlinked_root_ancestor_before_mkdir() {
+        // vstack#227 round-3 P2.2: an ancestor of the run-store root
+        // that's a symlink must be rejected via `lstat` BEFORE any
+        // `mkdir`/`chmod`/`open` follows it. (CWE-22/CWE-59)
+        use std::os::unix::fs::symlink;
+        let _guard = lock_settings_env();
+        let project = tempfile::tempdir().expect("project tempdir");
+        std::fs::write(project.path().join("vstack.toml"), "").expect("marker");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        // Create `<project>/intermediate -> <outside>`, then point
+        // FLIGHTDECK_RUN_STORE_ROOT inside the symlinked path.
+        symlink(outside.path(), project.path().join("intermediate")).expect("intermediate symlink");
+        let intermediate_root = project.path().join("intermediate").join("store");
+        let _env = SettingsEnvGuard::install(&intermediate_root);
+        let canonical_project = project.path().canonicalize().expect("canonicalize project");
+        let path = override_path(&canonical_project);
+        let mut values = BTreeMap::new();
+        values.insert(String::from("FLIGHTDECK_AUTO_MERGE"), String::from("0"));
+        let error = write_override_file(project.path(), &path, &values)
+            .expect_err("write must reject symlinked ancestor");
+        let msg = error.to_string();
+        assert!(
+            msg.contains("symlink"),
+            "expected symlink rejection, got: {msg}"
+        );
+        // The symlink target stays untouched: no `projects/` was
+        // created inside <outside>.
+        let outside_contents: Vec<_> = std::fs::read_dir(outside.path())
+            .expect("readdir outside")
+            .collect();
+        assert!(
+            outside_contents.is_empty(),
+            "symlink target was touched before lstat rejection"
+        );
     }
 
     #[test]
@@ -1604,6 +2248,30 @@ FLIGHTDECK_STATE_DIR = 'tmp/custom'
             "FLIGHTDECK_DASHBOARD_TEST_WEDGE_SIGNALS",
             "FLIGHTDECK_DASHBOARD_TEST_SUBSCRIBE_PAUSE_FILE",
             "FLIGHTDECK_DASHBOARD_TEST_SUBSCRIBE_RELEASE_FILE",
+            // vstack#227: test/sandbox-only run-store override; not
+            // user-editable from the dashboard settings popup.
+            "FLIGHTDECK_RUN_STORE_ROOT",
+            // Daemon hygiene: bind-skip throttles documented in ENV.md
+            // but tuned via the daemon, not the dashboard popup.
+            "FD_PI_BIND_SKIP_LOG_INTERVAL_SEC",
+            "FD_PI_BIND_SKIP_STUCK_THRESHOLD",
+            "FD_SUB_BIND_SKIP_LOG_INTERVAL_SEC",
+            "FD_SUB_BIND_SKIP_STUCK_THRESHOLD",
+            // Test/dev trampoline overrides documented in ENV.md but
+            // are not user-editable settings (they swap out subprocess
+            // binaries for test shims).
+            "FLIGHTDECK_DAEMON_BIN",
+            "FLIGHTDECK_DASHBOARD_BIN",
+            "FLIGHTDECK_PANE_REGISTRY_BIN",
+            "FLIGHTDECK_CLAUDE_BIN",
+            "FLIGHTDECK_ARCHIVE_SKIP_DAEMON_STOP",
+            "FLIGHTDECK_ENSURE_DAEMON",
+            "FLIGHTDECK_CLAUDE_CHANNELS",
+            // Pre-PR review flow knobs consumed by master-loop, not
+            // the dashboard.
+            "FLIGHTDECK_PRE_PR_REVIEW",
+            "FLIGHTDECK_PRE_PR_REVIEWERS",
+            "FLIGHTDECK_PRE_PR_REVIEW_MAX_ROUNDS",
             "NO_MOTION",
             "NO_COLOR",
             "BEHIND",

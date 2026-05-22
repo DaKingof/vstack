@@ -255,7 +255,10 @@ describe("Flightdeck durable run store", () => {
 		}), "utf8");
 		installTmuxShim("%other\n");
 
-		const ensured = ensureActiveRun(repo, SESSION);
+		// vstack#227: lifecycle callers opt in to the stale check; CLI
+		// helpers default to skipping it so an idle `flightdeck-state
+		// get` doesn't surprise-rotate the run.
+		const ensured = ensureActiveRun(repo, SESSION, { checkStale: true });
 		expect(ensured.action).toBe("created-after-stale");
 		expect(ensured.previous_run_id).toBe(created.metadata.run_id);
 		expect(ensured.previous_termination?.metadata.terminated).toBe(true);
@@ -333,7 +336,10 @@ describe("Flightdeck durable run store", () => {
 		}), "utf8");
 		installTmuxShim("tmux unavailable", 7);
 
-		expect(() => ensureActiveRun(repo, SESSION)).toThrow(/cannot verify active Flightdeck run liveness/);
+		// vstack#227: only lifecycle-mode (`checkStale: true`) callers
+		// throw on liveness failure. Helper callers reuse the active
+		// run silently.
+		expect(() => ensureActiveRun(repo, SESSION, { checkStale: true })).toThrow(/cannot verify active Flightdeck run liveness/);
 		expect(readActiveRun(repo)?.active.run_id).toBe(created.metadata.run_id);
 	});
 
@@ -515,7 +521,13 @@ describe("Flightdeck durable run store", () => {
 
 			mutate(created, outside);
 
-			expect(() => action(created, currentRepo), name).toThrow(/symlinks are not allowed/);
+			// vstack#227: the symlink-rejection message can come from
+			// either the file-level "symlinks are not allowed" check or
+			// the ancestor-traversal "escapes" check, depending on
+			// which security guard fires first.
+			expect(() => action(created, currentRepo), name).toThrow(
+				/symlinks are not allowed|escapes/,
+			);
 		}
 	});
 
@@ -595,8 +607,16 @@ describe("Flightdeck durable run store", () => {
 		mkdirSync(stateDir, { recursive: true });
 		const liveState = join(stateDir, `flightdeck-state-${SESSION}.json`);
 		writeFileSync(liveState, "null", "utf8");
-		expect(() => createRun(repo, SESSION)).toThrow(new RegExp(liveState.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-		expect(readFileSync(liveState, "utf8")).toBe("null");
+		// vstack#227 round-2: createRunLocked routes the legacy seed
+		// through the locked migration helper, which copies the
+		// malformed legacy file into the run dir before re-reading.
+		// The validator raises against the run-dir state.json path
+		// rather than the legacy source.
+		expect(() => createRun(repo, SESSION)).toThrow(/invalid run state JSON .*\bstate\.json: expected object/);
+		// Source legacy file is renamed `.migrated` by the locked
+		// migration; the original payload is preserved alongside.
+		const migratedPath = `${liveState}.migrated`;
+		expect(existsSync(migratedPath) ? readFileSync(migratedPath, "utf8") : readFileSync(liveState, "utf8")).toBe("null");
 	});
 
 	test("create honors FLIGHTDECK_STATE_DIR from .env.local", () => {
