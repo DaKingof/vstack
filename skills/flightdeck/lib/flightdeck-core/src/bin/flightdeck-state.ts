@@ -4,8 +4,9 @@
 // Subcommands: init | get | set | append | increment | tracked-entries | write-entry | path | phase | archive | activity | master-busy | run
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { appendActivityEvent } from "../activity/append.ts";
 import { emitActivity } from "../activity/emit.ts";
 import { formatActivityJsonl, formatActivityLine, formatActivityMarkdown } from "../activity/format.ts";
@@ -144,6 +145,17 @@ switch (action) {
 		appendSessionCompletedForArchive();
 		terminateActiveRunForArchive();
 		const ap = archiveState(file);
+		// vstack#213: archive rotates the state file; the daemon's
+		// --inner argv was bound to pane ids inside it. Once archived,
+		// the daemon's subscriber set is by definition stale for the
+		// next start, and reconciliation can't recover because the
+		// inode/path the daemon snapshotted has changed. Stop the
+		// daemon as part of the archive op so the next
+		// flightdeck-session start arms a fresh daemon. Failure to stop
+		// is logged but doesn't fail the archive — the legacy state is
+		// already moved, and the next start path detects staleness via
+		// meta inode mismatch and respawns regardless.
+		stopDaemonForSessionBestEffort(session);
 		if (ap) process.stdout.write(`${ap}\n`);
 		break;
 	}
@@ -481,6 +493,95 @@ function validateDomainIssueIdOrDie(entry: TrackedEntry): string | undefined {
 	} catch (error) {
 		die(`Error: ${error instanceof Error ? error.message : String(error)}`);
 	}
+}
+
+// vstack#213: stop the per-session flightdeck-daemon as part of the
+// archive op so the next session start arms a fresh subscriber set.
+// Failure to stop the daemon is non-fatal: we already wrote a fresh
+// state file with the new inode, and ensure_daemon_for_session will
+// observe the inode mismatch on the next start and respawn anyway.
+// Exit-code contract (round-1 fix):
+//   0 → daemon stopped (or stale pid file cleaned)
+//   1 → no daemon (quiet)
+//   3 → safety refusal: PID lock missing / flock unavailable /
+//       ambiguous state. Warn loudly with stderr+session so an
+//       operator can investigate; the daemon may still be running
+//       with stale --inner wiring.
+//   other → unexpected; warn the same way as 3.
+function stopDaemonForSessionBestEffort(tmuxSession: string): void {
+	if (!tmuxSession) return;
+	if (process.env.FLIGHTDECK_ARCHIVE_SKIP_DAEMON_STOP === "1") return;
+	const cmd = resolveDaemonBin();
+	const r = spawnSync(cmd.bin, [...cmd.args, "stop", "--session", tmuxSession], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	if (r.error) {
+		process.stderr.write(`Warning: flightdeck-daemon stop spawn failed during archive of ${tmuxSession}: ${r.error.message}\n`);
+		return;
+	}
+	if (r.status === 0) {
+		const out = (r.stdout ?? "").trim();
+		if (out) process.stderr.write(`flightdeck-state archive: ${out}\n`);
+		return;
+	}
+	if (r.status === 1) return; // no daemon for this session — common case
+	const tag = r.status === 3 ? "safety-refusal" : "unexpected";
+	process.stderr.write(`Warning: flightdeck-daemon stop exit ${r.status ?? "unknown"} (${tag}) during archive of session=${tmuxSession}; daemon may still be running with stale --inner wiring\n`);
+	if (r.stderr) process.stderr.write(r.stderr);
+}
+
+// Resolve the flightdeck-daemon binary, honoring the
+// FLIGHTDECK_DAEMON_BIN escape hatch so tests can swap in a shim.
+// Falls back to the trampoline next to scripts/flightdeck-state, and
+// finally to invoking the TS source through `bun` if neither is
+// available (only relevant when invoked from `bun run`).
+//
+// Trust model (CWE-829, round-2/3): when the override is set, the
+// binary is invoked for daemon lifecycle (stop) during archive, so a
+// hostile override could mask or impersonate the per-session daemon.
+// The override is intended strictly for tests and developer iteration;
+// production operators should leave it unset. We enforce a minimal
+// sanity gate here, mirroring the bash check in scripts/flightdeck-session:
+//   1. Must be an absolute path.
+//   2. Must exist.
+//   3. Must be a regular file marked user-executable (any of u/g/o
+//      exec bits) — catches the common typo of pointing at a config
+//      file or symlink to a non-executable target. Symlinks to
+//      executables resolve through statSync.
+// We deliberately stop short of stat-ing ownership / group-or-world-
+// writable bits / setuid because the same shim mechanism is used by
+// every parity test under per-test temp dirs. Adding those checks here
+// without a test-time opt-out would force every test to flip a bypass
+// env var. The tradeoff is documented in ENV.md so production
+// operators understand the trust boundary.
+function resolveDaemonBin(): { bin: string; args: string[] } {
+	const override = (process.env.FLIGHTDECK_DAEMON_BIN ?? "").trim();
+	if (override) {
+		if (!override.startsWith("/")) {
+			process.stderr.write(`Error: FLIGHTDECK_DAEMON_BIN must be an absolute path: ${override}\n`);
+			process.exit(2);
+		}
+		if (!existsSync(override)) {
+			process.stderr.write(`Error: FLIGHTDECK_DAEMON_BIN not found: ${override}\n`);
+			process.exit(2);
+		}
+		try {
+			const st = statSync(override);
+			if (!st.isFile() || (st.mode & 0o111) === 0) {
+				process.stderr.write(`Error: FLIGHTDECK_DAEMON_BIN not executable: ${override}\n`);
+				process.exit(2);
+			}
+		} catch (err) {
+			process.stderr.write(`Error: FLIGHTDECK_DAEMON_BIN stat failed for ${override}: ${(err as Error)?.message ?? err}\n`);
+			process.exit(2);
+		}
+		return { args: [], bin: override };
+	}
+	const trampoline = join(
+		dirname(fileURLToPath(import.meta.url)),
+		"..", "..", "..", "scripts", "flightdeck-daemon",
+	);
+	if (existsSync(trampoline)) return { args: [], bin: trampoline };
+	const tsEntry = join(dirname(fileURLToPath(import.meta.url)), "flightdeck-daemon.ts");
+	return { args: [tsEntry], bin: process.argv0 || "bun" };
 }
 
 function terminateActiveRunForArchive(): void {

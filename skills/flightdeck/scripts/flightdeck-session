@@ -5,7 +5,54 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PANE_REGISTRY="$SCRIPT_DIR/pane-registry"
+
+# vstack#213 trust model (CWE-829, rounds 2/3) for FLIGHTDECK_DAEMON_BIN
+# and FLIGHTDECK_PANE_REGISTRY_BIN.
+#
+# Both env vars cause external binaries to be invoked for daemon
+# lifecycle and tracked-entry queries. A hostile override could
+# misroute wake-arming, mask the daemon stop call, or impersonate the
+# registry. They are intended strictly for tests and developer
+# iteration; production operators should leave them unset.
+#
+# We enforce a minimal sanity gate via validate_override_bin:
+#   1. Must be an absolute path.
+#   2. Must exist and be executable.
+# Both checks fail-closed with a clear stderr message.
+#
+# We deliberately stop short of stat-ing ownership / group/world-write
+# bits / setuid because the same shim mechanism is used by every test
+# in tests/parity/flightdeck-session.test.ts that lives under a
+# per-test temp dir. Adding those checks here without a test-time
+# opt-out would force every test to flip a bypass env var. The
+# tradeoff is documented in ENV.md so production operators understand
+# the trust boundary.
+validate_override_bin() {
+  local name="$1" value="$2"
+  [[ -n "$value" ]] || return 0
+  if [[ "$value" != /* ]]; then
+    echo "Error: $name must be an absolute path: $value" >&2
+    exit 2
+  fi
+  if [[ ! -x "$value" ]]; then
+    echo "Error: $name not executable: $value" >&2
+    exit 2
+  fi
+}
+validate_override_bin FLIGHTDECK_PANE_REGISTRY_BIN "${FLIGHTDECK_PANE_REGISTRY_BIN:-}"
+validate_override_bin FLIGHTDECK_DAEMON_BIN "${FLIGHTDECK_DAEMON_BIN:-}"
+
+# vstack#213 round-2: test-only override for the canonical pane-registry
+# binary. Production callers leave it unset and we use the script-local
+# trampoline; tests inject a shim path to exercise registry-probe
+# failures inside ensure_daemon_for_session. Trust model: see
+# validate_override_bin block above.
+PANE_REGISTRY="${FLIGHTDECK_PANE_REGISTRY_BIN:-$SCRIPT_DIR/pane-registry}"
+
+# vstack#213: allow tests / operators to swap in a custom daemon
+# binary (matches the existing FLIGHTDECK_DASHBOARD_BIN escape hatch).
+# Trust model: see validate_override_bin block above.
+FLIGHTDECK_DAEMON_BIN="${FLIGHTDECK_DAEMON_BIN:-$SCRIPT_DIR/flightdeck-daemon}"
 
 # shellcheck source=lib/pane-env.sh
 source "$SCRIPT_DIR/lib/pane-env.sh"
@@ -752,6 +799,232 @@ ensure_active_run_for_session() {
   esac
 }
 
+# vstack#213: leave a daemon whose subscriber set matches the current
+# tracked entries before flightdeck-session returns.
+#
+# Invariant: callers must not rely on daemons started by earlier sessions.
+# Reconciliation is best-effort safety net, not the primary mechanism for
+# picking up new panes.
+#
+# Algorithm (round-1 simplification — health is the single source of truth):
+#   1. If FLIGHTDECK_ENSURE_DAEMON=0 (test override) or
+#      FLIGHTDECK_SKIP_ACTIVE_RUN/FLIGHTDECK_NO_ACTIVE_RUN=1 (dashboard
+#      self-launch), skip silently.
+#   2. Resolve master pane from $TMUX_PANE. Warn-and-skip when missing.
+#   3. Compute the alive inner panes + harnesses from the live tracked
+#      entries (registry filter ∩ tmux liveness). Warn-and-skip when
+#      the probes fail or no panes are tracked.
+#   4. Run `flightdeck-daemon health`. The TS implementation already
+#      compares meta against live tracked entries (pane-registry
+#      inner-live-json) and reports a definitive `staleness` field, so
+#      the bash side trusts it.
+#   5. If health says fresh AND `master_pane_id` matches the current
+#      master, leave the daemon alone. Otherwise stop + start.
+#   6. After respawn, if `start` rc=1 (possible lock-race), re-run
+#      health and only declare a benign race when staleness is now
+#      `fresh`; surface daemon-respawn-failed otherwise.
+ensure_daemon_for_session() {
+  [[ "${FLIGHTDECK_ENSURE_DAEMON:-1}" == "1" ]] || return 0
+  [[ "${FLIGHTDECK_SKIP_ACTIVE_RUN:-0}" == "1" || "${FLIGHTDECK_NO_ACTIVE_RUN:-0}" == "1" ]] && return 0
+  if [[ -z "${TMUX:-}" ]]; then
+    printf 'Warning: flightdeck-session ensure_daemon: no $TMUX session; skipping daemon arm\n' >&2
+    return 0
+  fi
+  local session_name
+  if ! session_name=$(tmux display-message -p '#S' 2>/dev/null) || [[ -z "$session_name" ]]; then
+    printf 'Warning: flightdeck-session ensure_daemon: tmux display-message #S failed; skipping daemon arm\n' >&2
+    return 0
+  fi
+  local master_pane="${TMUX_PANE:-}"
+  if [[ -z "$master_pane" ]]; then
+    master_pane=$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)
+  fi
+  if [[ -z "$master_pane" ]]; then
+    printf 'Warning: flightdeck-session ensure_daemon: cannot resolve master pane (TMUX_PANE empty, tmux display-message failed); session=%s; skipping daemon arm\n' "$session_name" >&2
+    return 0
+  fi
+
+  # Filter the flightdeck-dashboard self-entry out of the daemon's
+  # --inner list. The dashboard is a tracking shell, not a watch
+  # target.
+  local registry_json inner_pairs_json registry_err registry_rc=0
+  registry_err=$(mktemp -t flightdeck-session-registry.XXXXXX)
+  registry_json=$("$PANE_REGISTRY" list --format json 2>"$registry_err") || registry_rc=$?
+  if (( registry_rc != 0 )); then
+    local _rerr; _rerr=$(cat "$registry_err" 2>/dev/null || true)
+    rm -f "$registry_err"
+    printf 'Warning: flightdeck-session ensure_daemon: pane-registry list rc=%s session=%s; skipping daemon arm. stderr=%s\n' "$registry_rc" "$session_name" "${_rerr:-(none)}" >&2
+    return 0
+  fi
+  rm -f "$registry_err"
+  inner_pairs_json=$(jq -c '
+    (if type == "array" then . else [] end)
+    | map(select((.id // "") != "flightdeck-dashboard"))
+    | map(select((.pane_id // "") | length > 0))
+    | map({pane_id: .pane_id, harness: (.harness // "")})
+  ' <<< "$registry_json" 2>/dev/null || echo "[]")
+  local inner_panes inner_harnesses
+  inner_panes=$(jq -r '. | map(.pane_id) | join(",")' <<< "$inner_pairs_json" 2>/dev/null || true)
+  inner_harnesses=$(jq -r '. | map(.harness) | join(",")' <<< "$inner_pairs_json" 2>/dev/null || true)
+  if [[ -z "$inner_panes" ]]; then
+    # No tracked entries beyond the dashboard → no daemon needed yet.
+    return 0
+  fi
+
+  # Filter to the panes that are actually alive in tmux right now so
+  # we don't pass dead ids to flightdeck-daemon start. tmux liveness
+  # failures are non-fatal but visible.
+  local alive_panes alive_tmp alive_rc=0 inner_panes_live="" inner_harnesses_live=""
+  alive_tmp=$(mktemp -t flightdeck-session-alive.XXXXXX)
+  alive_panes=$(tmux list-panes -a -F '#{pane_id}' 2>"$alive_tmp") || alive_rc=$?
+  if (( alive_rc != 0 )); then
+    local _aerr; _aerr=$(cat "$alive_tmp" 2>/dev/null || true)
+    rm -f "$alive_tmp"
+    printf 'Warning: flightdeck-session ensure_daemon: tmux list-panes -a rc=%s session=%s; skipping daemon arm. stderr=%s\n' "$alive_rc" "$session_name" "${_aerr:-(none)}" >&2
+    return 0
+  fi
+  rm -f "$alive_tmp"
+  local _pane _harness idx=0 panes_arr harnesses_arr
+  IFS=',' read -r -a panes_arr <<< "$inner_panes"
+  IFS=',' read -r -a harnesses_arr <<< "$inner_harnesses"
+  for _pane in "${panes_arr[@]}"; do
+    _harness="${harnesses_arr[$idx]:-}"
+    idx=$((idx + 1))
+    [[ -n "$_pane" ]] || continue
+    # P4 hardening: only accept canonical tmux pane ids before passing
+    # them to grep and the daemon argv.
+    [[ "$_pane" =~ ^%[0-9]+$ ]] || continue
+    if grep -Fxq -- "$_pane" <<<"$alive_panes"; then
+      if [[ -z "$inner_panes_live" ]]; then
+        inner_panes_live="$_pane"
+        inner_harnesses_live="$_harness"
+      else
+        inner_panes_live+=",$_pane"
+        inner_harnesses_live+=",$_harness"
+      fi
+    fi
+  done
+  if [[ -z "$inner_panes_live" ]]; then
+    printf 'Warning: flightdeck-session ensure_daemon: no live tracked panes after tmux filter session=%s tracked=%s; skipping daemon arm\n' "$session_name" "$inner_panes" >&2
+    return 0
+  fi
+
+  # Run health and trust its staleness output. cmdHealth (vstack#213
+  # round-1) computes staleness against the live tracked-entry set via
+  # pane-registry inner-live-json, so we don't redo subscriber/harness
+  # comparison in bash.
+  local health_output health_err health_status=0 staleness="" current_master=""
+  health_err=$(mktemp -t flightdeck-session-health.XXXXXX)
+  health_output=$("$FLIGHTDECK_DAEMON_BIN" health --session "$session_name" 2>"$health_err") || health_status=$?
+  if (( health_status == 0 )); then
+    staleness=$(awk -F= '/^staleness=/{print $2; exit}' <<<"$health_output")
+    current_master=$(awk -F= '/^master_pane_id=/{print $2; exit}' <<<"$health_output")
+    # If master pane diverged the daemon is wired to the wrong
+    # supervisor; treat as stale regardless of staleness field.
+    if [[ "$staleness" == "fresh" && -n "$current_master" && "$current_master" != "$master_pane" ]]; then
+      staleness="stale-master"
+    fi
+  fi
+  rm -f "$health_err"
+
+  local need_respawn=0
+  if (( health_status == 0 )); then
+    [[ "$staleness" == "fresh" ]] || need_respawn=1
+  else
+    # health rc=1 means no-daemon; rc=2 is preflight error. Either way
+    # we need to start fresh.
+    need_respawn=1
+  fi
+
+  (( need_respawn == 1 )) || return 0
+
+  # vstack#213 round-3: hold the stop stderr capture until after the
+  # subsequent start completes so a daemon-respawn-failed message can
+  # surface both the stop-side and the start-side context. Operators
+  # investigating a failed respawn need both: the start-side stderr
+  # alone hides the case where stop refused (exit 3 / safety) and the
+  # start then races a daemon that the helper failed to terminate.
+  local stop_err="" stop_rc=0
+  if (( health_status == 0 )); then
+    stop_err=$(mktemp -t flightdeck-daemon-stop.XXXXXX)
+    "$FLIGHTDECK_DAEMON_BIN" stop --session "$session_name" >/dev/null 2>"$stop_err" || stop_rc=$?
+    if (( stop_rc != 0 && stop_rc != 1 )); then
+      local _serr; _serr=$(cat "$stop_err" 2>/dev/null || true)
+      printf 'Warning: flightdeck-session ensure_daemon: flightdeck-daemon stop rc=%s session=%s; daemon may still be running with stale --inner. stderr=%s\n' "$stop_rc" "$session_name" "${_serr:-(none)}" >&2
+    fi
+    # Deliberately do NOT rm "$stop_err" yet — keep it for the
+    # daemon-respawn-failed branch below.
+  fi
+
+  local master_harness="${FLIGHTDECK_MASTER_HARNESS:-}"
+  if [[ -z "$master_harness" ]]; then
+    # Default to the harness the supervisor itself is running under so
+    # daemon hash/stability tuning matches. flightdeck-daemon already
+    # auto-detects pi via pi-bridge cwd-match for null masters, so
+    # leaving this empty is safe for non-pi sessions too.
+    if [[ -n "${FLIGHTDECK_OWNER_HARNESS:-}" ]]; then
+      master_harness="$FLIGHTDECK_OWNER_HARNESS"
+    elif [[ -n "${CLAUDE_SESSION_ID:-}${CLAUDE_CODE_SESSION_ID:-}" ]]; then
+      master_harness="claude"
+    elif [[ -n "${OPENCODE_SESSION_ID:-}${OPENCODE_APP_INFO:-}" ]]; then
+      master_harness="opencode"
+    elif [[ -n "${CODEX_SESSION_ID:-}${CODEX_SANDBOX:-}" ]]; then
+      master_harness="codex"
+    fi
+  fi
+
+  local start_args=(start --session "$session_name" --master "$master_pane" --inner "$inner_panes_live" --inner-harnesses "$inner_harnesses_live")
+  [[ -n "$master_harness" ]] && start_args+=(--master-harness "$master_harness")
+  local start_err start_rc=0
+  start_err=$(mktemp -t flightdeck-daemon-start.XXXXXX)
+  "$FLIGHTDECK_DAEMON_BIN" "${start_args[@]}" >/dev/null 2>"$start_err" || start_rc=$?
+  if (( start_rc == 4 )); then
+    master_pane="${TMUX_PANE:-}"
+    if [[ -z "$master_pane" ]]; then
+      master_pane=$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)
+    fi
+    if [[ -n "$master_pane" ]]; then
+      start_args=(start --session "$session_name" --master "$master_pane" --inner "$inner_panes_live" --inner-harnesses "$inner_harnesses_live")
+      [[ -n "$master_harness" ]] && start_args+=(--master-harness "$master_harness")
+      start_rc=0
+      "$FLIGHTDECK_DAEMON_BIN" "${start_args[@]}" >/dev/null 2>"$start_err" || start_rc=$?
+    fi
+  fi
+  if (( start_rc == 1 )); then
+    # Possible lock race: confirm by re-running health and treating
+    # this as benign only when the running daemon now reports
+    # staleness=fresh AND master_pane_id matches the current
+    # supervisor. A still-stale daemon, a different master, or any
+    # other refusal must surface daemon-respawn-failed so the
+    # operator sees the stop+start stderr instead of a silent
+    # "raced" log line that masks the real issue.
+    local verify_output="" verify_status=0 verify_staleness="" verify_master=""
+    verify_output=$("$FLIGHTDECK_DAEMON_BIN" health --session "$session_name" 2>/dev/null) || verify_status=$?
+    if (( verify_status == 0 )); then
+      verify_staleness=$(awk -F= '/^staleness=/{print $2; exit}' <<<"$verify_output")
+      verify_master=$(awk -F= '/^master_pane_id=/{print $2; exit}' <<<"$verify_output")
+    fi
+    if [[ "$verify_staleness" == "fresh" && "$verify_master" == "$master_pane" ]]; then
+      printf 'flightdeck-session: ensure_daemon: daemon-respawn-raced session=%s (verified fresh + master=%s after lock-race)\n' "$session_name" "$master_pane" >&2
+      start_rc=0
+    fi
+  fi
+  if (( start_rc != 0 )); then
+    printf 'Warning: flightdeck-session ensure_daemon: daemon-respawn-failed session=%s start_rc=%s stop_rc=%s; watch loop will retry\n' "$session_name" "$start_rc" "$stop_rc" >&2
+    if [[ -n "$stop_err" && -s "$stop_err" ]]; then
+      printf '%s\n' '--- flightdeck-daemon stop stderr ---' >&2
+      cat "$stop_err" >&2
+    fi
+    if [[ -s "$start_err" ]]; then
+      printf '%s\n' '--- flightdeck-daemon start stderr ---' >&2
+      cat "$start_err" >&2
+    fi
+  fi
+  rm -f "$start_err"
+  if [[ -n "$stop_err" ]]; then rm -f "$stop_err"; fi
+  return 0
+}
+
 
 cmd_start() {
   require_tmux
@@ -920,6 +1193,7 @@ cmd_start() {
   # attribution should bind to the caller-selected working directory.
   register_entry "$session_id" "$title" "$kind" "$abs_cwd" "$CAPTURE_WINDOW_INDEX" "$harness" "$CAPTURE_PANE_ID" "$CAPTURE_PANE_TARGET" "$CAPTURE_WINDOW_ID" "$launch_cmd" "$worktree" "$pr" "$branch" "$tracker" "$github_url"
   active_run_disarm_rollback
+  ensure_daemon_for_session
   printf 'flightdeck-session: started %s kind=%s pane_id=%s target=%s\n' "$session_id" "$kind" "$CAPTURE_PANE_ID" "$CAPTURE_PANE_TARGET"
 }
 
@@ -983,6 +1257,7 @@ cmd_attach() {
   register_entry "$session_id" "$title" "$kind" "$CAPTURE_PANE_CWD" "$CAPTURE_WINDOW_INDEX" "$harness" "$CAPTURE_PANE_ID" "$CAPTURE_PANE_TARGET" "$CAPTURE_WINDOW_ID" "" "$worktree" "" "$branch" "$tracker" "$github_url"
   active_run_disarm_rollback
   ensure_dashboard_launched "$session_id"
+  ensure_daemon_for_session
   printf 'flightdeck-session: attached %s kind=%s pane_id=%s target=%s\n' "$session_id" "$kind" "$CAPTURE_PANE_ID" "$CAPTURE_PANE_TARGET"
 }
 
