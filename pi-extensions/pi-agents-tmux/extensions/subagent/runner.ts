@@ -574,8 +574,26 @@ async function runSingleAgentAttempt(
 
 		const exitCode = await new Promise<number>((resolve) => {
 			const invocation = getPiInvocation(args);
+			// Child identity env mirrors the pane launcher's PI_SUBAGENT_*
+			// variables for bg one-shot lanes (issue #228). Restricted
+			// delegation reads PI_SUBAGENT_CHILD_AGENT to authorize the
+			// caller. Strip PI_BRIDGE_* and PI_SUBAGENT_PARENT_SESSION_ID
+			// so bg lanes never inherit pane-only session/bridge scope —
+			// without an explicit delete a parent process that already has
+			// those vars set (for example, this Pi running inside a pane
+			// itself) would leak them into the bg child and
+			// `runtimeSessionId()` would attach the child to the wrong
+			// runtime root.
+			const childEnv: NodeJS.ProcessEnv = { ...process.env, PI_SUBAGENT_CHILD_AGENT: agent.name };
+			if (agent.color) childEnv.PI_SUBAGENT_CHILD_COLOR = agent.color;
+			else delete childEnv.PI_SUBAGENT_CHILD_COLOR;
+			delete childEnv.PI_SUBAGENT_PARENT_SESSION_ID;
+			for (const key of Object.keys(childEnv)) {
+				if (key.startsWith("PI_BRIDGE_")) delete childEnv[key];
+			}
 			const proc = spawnProcess(invocation.command, invocation.args, {
 				cwd: cwd ?? defaultCwd,
+				env: childEnv,
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 			});
