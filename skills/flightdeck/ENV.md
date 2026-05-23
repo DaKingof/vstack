@@ -83,6 +83,7 @@ Rust dashboard env vars:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `FLIGHTDECK_DASHBOARD` | `1` | When `0`, `flightdeck-dashboard launch` exits `0` silently and `focus-or-launch` reports blocked. When enabled, `flightdeck-session` warns and continues if dashboard startup fails so pane supervision still starts. |
+| `FLIGHTDECK_DASHBOARD_NO_REBUILD` | `0` | Set to `1` to suppress the `scripts/flightdeck-dashboard` trampoline's `find -newer` staleness check against `Cargo.{toml,lock}` and `src/`. By default, when cargo is on PATH and source files are newer than the prebuilt binary, the trampoline runs `cargo build --release --quiet` before exec so vstack#234-class state-location changes can't be missed by a pre-existing local build. |
 | `FLIGHTDECK_DASHBOARD_WINDOW` | ` FD` | Tmux window name used by dashboard launch/focus hooks. CLI `--window-name` overrides it. |
 | `FLIGHTDECK_DASHBOARD_WINDOW_ICON` | `1` | When `0` and no explicit window name is set, use plain `FD` instead of the icon title. |
 | `FLIGHTDECK_DASHBOARD_MOTION` | `full` | Animation intensity: `full`, `reduced`, or `off`. `NO_MOTION` / `NO_COLOR` force `off` regardless of this setting. CLI `--motion` overrides it. |

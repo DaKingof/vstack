@@ -195,7 +195,7 @@ Full per-script descriptions follow in the [Scripts](#scripts) section below.
 
 ## Rust dashboard
 
-The Rust dashboard crate lives in `skills/flightdeck/lib/flightdeck-dashboard/`; the trampoline at `scripts/flightdeck-dashboard` prefers `target/release/flightdeck-dashboard` and falls back to `cargo run --release`.
+The Rust dashboard crate lives in `skills/flightdeck/lib/flightdeck-dashboard/`; the trampoline at `scripts/flightdeck-dashboard` prefers `target/release/flightdeck-dashboard` and falls back to `cargo run --release`. The trampoline also runs a fast `find -newer` staleness check against `Cargo.{toml,lock}` and `src/` and triggers `cargo build --release --quiet` before exec when the prebuilt binary predates committed source (e.g. across vstack#234-class state-location changes). Set `FLIGHTDECK_DASHBOARD_NO_REBUILD=1` to suppress the staleness check on systems where the binary is intentionally pinned and cargo is unavailable.
 
 Build and test from the crate root:
 

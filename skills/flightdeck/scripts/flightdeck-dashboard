@@ -7,6 +7,21 @@ export FLIGHTDECK_SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CRATE_DIR="$SCRIPT_DIR/../lib/flightdeck-dashboard"
 BIN="$CRATE_DIR/target/release/flightdeck-dashboard"
 
+# A prebuilt binary may pre-date source changes (the Rust dashboard is
+# rebuilt locally; vstack#234+ moved live state under ~/.vstack/ and
+# requires a fresh binary). When cargo is available and any source file
+# under Cargo.{toml,lock} or src/ is newer than the binary, rebuild
+# before exec'ing. Set FLIGHTDECK_DASHBOARD_NO_REBUILD=1 to skip the
+# staleness check (e.g. for offline / no-cargo environments where the
+# binary is intentionally pinned).
+if [[ -x "$BIN" && "${FLIGHTDECK_DASHBOARD_NO_REBUILD:-0}" != "1" ]] \
+   && command -v cargo >/dev/null 2>&1; then
+  if [[ -n "$(find "$CRATE_DIR/Cargo.toml" "$CRATE_DIR/Cargo.lock" "$CRATE_DIR/src" -newer "$BIN" -print -quit 2>/dev/null)" ]]; then
+    echo "flightdeck-dashboard: source newer than $BIN; rebuilding (set FLIGHTDECK_DASHBOARD_NO_REBUILD=1 to skip)" >&2
+    cargo build --release --quiet --manifest-path "$CRATE_DIR/Cargo.toml" >&2
+  fi
+fi
+
 if [[ -x "$BIN" ]]; then
   exec "$BIN" "$@"
 fi
