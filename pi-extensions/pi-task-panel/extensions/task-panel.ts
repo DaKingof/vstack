@@ -348,7 +348,10 @@ function mutedRule(theme: Theme, width: number): string {
 }
 
 class SingleLineText {
-	constructor(private readonly text: string) {}
+	private readonly text: string;
+	constructor(text: string) {
+		this.text = text;
+	}
 	invalidate(): void {}
 	render(width: number): string[] {
 		if (!this.text.trim()) return [];
@@ -357,7 +360,12 @@ class SingleLineText {
 }
 
 class RuledSingleLineText {
-	constructor(private readonly text: string, private readonly theme: Theme) {}
+	private readonly text: string;
+	private readonly theme: Theme;
+	constructor(text: string, theme: Theme) {
+		this.text = text;
+		this.theme = theme;
+	}
 	invalidate(): void {}
 	render(width: number): string[] {
 		if (!this.text.trim()) return [];

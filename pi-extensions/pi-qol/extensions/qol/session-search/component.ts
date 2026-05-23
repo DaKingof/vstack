@@ -105,6 +105,12 @@ function isPrintableInput(data: string): boolean {
 }
 
 export class QolSessionSearchComponent {
+	private readonly done: (action: QolSessionPaletteAction) => void;
+	private readonly tui: { requestRender(): void; terminal?: { rows?: number } };
+	private readonly theme: Theme;
+	private readonly sessions: QolSessionSearchSession[];
+	private readonly cwd: string;
+	private readonly currentModel: QolModelInfo | undefined;
 	private screen: "search" | "messages" | "actions" | "confirmContext" | "confirmFork" | "confirmModel" = "search";
 	private searchState: QolSessionSearchState;
 	private messagesState: QolSessionMessagesState | undefined;
@@ -116,14 +122,20 @@ export class QolSessionSearchComponent {
 
 
 	constructor(
-		private readonly done: (action: QolSessionPaletteAction) => void,
-		private readonly tui: { requestRender(): void; terminal?: { rows?: number } },
-		private readonly theme: Theme,
-		private readonly sessions: QolSessionSearchSession[],
-		private readonly cwd: string,
+		done: (action: QolSessionPaletteAction) => void,
+		tui: { requestRender(): void; terminal?: { rows?: number } },
+		theme: Theme,
+		sessions: QolSessionSearchSession[],
+		cwd: string,
 		initialQuery = "",
-		private readonly currentModel: QolModelInfo | undefined = undefined,
+		currentModel: QolModelInfo | undefined = undefined,
 	) {
+		this.done = done;
+		this.tui = tui;
+		this.theme = theme;
+		this.sessions = sessions;
+		this.cwd = cwd;
+		this.currentModel = currentModel;
 		const query = initialQuery.trim();
 		const scope = defaultSessionSearchScope(cwd);
 		const scopedSessions = this.sessionsForScope(scope);
@@ -878,18 +890,28 @@ export class QolSessionSearchComponent {
 }
 
 export class QolSessionSearchLoadingComponent {
+	private readonly tui: { requestRender(): void };
+	private readonly theme: Theme;
+	private readonly title: string;
+	private readonly message: string;
+	private readonly done: (value: null) => void;
 	private readonly controller = new AbortController();
 	private readonly startedAt = Date.now();
 	private frame = 0;
 	private timer: ReturnType<typeof setInterval> | undefined;
 
 	constructor(
-		private readonly tui: { requestRender(): void },
-		private readonly theme: Theme,
-		private readonly title: string,
-		private readonly message: string,
-		private readonly done: (value: null) => void,
+		tui: { requestRender(): void },
+		theme: Theme,
+		title: string,
+		message: string,
+		done: (value: null) => void,
 	) {
+		this.tui = tui;
+		this.theme = theme;
+		this.title = title;
+		this.message = message;
+		this.done = done;
 		this.timer = setInterval(() => {
 			this.frame += 1;
 			this.tui.requestRender();

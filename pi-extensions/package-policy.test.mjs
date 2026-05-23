@@ -14,6 +14,17 @@ function packages() {
 		.map((entry) => ({ ...entry, pkg: JSON.parse(readFileSync(entry.packagePath, "utf8")) }));
 }
 
+function tsFiles(dir) {
+	const out = [];
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		if (entry.name === "node_modules" || entry.name === "bundle") continue;
+		const path = join(dir, entry.name);
+		if (entry.isDirectory()) out.push(...tsFiles(path));
+		else if (entry.isFile() && entry.name.endsWith(".ts")) out.push(path);
+	}
+	return out;
+}
+
 test("Pi package manifests follow the Pi 0.75 package policy", () => {
 	for (const { dir, packagePath, pkg } of packages()) {
 		assert.equal(pkg.engines?.node, ">=22.19.0", `${dir}: declare Pi 0.75 Node baseline`);
@@ -45,4 +56,23 @@ test("vendored append-system helpers stay identical", () => {
 	}
 	assert.ok(hashes.length > 0, "expected append-system helper copies");
 	assert.equal(new Set(hashes.map(([, hash]) => hash)).size, 1, `append-system helpers differ: ${JSON.stringify(hashes)}`);
+});
+
+test("Pi extension TypeScript stays compatible with Node strip-only parsing", () => {
+	const violations = [];
+	for (const { dir } of packages()) {
+		for (const file of tsFiles(join(root, dir))) {
+			const source = readFileSync(file, "utf8");
+			const relative = file.slice(root.length);
+			const checks = [
+				[/^\s*(export\s+)?enum\s+/m, "enum requires JavaScript emit"],
+				[/^\s*(export\s+)?(namespace|module)\s+/m, "namespace/module requires JavaScript emit"],
+				[/constructor\s*\([^)]*\b(private|public|protected|readonly)\s+[A-Za-z_$]/s, "constructor parameter property requires JavaScript emit"],
+			];
+			for (const [pattern, reason] of checks) {
+				if (pattern.test(source)) violations.push(`${relative}: ${reason}`);
+			}
+		}
+	}
+	assert.deepEqual(violations, []);
 });

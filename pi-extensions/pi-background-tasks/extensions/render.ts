@@ -119,8 +119,11 @@ function wrapAnsiLines(text: string, width: number): string[] {
 export class RenderedLines {
 	private cachedLines?: string[];
 	private cachedWidth?: number;
+	private readonly text: string;
 
-	constructor(private readonly text: string) {}
+	constructor(text: string) {
+		this.text = text;
+	}
 
 	invalidate(): void {
 		this.cachedLines = undefined;

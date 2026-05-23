@@ -240,11 +240,13 @@ function compactAgentEnd(payload: unknown, previewBytes: number): CompactResult 
 
 	const status = pickString(source, "status");
 	const stopReason = pickString(source, "stopReason") ?? pickString(source, "stop_reason");
+	const willRetry = readBoolean(source.willRetry) ?? readBoolean(source.will_retry);
 	const usage = source.usage && typeof source.usage === "object" ? source.usage : undefined;
 
 	const compact: Record<string, unknown> = {};
 	if (status !== undefined) compact.status = status;
 	if (stopReason !== undefined) compact.stopReason = stopReason;
+	if (willRetry !== undefined) compact.willRetry = willRetry;
 	if (usage !== undefined) compact.usage = usage;
 
 	const finalText = pickAgentEndFinalText(source);

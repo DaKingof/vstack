@@ -69,6 +69,7 @@ describe("sanitizeBridgeEvent", () => {
 		const payload = {
 			status: "ended",
 			stopReason: "end_turn",
+			willRetry: false,
 			usage: { inputTokens: 1024, outputTokens: 2048 },
 			messages,
 		};
@@ -76,6 +77,7 @@ describe("sanitizeBridgeEvent", () => {
 		const data = result.data as Record<string, unknown>;
 		expect(data.status).toBe("ended");
 		expect(data.stopReason).toBe("end_turn");
+		expect(data.willRetry).toBe(false);
 		expect(data.usage).toEqual({ inputTokens: 1024, outputTokens: 2048 });
 		expect(data.messagesCount).toBe(60);
 		expect(typeof data.finalTextPreview).toBe("string");

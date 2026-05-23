@@ -102,14 +102,16 @@ function syncQolEditorStatus(
 
 export class QolEditor extends CustomEditor {
 	private readonly statusCache: { last?: string } = {};
+	private readonly ctx: ExtensionContext;
 
 	constructor(
 		tui: TUI,
 		editorTheme: EditorTheme,
 		keybindings: KeybindingsManager,
-		private readonly ctx: ExtensionContext,
+		ctx: ExtensionContext,
 	) {
 		super(tui, editorTheme, keybindings);
+		this.ctx = ctx;
 	}
 
 	handleInput(data: string): void {
@@ -129,15 +131,19 @@ function isEditorBorderLine(line: string): boolean {
 
 export class QolCompactPromptEditor extends CustomEditor {
 	private readonly statusCache: { last?: string } = {};
+	private readonly inputBottomPaddingLines: number;
+	private readonly ctx: ExtensionContext;
 
 	constructor(
 		tui: TUI,
 		editorTheme: EditorTheme,
 		keybindings: KeybindingsManager,
-		private readonly inputBottomPaddingLines: number,
-		private readonly ctx: ExtensionContext,
+		inputBottomPaddingLines: number,
+		ctx: ExtensionContext,
 	) {
 		super(tui, editorTheme, keybindings, { paddingX: 0 });
+		this.inputBottomPaddingLines = inputBottomPaddingLines;
+		this.ctx = ctx;
 	}
 
 	handleInput(data: string): void {

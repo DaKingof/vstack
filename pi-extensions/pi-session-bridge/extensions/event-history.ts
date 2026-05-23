@@ -73,16 +73,23 @@ export type HistoryWarn = (where: string, error: unknown) => void;
 export class BridgeHistory {
 	private readonly entries: HistoryEntry[] = [];
 	private readonly rawIndex = new Map<string, RawSlot>();
+	readonly rawSpillPath: string;
+	private readonly limits: () => HistoryLimits;
+	private readonly warn: HistoryWarn;
 	private bytes = 0;
 	private rawBytes = 0;
 	private rawSequence = 0;
 	private lastSpillError: string | undefined;
 
 	constructor(
-		readonly rawSpillPath: string,
-		private readonly limits: () => HistoryLimits,
-		private readonly warn: HistoryWarn = () => undefined,
-	) {}
+		rawSpillPath: string,
+		limits: () => HistoryLimits,
+		warn: HistoryWarn = () => undefined,
+	) {
+		this.rawSpillPath = rawSpillPath;
+		this.limits = limits;
+		this.warn = warn;
+	}
 
 	get sizeBytes(): number {
 		return this.bytes;

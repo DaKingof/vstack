@@ -57,6 +57,12 @@ import {
 } from "./types.js";
 
 class SkillsManagerDialog implements Focusable {
+	private readonly ctx: ExtensionContext;
+	private readonly theme: Theme;
+	private readonly tui: TUI;
+	private readonly done: (skill: SkillEntry | null) => void;
+	private readonly options: SkillsManagerOptions;
+	private readonly requestRender: () => void;
 	private mode: Mode = "browse";
 	private _focused = false;
 	private registry: SkillRegistry;
@@ -83,16 +89,22 @@ class SkillsManagerDialog implements Focusable {
 	private readonly popupMaxHeight: OverlaySize;
 
 	constructor(
-		private readonly ctx: ExtensionContext,
+		ctx: ExtensionContext,
 		registry: SkillRegistry,
-		private readonly theme: Theme,
-		private readonly tui: TUI,
-		private readonly done: (skill: SkillEntry | null) => void,
-		private readonly options: SkillsManagerOptions,
-		private readonly requestRender: () => void,
+		theme: Theme,
+		tui: TUI,
+		done: (skill: SkillEntry | null) => void,
+		options: SkillsManagerOptions,
+		requestRender: () => void,
 		initialSelectedIndex = 0,
 		initialQuery = "",
 	) {
+		this.ctx = ctx;
+		this.theme = theme;
+		this.tui = tui;
+		this.done = done;
+		this.options = options;
+		this.requestRender = requestRender;
 		this.registry = registry;
 		this.selectedIndex = Math.max(0, initialSelectedIndex);
 		this.browseQuery = initialQuery;

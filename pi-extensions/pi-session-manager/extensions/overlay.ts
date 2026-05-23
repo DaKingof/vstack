@@ -28,6 +28,12 @@ import {
 } from "./types.js";
 
 class SessionManagerOverlay implements Focusable {
+	private readonly ctx: SessionManagerContext;
+	private readonly pi: ExtensionAPI;
+	private readonly theme: Theme;
+	private readonly keybindings: KeybindingsManager;
+	private readonly done: (action: SessionAction) => void;
+	private readonly tui: { requestRender(): void; terminal?: { rows?: number } };
 	private _focused = false;
 	get focused(): boolean {
 		return this._focused;
@@ -61,14 +67,20 @@ class SessionManagerOverlay implements Focusable {
 	private currentSessionPath: string | undefined;
 
 	constructor(
-		private readonly ctx: SessionManagerContext,
-		private readonly pi: ExtensionAPI,
-		private readonly theme: Theme,
-		private readonly keybindings: KeybindingsManager,
-		private readonly done: (action: SessionAction) => void,
-		private readonly tui: { requestRender(): void; terminal?: { rows?: number } },
+		ctx: SessionManagerContext,
+		pi: ExtensionAPI,
+		theme: Theme,
+		keybindings: KeybindingsManager,
+		done: (action: SessionAction) => void,
+		tui: { requestRender(): void; terminal?: { rows?: number } },
 		initialScope?: Scope,
 	) {
+		this.ctx = ctx;
+		this.pi = pi;
+		this.theme = theme;
+		this.keybindings = keybindings;
+		this.done = done;
+		this.tui = tui;
 		this.scope = initialScope ?? settingScope(ctx.cwd);
 		this.sortMode = settingSort(ctx.cwd);
 		this.currentSessionPath = ctx.sessionManager.getSessionFile();

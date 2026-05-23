@@ -33,13 +33,27 @@ import {
 import type { MessageTone, SkillEntry } from "./types.js";
 
 export class SingleLineText implements Component {
-	constructor(private readonly text: string, private readonly ellipsis = "...") {}
+	private readonly text: string;
+	private readonly ellipsis: string;
+	constructor(text: string, ellipsis = "...") {
+		this.text = text;
+		this.ellipsis = ellipsis;
+	}
 	render(width: number): string[] { return [truncateToWidth(inlineLine(this.text), width, this.ellipsis)]; }
 	invalidate(): void {}
 }
 
 export class ListLineText implements Component {
-	constructor(private readonly text: string, private readonly selected: boolean, private readonly theme: Theme, private readonly ellipsis = "...") {}
+	private readonly text: string;
+	private readonly selected: boolean;
+	private readonly theme: Theme;
+	private readonly ellipsis: string;
+	constructor(text: string, selected: boolean, theme: Theme, ellipsis = "...") {
+		this.text = text;
+		this.selected = selected;
+		this.theme = theme;
+		this.ellipsis = ellipsis;
+	}
 	render(width: number): string[] {
 		const line = truncateToWidth(inlineLine(this.text), width, this.ellipsis);
 		return [this.selected ? skillSelectedLine(this.theme, line, width) : line];
@@ -48,7 +62,12 @@ export class ListLineText implements Component {
 }
 
 export class PrefixedEditor implements Component {
-	constructor(private readonly editor: Editor, private readonly prefix = "> ") {}
+	private readonly editor: Editor;
+	private readonly prefix: string;
+	constructor(editor: Editor, prefix = "> ") {
+		this.editor = editor;
+		this.prefix = prefix;
+	}
 	render(width: number): string[] {
 		const rendered = this.editor.render(Math.max(1, width - this.prefix.length));
 		const lines = rendered.length >= 2 ? rendered.slice(1, -1) : rendered;
@@ -58,7 +77,14 @@ export class PrefixedEditor implements Component {
 }
 
 export class SearchInputLine implements Component {
-	constructor(private readonly input: Input, private readonly theme: Theme, private readonly prefix = " ") {}
+	private readonly input: Input;
+	private readonly theme: Theme;
+	private readonly prefix: string;
+	constructor(input: Input, theme: Theme, prefix = " ") {
+		this.input = input;
+		this.theme = theme;
+		this.prefix = prefix;
+	}
 	render(width: number): string[] {
 		const inputWidth = Math.max(1, width - visibleWidth(this.prefix));
 		const line = truncateToWidth(`${this.prefix}${this.input.render(inputWidth)[0] ?? ""}`, width, "");
@@ -71,7 +97,14 @@ export class ScrollableSkillPreview implements Component {
 	private scrollOffset = 0;
 	private lastInnerWidth = 1;
 	private lastContentLines: string[] = [];
-	constructor(private skill: SkillEntry, private readonly theme: Theme, private readonly getTerminalRows: () => number) {}
+	private skill: SkillEntry;
+	private readonly theme: Theme;
+	private readonly getTerminalRows: () => number;
+	constructor(skill: SkillEntry, theme: Theme, getTerminalRows: () => number) {
+		this.skill = skill;
+		this.theme = theme;
+		this.getTerminalRows = getTerminalRows;
+	}
 	setSkill(skill: SkillEntry): void { this.skill = skill; this.scrollOffset = 0; this.lastContentLines = []; }
 	invalidate(): void { this.lastContentLines = []; }
 	private maxHeight(): number { return Math.max(10, Math.floor(this.getTerminalRows() * 0.78)); }
@@ -131,19 +164,29 @@ export class SkillEditorView implements Component, Focusable {
 	private readonly editor: Editor;
 	private readonly initialText: string;
 	private readonly proxyTui: TUI;
+	private skill: SkillEntry;
+	private readonly theme: Theme;
+	private readonly realTui: TUI;
+	private readonly onSave: (value: string) => void;
+	private readonly onCancel: () => void;
 	private virtualRows = 24;
 	private _focused = false;
 	private message: { text: string; tone: MessageTone } | undefined;
 	get focused(): boolean { return this._focused; }
 	set focused(value: boolean) { this._focused = value; this.editor.focused = value; }
 	constructor(
-		private skill: SkillEntry,
-		private readonly theme: Theme,
-		private readonly realTui: TUI,
+		skill: SkillEntry,
+		theme: Theme,
+		realTui: TUI,
 		initialText: string,
-		private readonly onSave: (value: string) => void,
-		private readonly onCancel: () => void,
+		onSave: (value: string) => void,
+		onCancel: () => void,
 	) {
+		this.skill = skill;
+		this.theme = theme;
+		this.realTui = realTui;
+		this.onSave = onSave;
+		this.onCancel = onCancel;
 		this.initialText = initialText;
 		const self = this;
 		this.proxyTui = { requestRender: () => realTui.requestRender(), get terminal() { return { ...realTui.terminal, rows: Math.max(1, self.virtualRows) }; } } as TUI;

@@ -374,7 +374,10 @@ function syntheticConfirmLabel(request: QuestionRequest): string {
 }
 
 class CompactLines {
-	constructor(private readonly getLines: (width: number) => string[]) {}
+	private readonly getLines: (width: number) => string[];
+	constructor(getLines: (width: number) => string[]) {
+		this.getLines = getLines;
+	}
 	invalidate(): void {}
 	render(width: number): string[] {
 		return this.getLines(Math.max(1, width)).map((line) => truncateToWidth(line, Math.max(1, width), ""));
