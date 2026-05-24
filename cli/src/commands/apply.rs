@@ -950,8 +950,12 @@ fn build_ghostty_plan(
 
     let config_dir = ghostty_config_dir(env);
     let config_file = ghostty_apply::resolve_config_file(&config_dir);
+    let asset_config_dir = ghostty_asset_config_dir(&config_dir, &config_file);
     let backup_file = ghostty_apply::backup_path(&config_file, &env.timestamp);
-    let theme_destination = config_dir.join("themes").join("vstack").join(&theme.id);
+    let theme_destination = asset_config_dir
+        .join("themes")
+        .join("vstack")
+        .join(&theme.id);
     let mut copies = vec![FileCopyPlan {
         source: extra.source_dir.join(&ghostty.theme_file),
         destination: theme_destination,
@@ -965,7 +969,7 @@ fn build_ghostty_plan(
     // bottom-left orientation -- floor/blocks/sprite anchors all line up.
     let mut shader_destinations = Vec::new();
     for shader in &ghostty.shaders {
-        let destination = shader_destination(&config_dir, shader)?;
+        let destination = shader_destination(&asset_config_dir, shader)?;
         shader_destinations.push(destination.clone());
         copies.push(FileCopyPlan {
             source: extra.source_dir.join(shader),
@@ -975,7 +979,7 @@ fn build_ghostty_plan(
     if let Some(pulse_shader) = &ghostty.pulse_shader {
         copies.push(FileCopyPlan {
             source: extra.source_dir.join(pulse_shader),
-            destination: shader_destination(&config_dir, pulse_shader)?,
+            destination: shader_destination(&asset_config_dir, pulse_shader)?,
         });
     }
 
@@ -1606,6 +1610,21 @@ fn ghostty_config_dir(env: &ApplyEnvironment) -> PathBuf {
     })
 }
 
+fn ghostty_asset_config_dir(config_dir: &Path, config_file: &Path) -> PathBuf {
+    // Ghostty resolves relative `config-file =` and `custom-shader =` paths
+    // against the real config file location. If the visible config path is a
+    // symlink into a dotfiles repo, writing assets beside the symlink path
+    // makes validation fail because Ghostty looks beside the symlink target.
+    // Canonicalize existing config files so assets land where Ghostty will
+    // resolve the relative managed block. For new configs, keep the visible
+    // config dir.
+    config_file
+        .canonicalize()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| config_dir.to_path_buf())
+}
+
 fn vscode_user_dir(kind: TargetKind, env: &ApplyEnvironment) -> PathBuf {
     let app_dir = match kind {
         TargetKind::Vscode => "Code",
@@ -1963,6 +1982,49 @@ theme-file = "ghostty/themes/forest.conf"
             dry_run: true,
             yes: false,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ghostty_assets_follow_symlinked_config_target_dir() {
+        use std::os::unix::fs::symlink;
+
+        let root = sandbox("ghostty-symlink-config");
+        write_sample_extra(&root);
+        let env = env_for(&root, &["ghostty"]);
+
+        let visible_ghostty_dir = env.config_dir.join("ghostty");
+        let dotfiles_ghostty_dir = root.join("dotfiles").join("ghostty");
+        fs::create_dir_all(&visible_ghostty_dir).unwrap();
+        fs::create_dir_all(&dotfiles_ghostty_dir).unwrap();
+        fs::write(dotfiles_ghostty_dir.join("config"), "font-size = 14\n").unwrap();
+        symlink(
+            dotfiles_ghostty_dir.join("config"),
+            visible_ghostty_dir.join("config"),
+        )
+        .unwrap();
+
+        let plan = build_plan_for_source(&root, &request("vanillagreen-themes"), &env).unwrap();
+        let ghostty = plan
+            .targets
+            .iter()
+            .find(|target| target.kind == TargetKind::Ghostty)
+            .unwrap();
+
+        assert_eq!(ghostty.config_file, visible_ghostty_dir.join("config"));
+        assert!(ghostty.copies.iter().any(|copy| {
+            copy.destination == dotfiles_ghostty_dir.join("themes").join("vstack").join("forest")
+        }));
+        assert!(ghostty.copies.iter().any(|copy| {
+            copy.destination
+                == dotfiles_ghostty_dir
+                    .join("shaders")
+                    .join("vstack")
+                    .join("forest.glsl")
+        }));
+        assert!(!ghostty.copies.iter().any(|copy| {
+            copy.destination == visible_ghostty_dir.join("themes").join("vstack").join("forest")
+        }));
     }
 
     fn collect_paths(root: &Path) -> Vec<PathBuf> {
