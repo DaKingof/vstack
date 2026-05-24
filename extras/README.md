@@ -8,7 +8,7 @@ Optional non-agent packages distributed by [vstack](../README.md). Currently one
 
 > some of the shaders/animations are better than others.. feel free to improve them and submit a PR!
 
-25 color themes + 1 file/folder icon theme shipped as a single VS Code extension (`vanillagreen.vstack-themes`), with per-theme Ghostty palette + ambient shader pairs, per-theme tmux color block, and per-theme Pi (coding-agent) theme JSON. One `vstack apply` call installs the editor extension, switches the active editor theme, swaps the live Ghostty palette, swaps the Ghostty `custom-shader`, rewrites the tmux color block (then reloads any live tmux servers), and registers + activates the matching Pi theme.
+24 color themes + 1 file/folder icon theme shipped as a single VS Code extension (`vanillagreen.vstack-themes`), with per-theme Ghostty palette + ambient shader pairs, per-theme tmux color block, and per-theme Pi (coding-agent) theme JSON. One `vstack apply` call installs the editor extension, switches the active editor theme, swaps the live Ghostty palette, swaps the Ghostty `custom-shader`, rewrites the tmux color block (then reloads any live tmux servers), and registers + activates the matching Pi theme.
 
 ### Themes
 
@@ -30,7 +30,6 @@ Dark (20):
 - Dracula
 - Flowers
 - Iceberg
-- Method Dark *(VS Code only — no Ghostty palette)*
 - Pixel Corsair
 - Retro City Console
 - Rosé Pine, Rosé Pine Black, Rosé Pine Extra Black, Rosé Pine Moon
@@ -63,7 +62,9 @@ There is no "installed vs not" — only **active vs not**. `vstack apply <theme>
 
 | Target | Writes | Reload |
 |---|---|---|
-| `ghostty` | per-theme `themes/vstack/<id>` + shaders under `shaders/vstack/`; managed `config-file =` / `custom-shader =` block in the live Ghostty config. | `vstack apply` broadcasts SIGUSR2 to every running ghostty process for live reload. |
+| `ghostty` | per-theme `themes/vstack/<id>` + (Linux only) shaders under `shaders/vstack/`; managed `config-file =` / `custom-shader =` block in the live Ghostty config. | `vstack apply` broadcasts SIGUSR2 to every running ghostty process for live reload. |
+
+> macOS note: the bundled GLSL shaders are authored against Ghostty's Linux/OpenGL backend (bottom-left `gl_FragCoord` origin). Ghostty's macOS pipeline routes through SPIR-V (Vulkan, top-left origin) then MSL, which flips Y for the same source -- bottom-anchored sprites render at the top, etc. vstack skips the shader directives on macOS automatically; the theme palette still applies.
 | `vscode` / `vscodium` / `cursor` | per-call VSIX install of `vanillagreen.vstack-themes`; flips `workbench.colorTheme` in user `settings.json`. | Editor picks the new theme up live; reload window if it lingers. |
 | `tmux` | per-theme `vstack-active-theme.conf` under `~/.config/tmux/`; one-line managed `source-file -q "…"` block in your `tmux.conf`. | `vstack apply` runs `tmux -S … source-file <conf>` against every live server it finds. |
 | `pi` | per-theme `vanillagreen-<id>.json` under `~/.pi/agent/themes/`; flips top-level `theme` key in `~/.pi/settings.json`. | New Pi sessions pick up the theme on launch; in a live Pi session use `/theme` to switch or `/settings reload`. |
