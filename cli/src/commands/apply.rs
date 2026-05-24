@@ -950,16 +950,18 @@ fn build_ghostty_plan(
 
     let config_dir = ghostty_config_dir(env);
     let config_file = ghostty_apply::resolve_config_file(&config_dir);
-    let asset_config_dir = ghostty_asset_config_dir(&config_dir, &config_file);
+    let asset_config_dirs = ghostty_asset_config_dirs(&config_dir, &config_file);
     let backup_file = ghostty_apply::backup_path(&config_file, &env.timestamp);
-    let theme_destination = asset_config_dir
-        .join("themes")
-        .join("vstack")
-        .join(&theme.id);
-    let mut copies = vec![FileCopyPlan {
-        source: extra.source_dir.join(&ghostty.theme_file),
-        destination: theme_destination,
-    }];
+    let mut copies = Vec::new();
+    for asset_config_dir in &asset_config_dirs {
+        copies.push(FileCopyPlan {
+            source: extra.source_dir.join(&ghostty.theme_file),
+            destination: asset_config_dir
+                .join("themes")
+                .join("vstack")
+                .join(&theme.id),
+        });
+    }
 
     // The shipped GLSL shaders are authored against Ghostty's Linux/OpenGL
     // backend (bottom-left gl_FragCoord origin). Ghostty's macOS backend goes
@@ -969,18 +971,24 @@ fn build_ghostty_plan(
     // bottom-left orientation -- floor/blocks/sprite anchors all line up.
     let mut shader_destinations = Vec::new();
     for shader in &ghostty.shaders {
-        let destination = shader_destination(&asset_config_dir, shader)?;
-        shader_destinations.push(destination.clone());
-        copies.push(FileCopyPlan {
-            source: extra.source_dir.join(shader),
-            destination,
-        });
+        for (index, asset_config_dir) in asset_config_dirs.iter().enumerate() {
+            let destination = shader_destination(asset_config_dir, shader)?;
+            if index == 0 {
+                shader_destinations.push(destination.clone());
+            }
+            copies.push(FileCopyPlan {
+                source: extra.source_dir.join(shader),
+                destination,
+            });
+        }
     }
     if let Some(pulse_shader) = &ghostty.pulse_shader {
-        copies.push(FileCopyPlan {
-            source: extra.source_dir.join(pulse_shader),
-            destination: shader_destination(&asset_config_dir, pulse_shader)?,
-        });
+        for asset_config_dir in &asset_config_dirs {
+            copies.push(FileCopyPlan {
+                source: extra.source_dir.join(pulse_shader),
+                destination: shader_destination(asset_config_dir, pulse_shader)?,
+            });
+        }
     }
 
     let shader_file_names = shader_destinations
@@ -1610,19 +1618,24 @@ fn ghostty_config_dir(env: &ApplyEnvironment) -> PathBuf {
     })
 }
 
-fn ghostty_asset_config_dir(config_dir: &Path, config_file: &Path) -> PathBuf {
-    // Ghostty resolves relative `config-file =` and `custom-shader =` paths
-    // against the real config file location. If the visible config path is a
-    // symlink into a dotfiles repo, writing assets beside the symlink path
-    // makes validation fail because Ghostty looks beside the symlink target.
-    // Canonicalize existing config files so assets land where Ghostty will
-    // resolve the relative managed block. For new configs, keep the visible
-    // config dir.
-    config_file
+fn ghostty_asset_config_dirs(config_dir: &Path, config_file: &Path) -> Vec<PathBuf> {
+    // Ghostty path resolution differs between validation/runtime paths and
+    // across symlinked dotfiles setups: some resolve relative `config-file =`
+    // and `custom-shader =` paths beside the visible config path, while others
+    // resolve beside the canonical symlink target. Write assets to both when
+    // they differ so validation AND the running macOS app can find them.
+    let mut dirs = Vec::new();
+    if let Some(real_dir) = config_file
         .canonicalize()
         .ok()
         .and_then(|path| path.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| config_dir.to_path_buf())
+    {
+        dirs.push(real_dir);
+    }
+    if !dirs.iter().any(|dir| dir == config_dir) {
+        dirs.push(config_dir.to_path_buf());
+    }
+    dirs
 }
 
 fn vscode_user_dir(kind: TargetKind, env: &ApplyEnvironment) -> PathBuf {
@@ -1986,7 +1999,7 @@ theme-file = "ghostty/themes/forest.conf"
 
     #[cfg(unix)]
     #[test]
-    fn ghostty_assets_follow_symlinked_config_target_dir() {
+    fn ghostty_assets_cover_symlinked_config_visible_and_target_dirs() {
         use std::os::unix::fs::symlink;
 
         let root = sandbox("ghostty-symlink-config");
@@ -2022,8 +2035,15 @@ theme-file = "ghostty/themes/forest.conf"
                     .join("vstack")
                     .join("forest.glsl")
         }));
-        assert!(!ghostty.copies.iter().any(|copy| {
+        assert!(ghostty.copies.iter().any(|copy| {
             copy.destination == visible_ghostty_dir.join("themes").join("vstack").join("forest")
+        }));
+        assert!(ghostty.copies.iter().any(|copy| {
+            copy.destination
+                == visible_ghostty_dir
+                    .join("shaders")
+                    .join("vstack")
+                    .join("forest.glsl")
         }));
     }
 
