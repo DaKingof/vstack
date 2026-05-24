@@ -3,6 +3,7 @@ use crate::extra::{Extra, ExtraKind, ThemeSpec};
 use crate::ghostty_apply::{self, GhosttyPathContext, GhosttyPlatform};
 use crate::vscode_apply::VscodeEditor;
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
@@ -26,6 +27,7 @@ pub struct ApplyRequest {
     pub global: bool,
     pub dry_run: bool,
     pub yes: bool,
+    pub apply_ghostty_shaders: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +47,7 @@ struct ApplyPlan {
     theme_id: String,
     theme_display: String,
     global: bool,
+    apply_ghostty_shaders: bool,
     targets: Vec<TargetPlan>,
     warnings: Vec<String>,
 }
@@ -185,6 +188,7 @@ pub fn run(
     global: bool,
     dry_run: bool,
     yes: bool,
+    apply_ghostty_shaders: bool,
 ) -> Result<()> {
     let request = ApplyRequest {
         extra_name,
@@ -193,6 +197,7 @@ pub fn run(
         global,
         dry_run,
         yes,
+        apply_ghostty_shaders,
     };
     let env = ApplyEnvironment::current();
     let source_root = resolve_apply_source_root()?;
@@ -213,7 +218,7 @@ pub fn run(
         bail!("apply cancelled");
     }
 
-    apply_plan(&plan, false)?;
+    apply_plan(&plan, &env, false)?;
     if let Some(theme_id) = request.theme_id.as_deref() {
         let _ = write_active_theme_marker(&env, &request.extra_name, theme_id);
     }
@@ -232,7 +237,45 @@ pub struct ApplyOutcome {
     pub notices: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RevertState {
+    version: u32,
+    extra_name: String,
+    created_at: String,
+    theme_id: String,
+    targets: Vec<RevertTarget>,
+    generated_files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RevertTarget {
+    name: String,
+    kind: String,
+    config_file: PathBuf,
+    backup_file: Option<PathBuf>,
+    existed: bool,
+    cli_path: Option<PathBuf>,
+    extension_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AppliedTargetRecord {
+    target: TargetPlan,
+    existed: bool,
+    vscode_extension_preexisted: Option<bool>,
+}
+
+const REVERT_STATE_VERSION: u32 = 1;
+
 pub fn run_silent(extra_name: String, theme_id: String) -> Result<ApplyOutcome> {
+    run_silent_with_options(extra_name, theme_id, true)
+}
+
+pub fn run_silent_with_options(
+    extra_name: String,
+    theme_id: String,
+    apply_ghostty_shaders: bool,
+) -> Result<ApplyOutcome> {
     let request = ApplyRequest {
         extra_name: extra_name.clone(),
         theme_id: Some(theme_id.clone()),
@@ -240,6 +283,7 @@ pub fn run_silent(extra_name: String, theme_id: String) -> Result<ApplyOutcome> 
         global: false,
         dry_run: false,
         yes: true,
+        apply_ghostty_shaders,
     };
     let env = ApplyEnvironment::current();
     let source_root = resolve_apply_source_root()?;
@@ -253,8 +297,88 @@ Restart existing Pi sessions once to enable live reload \
                 .to_string(),
         );
     }
-    apply_plan(&plan, true)?;
+    apply_plan(&plan, &env, true)?;
     let _ = write_active_theme_marker(&env, &extra_name, &theme_id);
+    Ok(ApplyOutcome { notices })
+}
+
+pub fn has_revert_state(extra_name: &str) -> bool {
+    let env = ApplyEnvironment::current();
+    revert_state_path(&env, extra_name).is_file()
+}
+
+pub fn revert_silent(extra_name: String) -> Result<ApplyOutcome> {
+    let env = ApplyEnvironment::current();
+    revert_with_env(extra_name, &env)
+}
+
+fn revert_with_env(extra_name: String, env: &ApplyEnvironment) -> Result<ApplyOutcome> {
+    let path = revert_state_path(&env, &extra_name);
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("reading revert state {}", path.display()))?;
+    let state: RevertState = serde_json::from_str(&raw)
+        .with_context(|| format!("parsing revert state {}", path.display()))?;
+
+    let mut notices = Vec::new();
+    for target in &state.targets {
+        if target.existed {
+            let backup = target.backup_file.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "revert state for target `{}` says config existed but has no backup",
+                    target.name
+                )
+            })?;
+            if let Some(parent) = target.config_file.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            fs::copy(backup, &target.config_file).with_context(|| {
+                format!(
+                    "restoring {} from {}",
+                    target.config_file.display(),
+                    backup.display()
+                )
+            })?;
+        } else if target.config_file.exists() {
+            fs::remove_file(&target.config_file)
+                .with_context(|| format!("removing {}", target.config_file.display()))?;
+        }
+
+        match target.kind.as_str() {
+            GHOSTTY_TARGET => {
+                let reload = reload_running_ghostty_processes();
+                if let Some(warning) = reload.warning {
+                    notices.push(warning);
+                }
+            }
+            TMUX_TARGET => {
+                if let Some(cli) = &target.cli_path {
+                    reload_running_tmux_servers(cli, &target.config_file, true);
+                }
+            }
+            VSCODE_TARGET | VSCODIUM_TARGET | CURSOR_TARGET => {
+                if let (Some(cli), Some(extension_id)) = (&target.cli_path, &target.extension_id) {
+                    let _ = run_checked_command(
+                        cli,
+                        &["--uninstall-extension".to_string(), extension_id.clone()],
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for generated in state.generated_files.iter().rev() {
+        if generated.exists() {
+            let _ = fs::remove_file(generated);
+        }
+        prune_empty_vstack_parents(generated);
+    }
+
+    let _ = fs::remove_file(active_theme_marker_path(&env, &extra_name));
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir_all(revert_backup_dir(&env, &extra_name));
+
     Ok(ApplyOutcome { notices })
 }
 
@@ -308,8 +432,155 @@ fn write_active_theme_marker(
     Ok(())
 }
 
-fn apply_plan(plan: &ApplyPlan, silent: bool) -> Result<()> {
+fn revert_state_path(env: &ApplyEnvironment, extra_name: &str) -> PathBuf {
+    env.home_dir
+        .join(".cache")
+        .join("vstack-extras")
+        .join(format!("{extra_name}.revert.json"))
+}
+
+fn revert_backup_dir(env: &ApplyEnvironment, extra_name: &str) -> PathBuf {
+    env.home_dir
+        .join(".cache")
+        .join("vstack-extras")
+        .join(format!("{extra_name}.revert"))
+}
+
+fn persist_revert_state(
+    plan: &ApplyPlan,
+    env: &ApplyEnvironment,
+    applied: &[AppliedTargetRecord],
+) -> Result<()> {
+    let state_path = revert_state_path(&env, &plan.extra_name);
+    let backup_dir = revert_backup_dir(&env, &plan.extra_name);
+    fs::create_dir_all(&backup_dir)
+        .with_context(|| format!("creating {}", backup_dir.display()))?;
+
+    let mut state = if state_path.exists() {
+        let raw = fs::read_to_string(&state_path)
+            .with_context(|| format!("reading {}", state_path.display()))?;
+        serde_json::from_str::<RevertState>(&raw)
+            .with_context(|| format!("parsing {}", state_path.display()))?
+    } else {
+        RevertState {
+            version: REVERT_STATE_VERSION,
+            extra_name: plan.extra_name.clone(),
+            created_at: env.timestamp.clone(),
+            theme_id: plan.theme_id.clone(),
+            targets: Vec::new(),
+            generated_files: Vec::new(),
+        }
+    };
+
+    state.theme_id = plan.theme_id.clone();
+    for record in applied {
+        for copy in &record.target.copies {
+            if !state.generated_files.iter().any(|p| p == &copy.destination) {
+                state.generated_files.push(copy.destination.clone());
+            }
+        }
+        if state
+            .targets
+            .iter()
+            .any(|target| target.name == record.target.name)
+        {
+            continue;
+        }
+        let backup_file = if record.existed {
+            let cache_backup = backup_dir.join(format!("{}.backup", record.target.name));
+            fs::copy(&record.target.backup_file, &cache_backup).with_context(|| {
+                format!(
+                    "copying revert backup {} to {}",
+                    record.target.backup_file.display(),
+                    cache_backup.display()
+                )
+            })?;
+            Some(cache_backup)
+        } else {
+            None
+        };
+        state.targets.push(RevertTarget {
+            name: record.target.name.clone(),
+            kind: record.target.name.clone(),
+            config_file: record.target.config_file.clone(),
+            backup_file,
+            existed: record.existed,
+            cli_path: record.target.cli_path.clone(),
+            extension_id: if record.vscode_extension_preexisted == Some(false) {
+                record
+                    .target
+                    .vscode
+                    .as_ref()
+                    .and_then(|v| vscode_extension_id(&v.package_json).ok())
+            } else {
+                None
+            },
+        });
+    }
+
+    if let Some(parent) = state_path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let raw = serde_json::to_string_pretty(&state)? + "\n";
+    fs::write(&state_path, raw).with_context(|| format!("writing {}", state_path.display()))?;
+    Ok(())
+}
+
+fn prune_empty_vstack_parents(path: &Path) {
+    let Some(mut dir) = path.parent().map(Path::to_path_buf) else {
+        return;
+    };
+    for _ in 0..3 {
+        if fs::remove_dir(&dir).is_err() {
+            break;
+        }
+        let Some(parent) = dir.parent().map(Path::to_path_buf) else {
+            break;
+        };
+        dir = parent;
+    }
+}
+
+fn vscode_extension_id(package_json: &Path) -> Result<String> {
+    let raw = fs::read_to_string(package_json)
+        .with_context(|| format!("reading VS Code package manifest {}", package_json.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("parsing VS Code package manifest {}", package_json.display()))?;
+    let publisher = value
+        .get("publisher")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("{} missing publisher", package_json.display()))?;
+    let name = value
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("{} missing name", package_json.display()))?;
+    Ok(format!("{publisher}.{name}"))
+}
+
+fn vscode_extension_installed(target: &TargetPlan) -> Result<bool> {
+    let Some(vscode) = target.vscode.as_ref() else {
+        return Ok(false);
+    };
+    let Some(cli) = target.cli_path.as_ref() else {
+        return Ok(false);
+    };
+    let extension_id = vscode_extension_id(&vscode.package_json)?;
+    let listed = run_checked_command(cli, &["--list-extensions".to_string()])?;
+    Ok(extension_list_contains(
+        &String::from_utf8_lossy(&listed.stdout),
+        &extension_id,
+    ))
+}
+
+fn apply_plan(plan: &ApplyPlan, env: &ApplyEnvironment, silent: bool) -> Result<()> {
+    let mut applied = Vec::new();
     for target in &plan.targets {
+        let existed = target.config_file.exists();
+        let vscode_extension_preexisted = if target.kind.is_vscode_family() {
+            vscode_extension_installed(target).ok()
+        } else {
+            None
+        };
         match target.kind {
             TargetKind::Ghostty => {
                 apply_ghostty_target(&plan.extra_name, target, silent)?;
@@ -344,6 +615,12 @@ fn apply_plan(plan: &ApplyPlan, silent: bool) -> Result<()> {
                 apply_pi_target(target, silent)?;
             }
         }
+        applied.push(AppliedTargetRecord {
+            target: target.clone(),
+            existed,
+            vscode_extension_preexisted,
+        });
+        persist_revert_state(plan, env, &applied)?;
     }
     Ok(())
 }
@@ -542,8 +819,8 @@ fn apply_vscode_family_target(target: &TargetPlan, silent: bool) -> Result<()> {
         crate::vscode_apply::patch_settings_text(&original_settings, &vscode.theme_name)
             .with_context(|| format!("patching {}", target.config_file.display()))?;
 
+    backup_settings_file(&target.config_file, &target.backup_file, settings_existed)?;
     if !settings_existed || patched_settings != original_settings {
-        backup_settings_file(&target.config_file, &target.backup_file, settings_existed)?;
         if let Some(parent) = target.config_file.parent() {
             fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
@@ -764,7 +1041,13 @@ fn build_plan_for_source(
             ));
             continue;
         }
-        target_plans.push(build_target_plan(extra, theme, &target, env)?);
+        target_plans.push(build_target_plan(
+            extra,
+            theme,
+            &target,
+            env,
+            request.apply_ghostty_shaders,
+        )?);
     }
 
     Ok(ApplyPlan {
@@ -772,6 +1055,7 @@ fn build_plan_for_source(
         theme_id: theme.id.clone(),
         theme_display: theme.display.clone(),
         global: request.global,
+        apply_ghostty_shaders: request.apply_ghostty_shaders,
         targets: target_plans,
         warnings,
     })
@@ -920,9 +1204,12 @@ fn build_target_plan(
     theme: &ThemeSpec,
     target: &ResolvedTarget,
     env: &ApplyEnvironment,
+    apply_ghostty_shaders: bool,
 ) -> Result<TargetPlan> {
     match target.kind {
-        TargetKind::Ghostty => build_ghostty_plan(extra, theme, target, env),
+        TargetKind::Ghostty => {
+            build_ghostty_plan(extra, theme, target, env, apply_ghostty_shaders)
+        }
         TargetKind::Vscode | TargetKind::Vscodium | TargetKind::Cursor => {
             build_vscode_family_plan(extra, theme, target, env)
         }
@@ -936,6 +1223,7 @@ fn build_ghostty_plan(
     theme: &ThemeSpec,
     target: &ResolvedTarget,
     env: &ApplyEnvironment,
+    apply_ghostty_shaders: bool,
 ) -> Result<TargetPlan> {
     let ghostty = theme.ghostty.as_ref().with_context(|| {
         format!(
@@ -966,24 +1254,26 @@ fn build_ghostty_plan(
     // wrap mainImage with a y-flip so the body sees the original Linux
     // bottom-left orientation -- floor/blocks/sprite anchors all line up.
     let mut shader_destinations = Vec::new();
-    for shader in &ghostty.shaders {
-        for (index, asset_config_dir) in asset_config_dirs.iter().enumerate() {
-            let destination = shader_destination(asset_config_dir, shader)?;
-            if index == 0 {
-                shader_destinations.push(destination.clone());
+    if apply_ghostty_shaders {
+        for shader in &ghostty.shaders {
+            for (index, asset_config_dir) in asset_config_dirs.iter().enumerate() {
+                let destination = shader_destination(asset_config_dir, shader)?;
+                if index == 0 {
+                    shader_destinations.push(destination.clone());
+                }
+                copies.push(FileCopyPlan {
+                    source: extra.source_dir.join(shader),
+                    destination,
+                });
             }
-            copies.push(FileCopyPlan {
-                source: extra.source_dir.join(shader),
-                destination,
-            });
         }
-    }
-    if let Some(pulse_shader) = &ghostty.pulse_shader {
-        for asset_config_dir in &asset_config_dirs {
-            copies.push(FileCopyPlan {
-                source: extra.source_dir.join(pulse_shader),
-                destination: shader_destination(asset_config_dir, pulse_shader)?,
-            });
+        if let Some(pulse_shader) = &ghostty.pulse_shader {
+            for asset_config_dir in &asset_config_dirs {
+                copies.push(FileCopyPlan {
+                    source: extra.source_dir.join(pulse_shader),
+                    destination: shader_destination(asset_config_dir, pulse_shader)?,
+                });
+            }
         }
     }
 
@@ -1315,8 +1605,8 @@ fn apply_pi_target(target: &TargetPlan, silent: bool) -> Result<()> {
     };
     let patched = patch_pi_settings(&original, &change.value)
         .with_context(|| format!("patching {}", target.config_file.display()))?;
+    backup_settings_file(&target.config_file, &target.backup_file, settings_existed)?;
     if !settings_existed || patched != original {
-        backup_settings_file(&target.config_file, &target.backup_file, settings_existed)?;
         if let Some(parent) = target.config_file.parent() {
             fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
@@ -1676,6 +1966,9 @@ fn render_plan(plan: &ApplyPlan, env: &ApplyEnvironment, dry_run: bool) -> Strin
         "Theme: {} ({})\n",
         plan.theme_display, plan.theme_id
     ));
+    if !plan.apply_ghostty_shaders {
+        out.push_str("Ghostty shaders: disabled\n");
+    }
     out.push_str(&format!(
         "Scope: {}\n",
         if plan.global {
@@ -2002,6 +2295,7 @@ theme-file = "ghostty/themes/forest.conf"
             global: false,
             dry_run: true,
             yes: false,
+            apply_ghostty_shaders: true,
         }
     }
 
@@ -2061,6 +2355,69 @@ theme-file = "ghostty/themes/forest.conf"
                     .join("vstack")
                     .join("forest.glsl")
         }));
+    }
+
+    #[test]
+    fn ghostty_plan_can_disable_shader_assets_and_config_lines() {
+        let root = sandbox("ghostty-no-shaders");
+        write_sample_extra(&root);
+        let env = env_for(&root, &["ghostty"]);
+        let mut req = request("vanillagreen-themes");
+        req.targets = Some(vec![GHOSTTY_TARGET.to_string()]);
+        req.apply_ghostty_shaders = false;
+
+        let plan = build_plan_for_source(&root, &req, &env).unwrap();
+        let ghostty = plan
+            .targets
+            .iter()
+            .find(|target| target.kind == TargetKind::Ghostty)
+            .unwrap();
+
+        assert_eq!(ghostty.copies.len(), 1);
+        assert!(ghostty.copies[0].destination.ends_with("themes/vstack/forest"));
+        let block = ghostty.managed_block.as_deref().unwrap();
+        assert!(block.contains("config-file = themes/vstack/forest"));
+        assert!(!block.contains("custom-shader"));
+        assert!(render_plan(&plan, &env, true).contains("Ghostty shaders: disabled"));
+    }
+
+    #[test]
+    fn revert_with_env_restores_config_and_removes_generated_files() {
+        let root = sandbox("revert-state");
+        let env = env_for(&root, &[]);
+        let config_file = root.join("config-file");
+        let backup_file = root.join("old-config.backup");
+        let generated = root.join("themes/vstack/generated-theme");
+        fs::create_dir_all(generated.parent().unwrap()).unwrap();
+        fs::write(&config_file, "new config\n").unwrap();
+        fs::write(&backup_file, "old config\n").unwrap();
+        fs::write(&generated, "generated\n").unwrap();
+
+        let state = RevertState {
+            version: REVERT_STATE_VERSION,
+            extra_name: "vanillagreen-themes".into(),
+            created_at: env.timestamp.clone(),
+            theme_id: "forest".into(),
+            targets: vec![RevertTarget {
+                name: TMUX_TARGET.into(),
+                kind: TMUX_TARGET.into(),
+                config_file: config_file.clone(),
+                backup_file: Some(backup_file.clone()),
+                existed: true,
+                cli_path: None,
+                extension_id: None,
+            }],
+            generated_files: vec![generated.clone()],
+        };
+        let state_path = revert_state_path(&env, "vanillagreen-themes");
+        fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+        fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+
+        revert_with_env("vanillagreen-themes".into(), &env).unwrap();
+
+        assert_eq!(fs::read_to_string(&config_file).unwrap(), "old config\n");
+        assert!(!generated.exists());
+        assert!(!state_path.exists());
     }
 
     fn collect_paths(root: &Path) -> Vec<PathBuf> {

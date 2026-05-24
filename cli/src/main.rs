@@ -152,6 +152,9 @@ enum Commands {
         /// Print planned changes without writing files
         #[arg(long)]
         dry_run: bool,
+        /// Do not install Ghostty custom-shader lines or shader files
+        #[arg(long)]
+        no_ghostty_shaders: bool,
         /// Skip confirmation prompt before mutations
         #[arg(short, long)]
         yes: bool,
@@ -313,8 +316,17 @@ fn main() -> Result<()> {
             target,
             global,
             dry_run,
+            no_ghostty_shaders,
             yes,
-        }) => commands::apply::run(extra_name, theme, target, global, dry_run, yes),
+        }) => commands::apply::run(
+            extra_name,
+            theme,
+            target,
+            global,
+            dry_run,
+            yes,
+            !no_ghostty_shaders,
+        ),
         Some(Commands::Remove {
             names,
             global,

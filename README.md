@@ -251,7 +251,7 @@ Extras are optional non-agent packages distributed by vstack, such as theme pack
 vstack apply vanillagreen-themes --theme ghibli-serene-nature --target ghostty,vscodium,tmux,pi
 ```
 
-`vstack apply` uses global/user scope by default for app themes. Add `--dry-run` to preview planned changes before writing config. The TUI's **Extras** tab also lets you pick a theme interactively — select the pack, hit `Apply`, and you get a numbered theme picker.
+`vstack apply` uses global/user scope by default for app themes. Add `--dry-run` to preview planned changes before writing config; add `--no-ghostty-shaders` for palette-only Ghostty applies. The TUI's **Extras** tab also lets you pick a theme interactively — select the pack, hit `Apply`, and you get a native picker with a Ghostty shader checkbox plus **Uninstall & revert** after a successful apply.
 
 ## License
 

@@ -104,7 +104,14 @@ pub enum ConfirmAction {
     Acknowledge,
     /// Apply one theme from a theme-pack extra. Sized for the spawn_work
     /// runner; opens the global/user `vstack apply` pipeline.
-    ApplyExtraTheme { extra_name: String, theme_id: String },
+    ApplyExtraTheme {
+        extra_name: String,
+        theme_id: String,
+        apply_ghostty_shaders: bool,
+    },
+    /// Restore configs captured before the first successful apply for this
+    /// extra and remove vstack-generated theme assets/extensions.
+    RevertExtraTheme { extra_name: String },
 }
 
 /// One row in a remove plan: name + which scope(s) the removal targets.
@@ -192,6 +199,8 @@ pub struct ApplyPickerDialog {
     pub themes: Vec<ApplyPickerTheme>,
     pub cursor: usize,
     pub scroll: usize,
+    pub apply_ghostty_shaders: bool,
+    pub can_revert: bool,
     /// Theme that was most recently applied via this picker session.
     /// Renders a checkmark/chip on that row so the user can see what's active
     /// without having to remember the last pick.
@@ -374,6 +383,8 @@ pub struct TabbedSelect {
     pub apply_picker_outer: ratatui::layout::Rect,
     pub apply_picker_row_areas: Vec<ratatui::layout::Rect>,
     pub apply_picker_apply_area: ratatui::layout::Rect,
+    pub apply_picker_shader_area: ratatui::layout::Rect,
+    pub apply_picker_revert_area: ratatui::layout::Rect,
     pub apply_picker_cancel_area: ratatui::layout::Rect,
     pub help_overlay_outer: ratatui::layout::Rect,
     pub rendered_list_rows: Vec<Option<usize>>,
@@ -504,6 +515,8 @@ impl TabbedSelect {
             apply_picker_outer: ratatui::layout::Rect::default(),
             apply_picker_row_areas: Vec::new(),
             apply_picker_apply_area: ratatui::layout::Rect::default(),
+            apply_picker_shader_area: ratatui::layout::Rect::default(),
+            apply_picker_revert_area: ratatui::layout::Rect::default(),
             apply_picker_cancel_area: ratatui::layout::Rect::default(),
             help_overlay_outer: ratatui::layout::Rect::default(),
             rendered_list_rows: Vec::new(),

@@ -153,6 +153,10 @@ pub fn draw_tabbed_select(frame: &mut Frame, select: &mut TabbedSelect) {
         select.harness_dialog_outer = Rect::default();
         select.apply_picker_outer = Rect::default();
         select.apply_picker_row_areas.clear();
+        select.apply_picker_apply_area = Rect::default();
+        select.apply_picker_shader_area = Rect::default();
+        select.apply_picker_revert_area = Rect::default();
+        select.apply_picker_cancel_area = Rect::default();
     }
 
     if select.help_overlay {
@@ -2302,6 +2306,8 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
     let cursor = dialog.cursor;
     let scroll = dialog.scroll;
     let active_id = dialog.active_theme_id.clone();
+    let apply_ghostty_shaders = dialog.apply_ghostty_shaders;
+    let can_revert = dialog.can_revert;
 
     let pi_target = targets.iter().any(|t| t == "pi");
     let dialog_w: u16 = 72;
@@ -2311,9 +2317,9 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
     let pi_followup_text = "After that, every vstack apply reloads Pi automatically.";
     let pi_setup_wrapped = if pi_target { wrap_text(pi_setup_text, inner_w) } else { Vec::new() };
     let pi_followup_wrapped = if pi_target { wrap_text(pi_followup_text, inner_w) } else { Vec::new() };
-    // 1 targets line + (pi wrapped lines, both blocks) + 1 spacer
+    // 1 targets line + 1 shader checkbox + (pi wrapped lines, both blocks) + 1 spacer
     let header_lines: u16 =
-        1 + pi_setup_wrapped.len() as u16 + pi_followup_wrapped.len() as u16 + 1;
+        2 + pi_setup_wrapped.len() as u16 + pi_followup_wrapped.len() as u16 + 1;
     // 1 apply/cancel row + 1 blank spacer + 1 hint row
     let footer_lines: u16 = 3 + 1;
     let max_rows = themes.len().max(1) as u16;
@@ -2328,6 +2334,8 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
     select.apply_picker_outer = dialog_area;
     select.apply_picker_row_areas.clear();
     select.apply_picker_apply_area = Rect::default();
+    select.apply_picker_shader_area = Rect::default();
+    select.apply_picker_revert_area = Rect::default();
     select.apply_picker_cancel_area = Rect::default();
 
     let mut y = inner.y;
@@ -2341,6 +2349,24 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
             ),
         ]);
         frame.render_widget(Paragraph::new(header), Rect::new(inner.x, y, inner.width, 1));
+        y += 1;
+    }
+    if y < max_y {
+        let has_ghostty = targets.iter().any(|t| t == "ghostty");
+        let shader_mark = if apply_ghostty_shaders { "☑" } else { "☐" };
+        let shader_style = if has_ghostty {
+            Style::default().fg(theme::TEXT_PRIMARY)
+        } else {
+            Style::default().fg(theme::TEXT_MUTED)
+        };
+        let shader_line = Line::from(vec![
+            Span::styled(shader_mark, Style::default().fg(theme::ACCENT).bold()),
+            Span::styled(" apply Ghostty shaders", shader_style),
+            Span::styled("  (s toggles)", Style::default().fg(theme::TEXT_MUTED)),
+        ]);
+        let rect = Rect::new(inner.x, y, inner.width, 1);
+        select.apply_picker_shader_area = rect;
+        frame.render_widget(Paragraph::new(shader_line), rect);
         y += 1;
     }
     for line in pi_setup_wrapped.iter() {
@@ -2452,8 +2478,10 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
     }
     if fy < max_y {
         let apply_label = " Apply ";
+        let revert_label = " Uninstall & revert ";
         let cancel_label = " Cancel ";
         let apply_w = apply_label.chars().count() as u16;
+        let revert_w = revert_label.chars().count() as u16;
         let cancel_w = cancel_label.chars().count() as u16;
         let apply_rect = Rect::new(inner.x, fy, apply_w, 1);
         select.apply_picker_apply_area = apply_rect;
@@ -2464,7 +2492,20 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
             ))),
             apply_rect,
         );
-        let cancel_x = inner.x + apply_w + 2;
+        let mut next_x = inner.x + apply_w + 2;
+        if can_revert && next_x + revert_w + 2 < inner.right() {
+            let revert_rect = Rect::new(next_x, fy, revert_w, 1);
+            select.apply_picker_revert_area = revert_rect;
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    revert_label,
+                    Style::default().fg(theme::ON_DANGER).bg(theme::STATUS_DANGER).bold(),
+                ))),
+                revert_rect,
+            );
+            next_x += revert_w + 2;
+        }
+        let cancel_x = next_x;
         let cancel_rect = Rect::new(cancel_x, fy, cancel_w, 1);
         select.apply_picker_cancel_area = cancel_rect;
         frame.render_widget(
@@ -2486,6 +2527,8 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
             Span::styled(" page  ", Style::default().fg(theme::TEXT_MUTED)),
             Span::styled("enter", Style::default().fg(theme::ACCENT)),
             Span::styled(" apply  ", Style::default().fg(theme::TEXT_MUTED)),
+            Span::styled("s", Style::default().fg(theme::ACCENT)),
+            Span::styled(" shaders  ", Style::default().fg(theme::TEXT_MUTED)),
             Span::styled("esc", Style::default().fg(theme::ACCENT)),
             Span::styled(" cancel", Style::default().fg(theme::TEXT_MUTED)),
         ]);

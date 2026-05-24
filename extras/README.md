@@ -52,17 +52,20 @@ vstack apply vanillagreen-themes --theme rose-pine            --target ghostty,v
 
 # Preview without writing anything.
 vstack apply vanillagreen-themes --theme dracula --dry-run
+
+# Apply Ghostty palette without custom shaders.
+vstack apply vanillagreen-themes --theme dracula --target ghostty --no-ghostty-shaders
 ```
 
 Targets: `ghostty`, `vscode`, `vscodium`, `cursor`, `tmux`, `pi`. Add `--target` to restrict; omit to apply to every detected target.
 
-There is no "installed vs not" — only **active vs not**. `vstack apply <theme>` is idempotent: it (re)installs the extension VSIX and switches the active color + icon themes. Settings.json (VS Code-family and Pi), `~/.config/ghostty/config`, and `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`, whichever exists) are backed up before every mutation.
+There is no "installed vs not" — only **active vs not**. `vstack apply <theme>` is idempotent: it (re)installs the extension VSIX and switches the active color + icon themes. Settings.json (VS Code-family and Pi), `~/.config/ghostty/config`, and `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`, whichever exists) are backed up before every mutation. The TUI theme picker keeps an **Uninstall & revert** action after a successful apply; it restores the configs captured before the first apply and removes vstack-generated theme assets.
 
 ### What each target writes
 
 | Target | Writes | Reload |
 |---|---|---|
-| `ghostty` | per-theme `themes/vstack/<id>` + shaders under `shaders/vstack/`; managed `config-file =` / `alpha-blending = linear-corrected` / `custom-shader =` block in the live Ghostty config. | macOS triggers Ghostty's **Reload Configuration** menu via AppleScript (fallback: SIGUSR2); Unix sends SIGUSR2 to running ghostty processes. |
+| `ghostty` | per-theme `themes/vstack/<id>` + optional shaders under `shaders/vstack/`; managed `config-file =` / `alpha-blending = linear-corrected` / optional `custom-shader =` block in the live Ghostty config. | macOS triggers Ghostty's **Reload Configuration** menu via AppleScript (fallback: SIGUSR2); Unix sends SIGUSR2 to running ghostty processes. |
 | `vscode` / `vscodium` / `cursor` | per-call VSIX install of `vanillagreen.vstack-themes`; flips `workbench.colorTheme` and `workbench.iconTheme` in user `settings.json` (JSONC comments preserved). | Editor picks the new theme up live; reload window if it lingers. |
 | `tmux` | per-theme `vstack-active-theme.conf` under `~/.config/tmux/`; one-line managed `source-file -q "…"` block in your `tmux.conf`. | `vstack apply` runs `tmux -S … source-file <conf>` against every live server it finds. |
 | `pi` | per-theme `vanillagreen-<id>.json` under `~/.pi/agent/themes/`; flips top-level `theme` key in `~/.pi/settings.json`. | New Pi sessions pick up the theme on launch; in a live Pi session use `/theme` to switch or `/settings reload`. |

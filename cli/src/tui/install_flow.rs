@@ -74,6 +74,12 @@ enum PostWork {
             std::sync::Mutex<Option<anyhow::Result<crate::commands::apply::ApplyOutcome>>>,
         >,
     },
+    RevertPickerResult {
+        extra_name: String,
+        result: std::sync::Arc<
+            std::sync::Mutex<Option<anyhow::Result<crate::commands::apply::ApplyOutcome>>>,
+        >,
+    },
 }
 
 pub fn run_install_flow(
@@ -542,6 +548,63 @@ fn handle_dialog_click(
             && let Some(d) = state.select.repo_dialog.as_mut()
         {
             d.cursor = idx;
+        }
+        return Ok(None);
+    }
+
+    // Theme apply picker.
+    if state.select.apply_picker.is_some() {
+        if !state.select.apply_picker_outer.contains(pos) {
+            state.select.apply_picker = None;
+            return Ok(None);
+        }
+        if state.select.apply_picker_shader_area.contains(pos) {
+            if let Some(dialog) = state.select.apply_picker.as_mut()
+                && dialog.targets.iter().any(|t| t == "ghostty")
+            {
+                dialog.apply_ghostty_shaders = !dialog.apply_ghostty_shaders;
+            }
+            return Ok(None);
+        }
+        if state.select.apply_picker_apply_area.contains(pos) {
+            let action = state.select.apply_picker.as_ref().and_then(|dialog| {
+                dialog.cursor_theme_id().map(|theme_id| ConfirmAction::ApplyExtraTheme {
+                    extra_name: dialog.extra_name.clone(),
+                    theme_id: theme_id.to_string(),
+                    apply_ghostty_shaders: dialog.apply_ghostty_shaders,
+                })
+            });
+            if let Some(action) = action {
+                return execute_action(state, action);
+            }
+            return Ok(None);
+        }
+        if state.select.apply_picker_revert_area.contains(pos) {
+            if let Some(extra_name) = state
+                .select
+                .apply_picker
+                .as_ref()
+                .filter(|d| d.can_revert)
+                .map(|d| d.extra_name.clone())
+            {
+                open_apply_revert_confirm(state, extra_name);
+            }
+            return Ok(None);
+        }
+        if state.select.apply_picker_cancel_area.contains(pos) {
+            state.select.apply_picker = None;
+            return Ok(None);
+        }
+        let row_idx = state
+            .select
+            .apply_picker_row_areas
+            .iter()
+            .position(|r| r.contains(pos));
+        if let Some(row_idx) = row_idx
+            && let Some(dialog) = state.select.apply_picker.as_mut()
+        {
+            dialog.cursor = dialog.scroll + row_idx;
+            dialog.scroll_into_view(state.select.apply_picker_row_areas.len().max(1));
         }
         return Ok(None);
     }
@@ -1238,6 +1301,8 @@ fn open_apply_picker(state: &mut FlowState, extra_name: &str) {
         themes,
         cursor,
         scroll: 0,
+        apply_ghostty_shaders: true,
+        can_revert: crate::commands::apply::has_revert_state(extra_name),
         active_theme_id,
     });
 }
@@ -1252,6 +1317,7 @@ fn handle_apply_picker_key(
         .len()
         .max(1);
     let mut action: Option<ConfirmAction> = None;
+    let mut revert_extra: Option<String> = None;
     if let Some(dialog) = state.select.apply_picker.as_mut() {
         match key.code {
             KeyCode::Up => dialog.move_cursor(-1),
@@ -1273,7 +1339,18 @@ fn handle_apply_picker_key(
                     action = Some(ConfirmAction::ApplyExtraTheme {
                         extra_name: dialog.extra_name.clone(),
                         theme_id,
+                        apply_ghostty_shaders: dialog.apply_ghostty_shaders,
                     });
+                }
+            }
+            KeyCode::Char('s') => {
+                if dialog.targets.iter().any(|t| t == "ghostty") {
+                    dialog.apply_ghostty_shaders = !dialog.apply_ghostty_shaders;
+                }
+            }
+            KeyCode::Char('u') => {
+                if dialog.can_revert {
+                    revert_extra = Some(dialog.extra_name.clone());
                 }
             }
             KeyCode::Char(ch) => {
@@ -1293,7 +1370,28 @@ fn handle_apply_picker_key(
         // marker on the still-open dialog and flashes the result.
         return execute_action(state, action);
     }
+    if let Some(extra_name) = revert_extra {
+        open_apply_revert_confirm(state, extra_name);
+    }
     Ok(None)
+}
+
+fn open_apply_revert_confirm(state: &mut FlowState, extra_name: String) {
+    let body = vec![
+        format!("Extra: {extra_name}"),
+        String::new(),
+        "This restores the config files captured before the first successful apply.".into(),
+        "It also removes vstack-generated theme/shader files and uninstalls the VS Code extension from detected editors.".into(),
+        String::new(),
+        "Configs touched: Ghostty, tmux, VS Code, VSCodium, Cursor, Pi (only targets previously applied).".into(),
+    ];
+    state.select.confirm_dialog = Some(ConfirmDialog::new(
+        ConfirmAction::RevertExtraTheme { extra_name },
+        "Uninstall & revert theme pack?",
+        "Uninstall & revert",
+        body,
+        super::render::theme::STATUS_DANGER,
+    ));
 }
 
 /// Drive an interactive theme picker for the given extra name by suspending
@@ -1885,7 +1983,11 @@ fn execute_action(
 ) -> Result<Option<InstallFlowResult>> {
     match action {
         ConfirmAction::Acknowledge => Ok(None),
-        ConfirmAction::ApplyExtraTheme { extra_name, theme_id } => {
+        ConfirmAction::ApplyExtraTheme {
+            extra_name,
+            theme_id,
+            apply_ghostty_shaders,
+        } => {
             let label = format!("Applying `{theme_id}`\u{2026}");
             let extra_for_post = extra_name.clone();
             let theme_for_post = theme_id.clone();
@@ -1902,7 +2004,32 @@ fn execute_action(
                     result: result_slot,
                 },
                 move || {
-                    let res = crate::commands::apply::run_silent(extra_name, theme_id);
+                    let res = crate::commands::apply::run_silent_with_options(
+                        extra_name,
+                        theme_id,
+                        apply_ghostty_shaders,
+                    );
+                    *result_writer.lock().unwrap() = Some(res);
+                },
+            );
+            Ok(None)
+        }
+        ConfirmAction::RevertExtraTheme { extra_name } => {
+            let label = format!("Reverting `{extra_name}`\u{2026}");
+            let extra_for_post = extra_name.clone();
+            let result_slot: std::sync::Arc<
+                std::sync::Mutex<Option<anyhow::Result<crate::commands::apply::ApplyOutcome>>>,
+            > = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let result_writer = std::sync::Arc::clone(&result_slot);
+            spawn_work(
+                state,
+                label,
+                PostWork::RevertPickerResult {
+                    extra_name: extra_for_post,
+                    result: result_slot,
+                },
+                move || {
+                    let res = crate::commands::apply::revert_silent(extra_name);
                     *result_writer.lock().unwrap() = Some(res);
                 },
             );
@@ -2047,6 +2174,7 @@ fn apply_post_work(state: &mut FlowState<'_>, post: PostWork) -> Result<Option<I
                     if let Some(dialog) = state.select.apply_picker.as_mut() {
                         if dialog.extra_name == extra_name {
                             dialog.active_theme_id = Some(theme_id.clone());
+                            dialog.can_revert = true;
                         }
                     }
                     // Rebuild tabs so the extras list row picks up the new
@@ -2067,6 +2195,36 @@ fn apply_post_work(state: &mut FlowState<'_>, post: PostWork) -> Result<Option<I
                 None => {
                     state.select.flash_message = Some(format!(
                         "Apply finished but produced no result for {theme_id}"
+                    ));
+                }
+            }
+            Ok(None)
+        }
+        PostWork::RevertPickerResult { extra_name, result } => {
+            let outcome = result.lock().ok().and_then(|mut g| g.take());
+            match outcome {
+                Some(Ok(revert_outcome)) => {
+                    if let Some(dialog) = state.select.apply_picker.as_mut()
+                        && dialog.extra_name == extra_name
+                    {
+                        dialog.active_theme_id = None;
+                        dialog.can_revert = false;
+                    }
+                    rebuild_tabs(state);
+                    let base = format!("Uninstalled & reverted {extra_name}");
+                    let msg = if revert_outcome.notices.is_empty() {
+                        base
+                    } else {
+                        format!("{base} \u{2014} {}", revert_outcome.notices.join(" / "))
+                    };
+                    state.select.flash_message = Some(msg);
+                }
+                Some(Err(err)) => {
+                    state.select.flash_message = Some(format!("Revert failed for {extra_name}: {err}"));
+                }
+                None => {
+                    state.select.flash_message = Some(format!(
+                        "Revert finished but produced no result for {extra_name}"
                     ));
                 }
             }
