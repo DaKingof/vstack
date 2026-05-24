@@ -375,7 +375,9 @@ export default function qol(pi: ExtensionAPI): void {
 	let lastSessionTitle: string | undefined;
 
 	const requestRender = () => activeTui?.requestRender();
+	const statuslineEnabled = (ctx: ExtensionContext): boolean => settingBoolean("statusline.enabled", true, ctx.cwd);
 	const refreshStatusline = (ctx: ExtensionContext) => {
+		if (!statuslineEnabled(ctx)) return Promise.resolve();
 		if (refreshInFlight) return refreshInFlight;
 		refreshInFlight = refreshGitState(pi, ctx)
 			.then((next) => {
@@ -549,7 +551,8 @@ export default function qol(pi: ExtensionAPI): void {
 			ctx.ui.setHiddenThinkingLabel(hiddenThinkingLabel(ctx.ui.theme, ctx.cwd));
 			applyWorkingIndicatorMode(ctx);
 			gitState = makeFallbackGitState(ctx.cwd);
-			void refreshStatusline(ctx);
+			const showStatusline = statuslineEnabled(ctx);
+			if (showStatusline) void refreshStatusline(ctx);
 			installSessionTitle(ctx);
 			installSessionTitleSync(ctx);
 			ctx.ui.setEditorComponent((tui, theme, keybindings) => {
@@ -558,27 +561,29 @@ export default function qol(pi: ExtensionAPI): void {
 					? new QolCompactPromptEditor(tui, theme, keybindings, Math.max(0, Math.floor(settingNumber("inputBottomPaddingLines", DEFAULT_INPUT_BOTTOM_PADDING_LINES, ctx.cwd))), ctx)
 					: new QolEditor(tui, theme, keybindings, ctx);
 			});
-			const statusWidgetTimer = setTimeout(() => {
-				ctx.ui.setWidget("statusline", (tui, theme) => {
-					activeTui = tui;
-					return {
-						invalidate() {},
-						render(width: number): string[] {
-							return [renderStatusLine(width, ctx, gitState ?? makeFallbackGitState(ctx.cwd), pi, theme)];
-						},
-					};
-				});
-			}, 0);
-			statusWidgetTimer.unref?.();
-			if (settingBoolean("replaceFooter", true, ctx.cwd)) {
-				ctx.ui.setFooter((tui, _theme, footerData) => {
-					activeTui = tui;
-					const unsubscribe = footerData.onBranchChange(() => {
-						void refreshStatusline(ctx);
-						requestRender();
+			if (showStatusline) {
+				const statusWidgetTimer = setTimeout(() => {
+					ctx.ui.setWidget("statusline", (tui, theme) => {
+						activeTui = tui;
+						return {
+							invalidate() {},
+							render(width: number): string[] {
+								return [renderStatusLine(width, ctx, gitState ?? makeFallbackGitState(ctx.cwd), pi, theme)];
+							},
+						};
 					});
-					return { dispose: unsubscribe, invalidate() {}, render: () => [] };
-				});
+				}, 0);
+				statusWidgetTimer.unref?.();
+				if (settingBoolean("replaceFooter", true, ctx.cwd)) {
+					ctx.ui.setFooter((tui, _theme, footerData) => {
+						activeTui = tui;
+						const unsubscribe = footerData.onBranchChange(() => {
+							void refreshStatusline(ctx);
+							requestRender();
+						});
+						return { dispose: unsubscribe, invalidate() {}, render: () => [] };
+					});
+				}
 			}
 		}
 		startQuestionSubscription(ctx);

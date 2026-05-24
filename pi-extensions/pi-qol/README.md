@@ -65,7 +65,8 @@ Glyph style: each package exposes `glyphStyle` (`unicode` default, `ascii` for t
 | Setting | What it does |
 | --- | --- |
 | Enable QOL editor helpers | Master toggle for QOL statusline, commands, notifications, search, compaction, and editor helpers. |
-| Replace built-in footer | Hide Pi's default footer while the QOL statusline is active. |
+| Show compact statusline | Render the QOL statusline row with repo, branch, model, thinking level, and context percentage. |
+| Replace built-in footer | Hide Pi's default footer while the QOL statusline is enabled. |
 | Use π prompt editor | Use the compact prompt editor. |
 | Show session name title | Show the session name above the prompt and in the tmux pane title. |
 | Sync session name to tmux window name | Rename the tmux window to `π <session>`. |

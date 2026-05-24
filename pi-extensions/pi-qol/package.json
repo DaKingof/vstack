@@ -47,9 +47,19 @@
           "apply": "live"
         },
         {
+          "key": "statusline.enabled",
+          "label": "Show compact statusline",
+          "description": "Render the QOL statusline row with repo, branch, model, thinking level, and context percentage. Disable when another statusline/footer extension owns this UI.",
+          "type": "boolean",
+          "default": true,
+          "category": "Statusline",
+          "apply": "reload",
+          "requiresReload": true
+        },
+        {
           "key": "replaceFooter",
           "label": "Replace built-in footer",
-          "description": "Hide Pi default footer while the compact QOL statusline is active.",
+          "description": "Hide Pi default footer while the compact QOL statusline is enabled.",
           "type": "boolean",
           "default": true,
           "category": "Statusline",

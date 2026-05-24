@@ -18,9 +18,13 @@ import { boundedSettingNumber, newlineFallbackKey, settingBoolean, settingNumber
 export function statusMessage(ctx: ExtensionContext): string {
 	const labels = attachmentLabels(currentEditorText(ctx), ctx.cwd);
 	const searchShortcut = sessionSearchShortcut(ctx.cwd);
+	const statuslineEnabled = settingBoolean("statusline.enabled", true, ctx.cwd);
+	const statuslineMode = statuslineEnabled
+		? (settingBoolean("replaceFooter", true, ctx.cwd) ? "enabled, replaces footer" : "enabled, footer preserved")
+		: "disabled";
 	return [
 		"Pi QOL status",
-		`Statusline: ${settingBoolean("replaceFooter", true, ctx.cwd) ? "replaces footer" : "footer preserved"}; prompt=${settingBoolean("compactPrompt", true, ctx.cwd) ? `${glyphs(ctx.cwd).prompt} compact` : "default chrome"}`,
+		`Statusline: ${statuslineMode}; prompt=${settingBoolean("compactPrompt", true, ctx.cwd) ? `${glyphs(ctx.cwd).prompt} compact` : "default chrome"}`,
 		`shift+enter newline: ${settingBoolean("newlineOnShiftEnter", true, ctx.cwd) ? "enabled" : "disabled"}`,
 		`Fallback newline key: ${newlineFallbackKey(ctx.cwd)}`,
 		`Pending queue preview: ${settingBoolean("pendingQueue.asciiGreen", true, ctx.cwd) ? "ANSI green" : "Pi default"}`,
