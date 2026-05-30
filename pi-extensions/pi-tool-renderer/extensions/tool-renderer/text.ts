@@ -1,5 +1,7 @@
-import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { basename, extname } from "node:path";
+import { getCapabilities, hyperlink, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import * as os from "node:os";
+import { basename, extname, resolve as resolvePath } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { stableRenderWidth, stripAnsi } from "./ansi.js";
 import { glyphs, truncateText } from "./glyphs.js";
@@ -266,9 +268,30 @@ export function renderPathListPreview(output: string, toolName: "find" | "ls", t
 	return lines.join("\n");
 }
 
-export function readCallText(args: any, theme: any): string {
+export function shortenPath(pathText: string): string {
+	if (typeof pathText !== "string") return "";
+	const home = os.homedir();
+	if (pathText === home) return "~";
+	if (pathText.startsWith(`${home}/`)) return `~${pathText.slice(home.length)}`;
+	return pathText;
+}
+
+export function linkPath(styledText: string, rawPath: string, cwd?: string, hyperlinks = getCapabilities().hyperlinks): string {
+	if (!hyperlinks) return styledText;
+	const absolutePath = resolvePath(cwd || process.cwd(), rawPath || ".");
+	return hyperlink(styledText, pathToFileURL(absolutePath).href);
+}
+
+export function renderToolPathText(rawPath: unknown, theme: any, cwd?: string, options?: { emptyFallback?: string }, hyperlinks = getCapabilities().hyperlinks): string {
+	const value = typeof rawPath === "string" ? rawPath : rawPath == null ? "" : String(rawPath);
+	const displayPath = value || options?.emptyFallback;
+	if (!displayPath) return theme.fg("accent", "");
+	return linkPath(theme.fg("accent", shortenPath(displayPath)), displayPath, cwd, hyperlinks);
+}
+
+export function readCallText(args: any, theme: any, cwd?: string): string {
 	const range = args?.offset || args?.limit ? `:${args.offset ?? 1}${args.limit ? `-${Number(args.offset ?? 1) + Number(args.limit) - 1}` : ""}` : "";
-	return `${toolLabel(theme, "Read ")}${theme.fg("accent", `${args?.path ?? ""}${range}`)}`;
+	return `${toolLabel(theme, "Read ")}${renderToolPathText(args?.path ?? args?.file_path ?? "", theme, cwd)}${range ? theme.fg("accent", range) : ""}`;
 }
 
 export function bashCallText(args: any, theme: any, cwd?: string): string {
@@ -291,8 +314,12 @@ export function isGitDiffCommand(command: unknown): boolean {
 }
 
 export function readOnlyCallText(toolName: string, args: any, theme: any, cwd?: string): string {
+	if (toolName === "ls") return `${toolLabel(theme, `${toolName} `)}${renderToolPathText(args?.path ?? ".", theme, cwd)}`;
 	const query = args?.pattern ?? args?.glob ?? args?.path ?? args?.query ?? "";
-	return `${toolLabel(theme, `${toolName} `)}${theme.fg("accent", clipLine(String(query), cwd))}`;
+	const rendered = args?.pattern === undefined && args?.glob === undefined && typeof args?.path === "string"
+		? renderToolPathText(args.path, theme, cwd)
+		: theme.fg("accent", clipLine(String(query), cwd));
+	return `${toolLabel(theme, `${toolName} `)}${rendered}`;
 }
 
 export function plural(count: number, singular: string, pluralText = `${singular}s`): string {

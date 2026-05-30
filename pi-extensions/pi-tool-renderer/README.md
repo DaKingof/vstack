@@ -7,7 +7,7 @@ Compact renderers for Pi tools. Optional `tool_batch` composite tool. Optional r
 
 ## Highlights
 
-- Compact one-line tool rows for `read`, `bash`, `grep`, `find`, `ls`.
+- Compact one-line tool rows for `read`, `bash`, `grep`, `find`, `ls`; file paths in compact rows use OSC 8 `file://` hyperlinks when the terminal supports them.
 - Delayed live bash tails avoid fast-command output flashes; long-running commands show/preserve the last few lines flush-left so copied output has no gutter characters.
 - `tool_batch` runs multiple independent read/search/list/diagnostic bash calls and renders one combined result.
 - Optional rich Shiki diffs for `edit`/`write` with side-by-side previews, hunk counts, and inline word highlights.

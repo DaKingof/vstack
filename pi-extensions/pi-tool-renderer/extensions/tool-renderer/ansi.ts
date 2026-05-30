@@ -7,7 +7,7 @@ export const ANSI_RED = "\x1b[31m";
 export const ANSI_FG_RESET = "\x1b[39m";
 export const ANSI_BG_RESET = "\x1b[49m";
 
-export const ANSI_RE = /\x1b(?:\[[0-9;]*m|\]133;[ABC]\x07)/g;
+export const ANSI_RE = /\x1b(?:\[[0-9;:]*m|\]133;[ABC]\x07|\]8;[^\x07\x1b]*(?:\x07|\x1b\\))/g;
 export const ANSI_PRESENT_RE = /\x1b\[[0-9;]*m/;
 
 export interface AnsiParts {

@@ -89,7 +89,7 @@ export function contextToolCallId(context: any, toolName: string, args: any): st
 }
 
 export function stackItemCallText(item: StackItem, theme: any, cwd?: string): string {
-	if (item.toolName === "read") return readCallText(item.args, theme);
+	if (item.toolName === "read") return readCallText(item.args, theme, cwd);
 	if (item.toolName === "bash") return bashCallText(item.args, theme, cwd);
 	return readOnlyCallText(item.toolName, item.args, theme, cwd);
 }

@@ -29,6 +29,11 @@ test("writeLauncher template exports PI_BRIDGE_PARENT_SESSION_ID for subagent pa
 	assert.match(src, /export \$\{PI_BRIDGE_PARENT_SESSION_ENV\}=\$\{shellQuote\(parentSessionId\)\}/);
 });
 
+test("writeLauncher passes the agent name as Pi startup session name", () => {
+	const src = readFileSync(PANE_SRC, "utf8");
+	assert.match(src, /const args = \["--name", agent\.name, "--session", sessionFile,/);
+});
+
 test("writeLauncher template exports PI_BRIDGE_CHILD_ROLE=subagent", () => {
 	const src = readFileSync(PANE_SRC, "utf8");
 	assert.match(src, /export \$\{PI_BRIDGE_CHILD_ROLE_ENV\}=\$\{shellQuote\(PI_BRIDGE_SUBAGENT_ROLE\)\}/);

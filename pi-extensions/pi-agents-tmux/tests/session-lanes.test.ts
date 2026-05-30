@@ -176,6 +176,36 @@ test("oneshot default mints unique lane per call in clean and polluted env", () 
 	});
 });
 
+test("oneshot launches Pi with the agent name as startup session name", async () => {
+	const calls = installMockSpawn([{ code: 0, stdout: bridgeStdout([
+		shapedStreamEvent("top-level", "message_end", { message: { role: "assistant", content: [{ type: "text", text: "ok" }], usage: { input: 1, output: 1, totalTokens: 2 } } }),
+	]) }]);
+	try {
+		const agent = testAgent();
+		const result = await runSingleAgent(
+			tempRuntime(),
+			tempRuntime(),
+			[agent],
+			agent.name,
+			"review task",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			mockPiEvents([]),
+			undefined,
+			undefined,
+			makeDetails,
+		);
+		assert.equal(result.exitCode, 0);
+		const nameFlag = calls[0]!.args.indexOf("--name");
+		assert.ok(nameFlag >= 0, "expected --name in child Pi args");
+		assert.equal(calls[0]!.args[nameFlag + 1], "reviewer-test");
+	} finally {
+		setSingleAgentSpawnForTests(undefined);
+	}
+});
+
 test("oneshot transcript filters message_update and enriches agent_start for supported stream shapes", async () => {
 	const previousFull = process.env.PI_AGENTS_TMUX_TRANSCRIPT_FULL;
 	const shapes: StreamShape[] = ["nested-event", "bridge-event", "top-level"];

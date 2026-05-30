@@ -8,7 +8,7 @@ Delegate work to specialized agents from a running Pi session. Agents run either
 
 - `subagent` tool delegates one task, parallel tasks, or sequential chains.
 - `delegate_subagent` is a restricted, single-mode variant child agents can call without gaining full orchestration controls. Engineer agents installed by vstack default to `allowed-subagents: scout` so they can dispatch read-only reconnaissance into a fresh bg lane.
-- Agents with `pane: true` open a visible tmux pane that persists across turns. Other agents run in the background.
+- Agents with `pane: true` open a visible tmux pane that persists across turns. Other agents run in the background. Spawned Pi sessions use the agent name as the Pi session display name.
 - `/agents` browser lists agents for the selected scope with static detail, Monitor task traces, and one-key launch.
 - Monitor groups tasks by session (pane, bg lane, bg one-shot) under expandable Active and Completed sections, with active sessions first and newest invocations first inside each section; repeated same-agent launches get session numbers and task numbers reset per session.
 - Chat completion rows show actual results, never a repeat of the original request.

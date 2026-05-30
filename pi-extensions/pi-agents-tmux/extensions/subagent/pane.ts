@@ -551,7 +551,7 @@ async function writeLauncher(
 
 	await atomicWriteFile(promptFile, agent.systemPrompt);
 
-	const args = ["--session", sessionFile, "--append-system-prompt", promptFile];
+	const args = ["--name", agent.name, "--session", sessionFile, "--append-system-prompt", promptFile];
 	const bridgeExtension = settingBoolean("forceSessionBridgeForPanes", true, cwd) ? resolveSessionBridgeExtension(cwd) : undefined;
 	if (bridgeExtension) args.push("-e", bridgeExtension);
 	if (model) args.push("--model", model);

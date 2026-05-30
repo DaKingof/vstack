@@ -30,6 +30,7 @@ import {
 	makeTruncatedLines,
 	isGitDiffCommand,
 	pendingStatusPrefix,
+	renderToolPathText,
 	type TruncatedLines,
 } from "./text.js";
 
@@ -1010,7 +1011,7 @@ export function renderMutationCallPreview(kind: "Edit" | "Write" | "Create", tar
 	if (!settingBoolean("mutationCallPreview", true, cwd) || diffs.length === 0) return makeEmpty();
 	const total = summarizeDiffs(diffs);
 	const prefix = context?.executionStarted && context?.isPartial ? pendingStatusPrefix(theme, context, cwd) : stackPrefix(theme);
-	let text = `${prefix}${toolLabel(theme, `${kind} `)}${theme.fg("accent", targetPath)}${theme.fg("dim", " · preview · ")}${diffSummary(total, theme, cwd)}`;
+	let text = `${prefix}${toolLabel(theme, `${kind} `)}${renderToolPathText(targetPath, theme, cwd)}${theme.fg("dim", " · preview · ")}${diffSummary(total, theme, cwd)}`;
 	const maxShown = context?.expanded ? diffs.length : Math.min(1, diffs.length);
 	const perDiffLimit = Math.max(4, Math.floor(settingNumber("mutationCallPreviewLines", 16, cwd) / Math.max(1, maxShown)));
 	for (let index = 0; index < maxShown; index++) {

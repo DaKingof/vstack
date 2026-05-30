@@ -38,6 +38,7 @@ import {
 	readOnlyCallText,
 	readResultSummary,
 	renderPathListPreview,
+	renderToolPathText,
 	renderPendingCall,
 	renderPendingDetail,
 	resultTruncated,
@@ -141,12 +142,12 @@ export function registerRead(pi: ExtensionAPI, agent: any, cwd: string): void {
 			return getBuiltInTool(agent, contextCwd(context, cwd), "read").execute(id, params, signal, onUpdate);
 		},
 		renderCall(args: any, theme: any, context: any) {
-			return renderPendingCall(readCallText(args ?? {}, theme), theme, context, cwd);
+			return renderPendingCall(readCallText(args ?? {}, theme, context?.cwd ?? cwd), theme, context, cwd);
 		},
 		renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
 			const stacked = stackToolCalls(context?.cwd ?? cwd);
 			if (stacked) return renderStackedToolResult("read", result, isPartial, expanded, theme, context, cwd);
-			const call = readCallText(context?.args ?? {}, theme);
+			const call = readCallText(context?.args ?? {}, theme, context?.cwd ?? cwd);
 			if (isPartial) return renderPendingDetail("reading…", theme);
 			clearBlink(context);
 			const content = textContent(result);
@@ -271,12 +272,12 @@ export function registerEdit(pi: ExtensionAPI, agent: any, cwd: string): void {
 				const previewComponent = renderMutationCallPreview("Edit", String(targetPath), diffs, theme, context, effectiveCwd);
 				if (componentHasVisibleLines(previewComponent)) return previewComponent;
 			}
-			return renderPendingCall(`${toolLabel(theme, "Edit ")}${theme.fg("accent", targetPath)}`, theme, context, cwd);
+			return renderPendingCall(`${toolLabel(theme, "Edit ")}${renderToolPathText(targetPath, theme, effectiveCwd)}`, theme, context, cwd);
 		},
 		renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
 			const args = context?.args ?? {};
 			const targetPath = args.path ?? args.file_path ?? "";
-			const call = `${toolLabel(theme, "Edit ")}${theme.fg("accent", targetPath)}`;
+			const call = `${toolLabel(theme, "Edit ")}${renderToolPathText(targetPath, theme, context?.cwd ?? cwd)}`;
 			if (isPartial) return renderPendingDetail("editing…", theme);
 			clearBlink(context);
 			const structured = result?.details?.vstackDiff as StructuredDiff | undefined;
@@ -320,14 +321,14 @@ export function registerWrite(pi: ExtensionAPI, agent: any, cwd: string): void {
 				const previewComponent = renderMutationCallPreview(label, String(targetPath), [diff], theme, context, effectiveCwd);
 				if (componentHasVisibleLines(previewComponent)) return previewComponent;
 			}
-			return renderPendingCall(`${toolLabel(theme, "Write ")}${theme.fg("accent", targetPath)} ${theme.fg("dim", `· ${lineTotal} lines`)}`, theme, context, cwd);
+			return renderPendingCall(`${toolLabel(theme, "Write ")}${renderToolPathText(targetPath, theme, effectiveCwd)} ${theme.fg("dim", `· ${lineTotal} lines`)}`, theme, context, cwd);
 		},
 		renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
 			const args = context?.args ?? {};
 			const targetPath = args.path ?? args.file_path ?? "";
 			const lineTotal = lineCount(args.content ?? "");
 			const label = result?.details?.vstackDiffWasNewFile ? "Create " : "Write ";
-			const call = `${toolLabel(theme, label)}${theme.fg("accent", targetPath)} ${theme.fg("dim", `· ${lineTotal} lines`)}`;
+			const call = `${toolLabel(theme, label)}${renderToolPathText(targetPath, theme, context?.cwd ?? cwd)} ${theme.fg("dim", `· ${lineTotal} lines`)}`;
 			if (isPartial) return renderPendingDetail("writing…", theme);
 			clearBlink(context);
 			const structured = result?.details?.vstackDiff as StructuredDiff | undefined;

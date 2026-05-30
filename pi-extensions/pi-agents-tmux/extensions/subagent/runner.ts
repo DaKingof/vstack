@@ -484,7 +484,7 @@ async function runSingleAgentAttempt(
 	session: BgSessionSelection,
 	attempt: number,
 ): Promise<SingleResult> {
-	const args: string[] = ["--mode", "json", "-p", "--session", session.path];
+	const args: string[] = ["--mode", "json", "-p", "--name", agent.name, "--session", session.path];
 	if (selectedModel) args.push("--model", selectedModel);
 	if (selectedThinking && selectedThinking !== "off") args.push("--thinking", selectedThinking);
 	const selectedTools = selectedToolsForAgent(agent, defaultCwd, [], pi.getActiveTools?.() ?? []);
