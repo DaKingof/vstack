@@ -15,6 +15,7 @@ Invoke via your AI coding harness (e.g., `/linear-orch <command>` or `/skill:lin
 | `dev-fix [ISSUE_ID]` | Delegate review fix items |
 | `ci-fix PR_NUMBER` | Fix CI failures |
 | `review [all \| last N \| HASH]` | On-demand code review |
+| `review-codebase [PATH]` | Whole-codebase reviewer fanout for a repository/worktree |
 | `review-pr [PR_NUMBER]` | Pre-submission review |
 | `review-pr-comments PR_NUMBER` | Triage PR review comments |
 | `submit-pr [PR_NUMBER]` | Push, create PR, bot review, CI |
