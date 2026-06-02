@@ -72,6 +72,16 @@ assert_eq "$(echo "$out" | jq -r .status)" "approved" "1b status=approved (forma
 assert_contains "$(echo "$out" | jq -c .signals)" "formal_review:approved" "1b signals contain formal_review:approved"
 assert_contains "$(echo "$out" | jq -c .signals)" "sticky:approved" "1b signals contain sticky:approved"
 
+out=$(bot_review_status_compute \
+    "claude[bot]" \
+    "$(fx empty.json)" \
+    "$(fx claude_review_summary_comments.json)" \
+    "$(fx empty.json)" \
+    "$(fx empty.json)" \
+    "$(fx empty.json)")
+assert_eq "$(echo "$out" | jq -r .status)" "approved" "1c status=approved (Claude Review Summary comment only)"
+assert_contains "$(echo "$out" | jq -c .signals)" "sticky:approved" "1c signals contain sticky:approved"
+
 # --- 2. Codex 👀 only = pending ---
 echo "Test 2: Codex eyes-reaction only = pending"
 out=$(bot_review_status_compute \
@@ -199,6 +209,12 @@ fi
 echo "Test 7c: Empty reviewer set aggregates to pending (not approved)"
 assert_eq "$(agg '[]')" "pending" "7c agg([])=pending"
 
+# --- Review-signal auto-detection ---
+echo
+echo "=== detect_bot_reviewers_from_inputs ==="
+detected=$(detect_bot_reviewers_from_inputs "$(fx empty.json)" "$(fx mixed_bot_comments.json)" "$(fx empty.json)" | paste -sd, -)
+assert_eq "$detected" "claude[bot]" "detect excludes non-review bot linkback comments"
+
 # --- Reaction normalization (REST + GraphQL forms) ---
 echo
 echo "=== reaction normalization ==="
@@ -214,6 +230,7 @@ assert_eq "$(compute_sticky_verdict_from_body "View job\n- [ ] todo")" "pending"
 assert_eq "$(compute_sticky_verdict_from_body "## Review\n✅ Approved")" "approved" "review section + ✅ + approved = approved"
 assert_eq "$(compute_sticky_verdict_from_body "## Review\n⚠️ changes requested")" "changes" "review section + ⚠️ = changes"
 assert_eq "$(compute_sticky_verdict_from_body "## Review\n✅ Approved with ⚠️ caveats")" "changes" "mixed signals = changes"
+assert_eq "$(compute_sticky_verdict_from_body "$(jq -r '.[0].body' "$FIXTURES/claude_review_summary_comments.json")")" "approved" "Claude Review Summary approved despite unrelated changes prose"
 
 echo
 echo "----"

@@ -2,9 +2,10 @@
 # Get sticky/review-summary bot comment from a PR.
 # Usage: ./sticky-comment.sh <PR#> [--body|--updated-at|--verdict|--analysis] [--bot <login>]
 #
-# By default this targets the bot in $GH_BOT_USERNAME (Claude-style sticky).
-# Pass --bot to query a different reviewer — useful when multiple review bots
-# (e.g. Claude + Codex) are configured for a single PR.
+# By default this targets the bot in $GH_BOT_USERNAME (Claude-style sticky),
+# or falls back to any bot-authored Claude-style review-summary comment when no
+# bot is configured. Pass --bot to query a different reviewer — useful when
+# multiple review bots (e.g. Claude + Codex) are configured for a single PR.
 #
 # Returns JSON by default, or specific field with flags:
 #   --body         Just the comment body
@@ -50,7 +51,7 @@ Analysis Output:
   }
 
 Examples:
-  sticky-comment.sh 23                              # Full JSON for default bot
+  sticky-comment.sh 23                              # Full JSON for configured/default bot; auto-detects Claude-style if unset
   sticky-comment.sh 23 --body                       # Just comment body
   sticky-comment.sh 23 --verdict --bot 'codex[bot]' # Codex's verdict
 EOF
@@ -91,6 +92,10 @@ if [[ -z "$FLAG" && "${POSITIONAL[1]:-}" =~ ^--(body|updated-at|verdict|analysis
 fi
 
 BOT_USER="${BOT_OVERRIDE:-${GH_BOT_USERNAME:-review-bot[bot]}}"
+BOT_EXPLICIT=false
+if [[ -n "$BOT_OVERRIDE" || -n "${GH_BOT_USERNAME:-}" ]]; then
+  BOT_EXPLICIT=true
+fi
 
 if [[ -z "$PR_NUM" ]]; then
   echo '{"error": "Usage: sticky-comment.sh <PR#> [--body|--updated-at|--verdict|--analysis]"}' >&2
@@ -110,27 +115,26 @@ if echo "$RESPONSE" | jq -e '.message' >/dev/null 2>&1; then
   exit 1
 fi
 
-# Find sticky comment: prefer "View job" (sticky marker), fall back to review headers
-STICKY=$(echo "$RESPONSE" | jq '
-  [.[] | select(.user.login == "'"$BOT_USER"'")] |
-  # First try: sticky with View job
-  (map(select(.body | test("View job"; "i"))) | first) //
-  # Fallback: any with review headers
-  (map(select(.body | test("## Review|### Inline"; "i"))) | last) //
-  empty
-')
+find_sticky_comment() {
+  local response="$1"
+  local allow_any="false"
+  if [[ "$BOT_EXPLICIT" == "false" ]]; then
+    allow_any="true"
+  fi
+  select_sticky_comment_from_comments "$response" "$BOT_USER" "$allow_any"
+}
+
+# Find sticky comment: prefer the configured/default bot, then (when no bot was
+# explicitly configured) fall back to any bot-authored Claude-style review
+# summary such as `**Claude finished ...** —— [View job](...)`.
+STICKY=$(find_sticky_comment "$RESPONSE")
 
 # Validate we got a comment object (has id and body)
 # Retry once after brief delay if not found (handles API sync delay)
 if [[ -z "$STICKY" || "$STICKY" == "null" ]] || ! echo "$STICKY" | jq -e '.id and .body' >/dev/null 2>&1; then
   sleep 2
   RESPONSE=$(gh api "repos/{owner}/{repo}/issues/$PR_NUM/comments" 2>&1) || true
-  STICKY=$(echo "$RESPONSE" | jq '
-    [.[] | select(.user.login == "'"$BOT_USER"'")] |
-    (map(select(.body | test("View job"; "i"))) | first) //
-    (map(select(.body | test("## Review|### Inline"; "i"))) | last) //
-    empty
-  ' 2>/dev/null || echo "")
+  STICKY=$(find_sticky_comment "$RESPONSE")
 
   if [[ -z "$STICKY" || "$STICKY" == "null" ]] || ! echo "$STICKY" | jq -e '.id and .body' >/dev/null 2>&1; then
     echo '{"error": "No sticky comment found"}' >&2
@@ -138,54 +142,11 @@ if [[ -z "$STICKY" || "$STICKY" == "null" ]] || ! echo "$STICKY" | jq -e '.id an
   fi
 fi
 
-# Helper: detect verdict from body text (emoji-based, legacy)
-#
-# Returns "pending" when the comment is purely a task checklist with unchecked
-# items and no final review section. The bot posts an in-progress checklist
-# before it finishes reviewing; treating that as a terminal verdict causes
-# bot-review-wait to exit before the bot has actually posted its findings.
-#
-# A comment is considered "review complete" (not just in-progress) when it
-# contains at least one of:
-#   - A review section header: ## Review, ### Inline, ### Recommendation
-#   - An explicit approval/changes statement
-# If none of those are present and unchecked items remain, return "pending".
+# Helper: detect verdict from body text. Delegates to github-api.sh so
+# sticky-comment, pr-review-status, and bot-review-wait share one parser.
 get_verdict() {
   local body="$1"
-
-  # Check if comment has a final review section (not just a task checklist)
-  local has_review_section
-  has_review_section=$(echo "$body" | grep -ciE '## Review|### Inline|### Recommendation|Recommendation:|View job' || true)
-
-  # If no review section present, check for unchecked checklist items.
-  # An in-progress checklist (unchecked items, no review section) = still processing.
-  if [[ $has_review_section -eq 0 ]]; then
-    local unchecked
-    unchecked=$(echo "$body" | grep -c '^\s*- \[ \]' || true)
-    if [[ $unchecked -gt 0 ]]; then
-      echo "pending"
-      return
-    fi
-  fi
-
-  # Standard emoji/keyword verdict detection
-  local has_check has_approv has_warn has_changes
-  has_check=$(echo "$body" | grep -c "✅" || true)
-  has_approv=$(echo "$body" | grep -ci "approv" || true)
-  has_warn=$(echo "$body" | grep -c "⚠️" || true)
-  has_changes=$(echo "$body" | grep -ci "changes" || true)
-
-  if [[ $has_check -gt 0 && $has_approv -gt 0 ]]; then
-    if [[ $has_warn -gt 0 || $has_changes -gt 0 ]]; then
-      echo "changes"  # Mixed signals = treat as changes
-    else
-      echo "approved"
-    fi
-  elif [[ $has_warn -gt 0 || $has_changes -gt 0 ]]; then
-    echo "changes"
-  else
-    echo "pending"
-  fi
+  compute_sticky_verdict_from_body "$body"
 }
 
 # Helper: deep analysis of bot recommendation
@@ -257,7 +218,8 @@ case "$FLAG" in
     ;;
   --verdict)
     # Primary: formal GitHub review state (structured, reliable)
-    FORMAL=$(get_formal_review_verdict "$PR_NUM" "$BOT_USER")
+    STICKY_BOT_USER=$(echo "$STICKY" | jq -r '.user.login // empty')
+    FORMAL=$(get_formal_review_verdict "$PR_NUM" "${STICKY_BOT_USER:-$BOT_USER}")
     if [[ -n "$FORMAL" ]]; then
       echo "$FORMAL"
     else
@@ -274,7 +236,8 @@ case "$FLAG" in
     # Return full JSON with computed verdict
     # Primary: formal review; fallback: sticky text parsing
     BODY=$(echo "$STICKY" | jq -r '.body')
-    FORMAL=$(get_formal_review_verdict "$PR_NUM" "$BOT_USER")
+    STICKY_BOT_USER=$(echo "$STICKY" | jq -r '.user.login // empty')
+    FORMAL=$(get_formal_review_verdict "$PR_NUM" "${STICKY_BOT_USER:-$BOT_USER}")
     VERDICT="${FORMAL:-$(get_verdict "$BODY")}"
     # Sanitize control characters in body to prevent jq parse errors
     echo "$STICKY" | jq --arg v "$VERDICT" '.body |= gsub("[[:cntrl:]]"; "") | . + {verdict: $v}'

@@ -128,8 +128,10 @@ PENDING_REVIEWERS=$(echo "$WAIT_RESULT" | jq -r '.pending_reviewers | join(", ")
 Waits for all configured bot reviewers (`$BOT_REVIEWERS` — e.g., `review-bot-a[bot],chatgpt-codex-connector[bot]`). Auto-detects if not configured. Max wait 600s.
 
 `bot-review-wait` understands per-reviewer signaling:
-- **Claude-style** — formal review (APPROVED/CHANGES_REQUESTED) and/or sticky "View job" comment.
+- **Claude-style** — formal review (APPROVED/CHANGES_REQUESTED) and/or sticky `View job` / `**Claude finished ...**` comment with `### Review Summary` verdict text (`✅ Approved`, `Changes requested`).
 - **Codex-style** — reactions on the PR body / earliest comment (👀 = pending, 👍 = approved) and inline review threads (= changes).
+
+Auto-detection only treats review-signal bot comments as reviewers; unrelated automation comments (for example issue linkbacks) do not block completion.
 
 `status=complete` is only emitted when **no reviewer is pending** (verdict will be `approved` or `changes`). If you need a reviewer to be ignored, pass `--skip "bot-login"` or set `BOT_SKIPPED_REVIEWERS`.
 
