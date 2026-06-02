@@ -1112,8 +1112,7 @@ fn draw_inspector(frame: &mut Frame, area: Rect, select: &mut TabbedSelect) {
     let start = scroll as usize;
     let end = (scroll + visible).min(total) as usize;
 
-    let mut y = inner.y;
-    for row in &rows[start..end] {
+    for (y, row) in (inner.y..).zip(rows[start..end].iter()) {
         if y >= inner.bottom() {
             break;
         }
@@ -1157,7 +1156,6 @@ fn draw_inspector(frame: &mut Frame, area: Rect, select: &mut TabbedSelect) {
                 });
             }
         }
-        y += 1;
     }
 
     // Anchor scroll arrows on the outer `area` (not `inner`) so they line up
@@ -2315,8 +2313,16 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
     let inner_w = dialog_w.saturating_sub(6) as usize;
     let pi_setup_text = "Pi setup: in any running Pi session run /settings \u{2192} Theme \u{2192} pick `vstack-active` (one time).";
     let pi_followup_text = "After that, every vstack apply reloads Pi automatically.";
-    let pi_setup_wrapped = if pi_target { wrap_text(pi_setup_text, inner_w) } else { Vec::new() };
-    let pi_followup_wrapped = if pi_target { wrap_text(pi_followup_text, inner_w) } else { Vec::new() };
+    let pi_setup_wrapped = if pi_target {
+        wrap_text(pi_setup_text, inner_w)
+    } else {
+        Vec::new()
+    };
+    let pi_followup_wrapped = if pi_target {
+        wrap_text(pi_followup_text, inner_w)
+    } else {
+        Vec::new()
+    };
     // 1 targets line + 1 shader checkbox + (pi wrapped lines, both blocks) + 1 spacer
     let header_lines: u16 =
         2 + pi_setup_wrapped.len() as u16 + pi_followup_wrapped.len() as u16 + 1;
@@ -2344,11 +2350,18 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
         let header = Line::from(vec![
             Span::styled("targets: ", Style::default().fg(theme::TEXT_MUTED)),
             Span::styled(
-                if targets.is_empty() { "(none declared)".to_string() } else { targets.join(", ") },
+                if targets.is_empty() {
+                    "(none declared)".to_string()
+                } else {
+                    targets.join(", ")
+                },
                 Style::default().fg(theme::TEXT_PRIMARY),
             ),
         ]);
-        frame.render_widget(Paragraph::new(header), Rect::new(inner.x, y, inner.width, 1));
+        frame.render_widget(
+            Paragraph::new(header),
+            Rect::new(inner.x, y, inner.width, 1),
+        );
         y += 1;
     }
     if y < max_y {
@@ -2370,7 +2383,9 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
         y += 1;
     }
     for line in pi_setup_wrapped.iter() {
-        if y >= max_y { break; }
+        if y >= max_y {
+            break;
+        }
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 line.clone(),
@@ -2381,7 +2396,9 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
         y += 1;
     }
     for line in pi_followup_wrapped.iter() {
-        if y >= max_y { break; }
+        if y >= max_y {
+            break;
+        }
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 line.clone(),
@@ -2412,8 +2429,7 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
         d.scroll = scroll;
     }
 
-    let mut row_y = y;
-    for (idx, theme) in themes.iter().enumerate().skip(scroll).take(visible) {
+    for (row_y, (idx, theme)) in (y..).zip(themes.iter().enumerate().skip(scroll).take(visible)) {
         if row_y >= y + list_height {
             break;
         }
@@ -2453,13 +2469,15 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
             ])),
             row_rect,
         );
-        row_y += 1;
     }
 
     if scroll > 0 && y < max_y {
         let up_rect = Rect::new(inner.right().saturating_sub(2), y, 1, 1);
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled("\u{25b4}", Style::default().fg(theme::TEXT_MUTED)))),
+            Paragraph::new(Line::from(Span::styled(
+                "\u{25b4}",
+                Style::default().fg(theme::TEXT_MUTED),
+            ))),
             up_rect,
         );
     }
@@ -2467,7 +2485,10 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
         let down_y = y + list_height - 1;
         let down_rect = Rect::new(inner.right().saturating_sub(2), down_y, 1, 1);
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled("\u{25be}", Style::default().fg(theme::TEXT_MUTED)))),
+            Paragraph::new(Line::from(Span::styled(
+                "\u{25be}",
+                Style::default().fg(theme::TEXT_MUTED),
+            ))),
             down_rect,
         );
     }
@@ -2499,7 +2520,10 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     revert_label,
-                    Style::default().fg(theme::ON_DANGER).bg(theme::STATUS_DANGER).bold(),
+                    Style::default()
+                        .fg(theme::ON_DANGER)
+                        .bg(theme::STATUS_DANGER)
+                        .bold(),
                 ))),
                 revert_rect,
             );
@@ -2511,9 +2535,7 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 cancel_label,
-                Style::default()
-                    .fg(theme::TEXT_MUTED)
-                    .bold(),
+                Style::default().fg(theme::TEXT_MUTED).bold(),
             ))),
             cancel_rect,
         );
@@ -2539,7 +2561,6 @@ fn draw_apply_picker(frame: &mut Frame, select: &mut TabbedSelect) {
 // ── Helpers ──────────────────────────────────────────
 
 /// Centered modal frame with thick accent border + padded inner area.
-
 /// Renders Clear, the outer border, title; returns (inner, outer) so the
 /// caller can record hit areas and lay out content.
 fn draw_dialog_chrome(

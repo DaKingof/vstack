@@ -189,16 +189,16 @@ mod unix {
             return;
         }
         let uid = current_uid();
-        if let Some(uid) = uid {
-            if metadata.uid() != uid {
-                report.refused.push(format!(
-                    "{}: owned by uid {}, not {}",
-                    path.display(),
-                    metadata.uid(),
-                    uid
-                ));
-                return;
-            }
+        if let Some(uid) = uid
+            && metadata.uid() != uid
+        {
+            report.refused.push(format!(
+                "{}: owned by uid {}, not {}",
+                path.display(),
+                metadata.uid(),
+                uid
+            ));
+            return;
         }
         if (mode & GROUP_OTHER_WRITE) != 0 {
             report.refused.push(format!(

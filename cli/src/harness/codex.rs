@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 ///
 /// Hooks are NOT rendered here — codex hooks install as native shell hooks via
 /// `installer::install_hook_codex` (which writes `<scope>/.codex/hooks/*.sh`,
-/// merges `<scope>/.codex/hooks.json`, and toggles `[features] codex_hooks =
-/// true`). The `_hooks` parameter exists only to keep the harness trait shape
+/// merges `<scope>/.codex/hooks.json`, and toggles `[features] hooks = true`).
+/// The `_hooks` parameter exists only to keep the harness trait shape
 /// uniform.
 pub fn generate_agent(
     agent: &Agent,

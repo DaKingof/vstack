@@ -365,9 +365,17 @@ mod tests {
         }"#;
         std::fs::write(root.join("package.json"), pkg).unwrap();
         std::fs::create_dir_all(root.join("themes")).unwrap();
-        std::fs::write(root.join("themes/sample-color-theme.json"), r#"{"name":"Sample"}"#).unwrap();
+        std::fs::write(
+            root.join("themes/sample-color-theme.json"),
+            r#"{"name":"Sample"}"#,
+        )
+        .unwrap();
         std::fs::create_dir_all(root.join("icon-theme/icons/files")).unwrap();
-        std::fs::write(root.join("icon-theme/sample-icons.json"), r#"{"iconDefinitions":{}}"#).unwrap();
+        std::fs::write(
+            root.join("icon-theme/sample-icons.json"),
+            r#"{"iconDefinitions":{}}"#,
+        )
+        .unwrap();
         std::fs::write(root.join("icon-theme/icons/files/foo.svg"), "<svg/>").unwrap();
         std::fs::write(root.join("icon.png"), b"\x89PNG\r\n\x1a\n").unwrap();
         std::fs::write(root.join("README.md"), "# Sample").unwrap();
@@ -411,7 +419,9 @@ mod tests {
     fn scopeguard_remove(root: std::path::PathBuf) -> ScopeRemove {
         ScopeRemove { root }
     }
-    struct ScopeRemove { root: std::path::PathBuf }
+    struct ScopeRemove {
+        root: std::path::PathBuf,
+    }
     impl Drop for ScopeRemove {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.root);

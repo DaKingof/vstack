@@ -134,14 +134,11 @@ fn pi_deny_tools_for(
     frontmatter: &agent::AgentFrontmatterOverrides,
     allowed_subagents: &[String],
 ) -> Vec<String> {
-    let user_denies_delegate = frontmatter
-        .deny_tools
-        .as_deref()
-        .is_some_and(|denies| {
-            denies
-                .iter()
-                .any(|tool| normalize_pi_tool_name(tool) == "delegate_subagent")
-        });
+    let user_denies_delegate = frontmatter.deny_tools.as_deref().is_some_and(|denies| {
+        denies
+            .iter()
+            .any(|tool| normalize_pi_tool_name(tool) == "delegate_subagent")
+    });
     let mut tools = pi_default_deny_tools_for(agent, allowed_subagents);
     if let Some(deny_tools) = &frontmatter.deny_tools {
         tools.extend(deny_tools.clone());

@@ -446,7 +446,7 @@ fn install_hook_codex(hook: &Hook, global: bool, agents: &[Agent]) -> Result<()>
 
 /// Install a codex-native hook: copy the script under `<root>/hooks/<name>.sh`,
 /// merge the entry into `<root>/hooks.json`, and ensure
-/// `[features] codex_hooks = true` is set in `<root>/config.toml`.
+/// `[features] hooks = true` is set in `<root>/config.toml`.
 fn install_hook_codex_native(hook: &Hook, codex_event: &str, global: bool) -> Result<()> {
     let root = codex_root(global);
 
@@ -565,9 +565,10 @@ fn merge_codex_hooks_json(
     Ok(())
 }
 
-/// Ensure `[features] codex_hooks = true` is set in `<root>/config.toml`,
+/// Ensure `[features] hooks = true` is set in `<root>/config.toml`,
 /// preserving any user content. Uses a text-level merge so we don't clobber
-/// comments or key ordering.
+/// comments or key ordering. Removes the deprecated `codex_hooks` feature flag
+/// from the `[features]` table so Codex doesn't warn about custom config.
 fn enable_codex_hooks_feature(config_path: &Path) -> Result<()> {
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -578,44 +579,82 @@ fn enable_codex_hooks_feature(config_path: &Path) -> Result<()> {
         String::new()
     };
 
-    // Already enabled — nothing to do (including pre-existing string `true`).
-    let already_enabled = original.lines().any(|line| {
-        let trimmed = line.trim();
-        trimmed.starts_with("codex_hooks")
-            && trimmed.contains('=')
-            && trimmed.split('=').nth(1).is_some_and(|rhs| {
-                let rhs = rhs.trim().trim_matches('"');
-                rhs == "true"
-            })
-    });
-    if already_enabled {
-        return Ok(());
-    }
-
-    // Locate the [features] table header, if any.
     let mut lines: Vec<String> = original.lines().map(|s| s.to_string()).collect();
-    let features_idx = lines.iter().position(|line| line.trim() == "[features]");
+    let mut features_seen = false;
+    let mut in_features = false;
+    let mut hooks_seen = false;
+    let mut merged = Vec::with_capacity(lines.len() + 2);
 
-    match features_idx {
-        Some(idx) => {
-            // Insert `codex_hooks = true` immediately after the header.
-            lines.insert(idx + 1, "codex_hooks = true".into());
+    for line in lines.drain(..) {
+        let trimmed = line.trim();
+
+        if trimmed == "[features]" {
+            features_seen = true;
+            in_features = true;
+            hooks_seen = false;
+            merged.push(line);
+            continue;
         }
-        None => {
-            if !lines.is_empty() && !lines.last().is_some_and(|s| s.is_empty()) {
-                lines.push(String::new());
+
+        if in_features && is_toml_table_header(trimmed) {
+            if !hooks_seen {
+                merged.push("hooks = true".into());
             }
-            lines.push("[features]".into());
-            lines.push("codex_hooks = true".into());
+            in_features = false;
+            merged.push(line);
+            continue;
         }
+
+        if in_features {
+            match toml_assignment_key(&line) {
+                Some("codex_hooks") => continue,
+                Some("hooks") => {
+                    if hooks_seen {
+                        continue;
+                    }
+                    let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                    merged.push(format!("{indent}hooks = true"));
+                    hooks_seen = true;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        merged.push(line);
     }
 
-    let mut output = lines.join("\n");
+    if features_seen && in_features && !hooks_seen {
+        merged.push("hooks = true".into());
+    } else if !features_seen {
+        if !merged.is_empty() && !merged.last().is_some_and(|s| s.is_empty()) {
+            merged.push(String::new());
+        }
+        merged.push("[features]".into());
+        merged.push("hooks = true".into());
+    }
+
+    let mut output = merged.join("\n");
     if !output.ends_with('\n') {
         output.push('\n');
     }
     std::fs::write(config_path, output)?;
     Ok(())
+}
+
+fn is_toml_table_header(trimmed_line: &str) -> bool {
+    trimmed_line.starts_with('[') && trimmed_line.ends_with(']')
+}
+
+fn toml_assignment_key(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('#') || trimmed.starts_with(';') {
+        return None;
+    }
+
+    trimmed
+        .split_once('=')
+        .map(|(key, _)| key.trim().trim_matches('"'))
 }
 
 /// Fallback path for codex hooks whose event has no codex equivalent — append a
@@ -816,7 +855,7 @@ fn remove_hook_from_claude_settings(global: bool, name: &str) -> Result<()> {
 
 /// Remove a hook entry from `<scope>/.codex/hooks.json`. Prunes empty matcher
 /// groups and the event key when the last entry goes. Leaves
-/// `[features] codex_hooks = true` in `config.toml` because other hooks may
+/// `[features] hooks = true` in `config.toml` because other hooks may
 /// rely on it.
 fn remove_hook_from_codex_json(global: bool, name: &str) -> Result<()> {
     let root = codex_root(global);
@@ -1444,7 +1483,8 @@ mod tests {
         enable_codex_hooks_feature(&config).unwrap();
         let body = std::fs::read_to_string(&config).unwrap();
         assert!(body.contains("[features]"));
-        assert!(body.contains("codex_hooks = true"));
+        assert!(body.contains("hooks = true"));
+        assert!(!body.contains("codex_hooks"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1474,7 +1514,8 @@ mod tests {
         assert!(body.contains("# user comment"));
         assert!(body.contains("model = \"gpt-5.5\""));
         assert!(body.contains("[other]"));
-        assert!(body.contains("codex_hooks = true"));
+        assert!(body.contains("hooks = true"));
+        assert!(!body.contains("codex_hooks"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1491,8 +1532,41 @@ mod tests {
         let body = std::fs::read_to_string(&config).unwrap();
         let features_pos = body.find("[features]").unwrap();
         let unrelated_pos = body.find("[unrelated]").unwrap();
-        let codex_pos = body.find("codex_hooks = true").unwrap();
-        assert!(features_pos < codex_pos && codex_pos < unrelated_pos);
+        let hooks_pos = body.find("hooks = true").unwrap();
+        assert!(features_pos < hooks_pos && hooks_pos < unrelated_pos);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enable_codex_hooks_feature_migrates_deprecated_flag() {
+        let dir = tmpdir("codex_features_migrate");
+        let config = dir.join("config.toml");
+        std::fs::write(
+            &config,
+            "[features]\ncodex_hooks = true\nother_flag = true\n\n[unrelated]\nx = 1\n",
+        )
+        .unwrap();
+        enable_codex_hooks_feature(&config).unwrap();
+        let body = std::fs::read_to_string(&config).unwrap();
+        assert!(body.contains("hooks = true"));
+        assert!(body.contains("other_flag = true"));
+        assert!(!body.contains("codex_hooks"));
+        let hooks_pos = body.find("hooks = true").unwrap();
+        let unrelated_pos = body.find("[unrelated]").unwrap();
+        assert!(hooks_pos < unrelated_pos);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enable_codex_hooks_feature_replaces_disabled_hooks_flag() {
+        let dir = tmpdir("codex_features_disabled");
+        let config = dir.join("config.toml");
+        std::fs::write(&config, "[features]\nhooks = false\ncodex_hooks = true\n").unwrap();
+        enable_codex_hooks_feature(&config).unwrap();
+        let body = std::fs::read_to_string(&config).unwrap();
+        assert!(body.contains("hooks = true"));
+        assert!(!body.contains("hooks = false"));
+        assert!(!body.contains("codex_hooks"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

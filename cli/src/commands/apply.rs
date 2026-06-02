@@ -313,7 +313,7 @@ pub fn revert_silent(extra_name: String) -> Result<ApplyOutcome> {
 }
 
 fn revert_with_env(extra_name: String, env: &ApplyEnvironment) -> Result<ApplyOutcome> {
-    let path = revert_state_path(&env, &extra_name);
+    let path = revert_state_path(env, &extra_name);
     let raw = fs::read_to_string(&path)
         .with_context(|| format!("reading revert state {}", path.display()))?;
     let state: RevertState = serde_json::from_str(&raw)
@@ -375,9 +375,9 @@ fn revert_with_env(extra_name: String, env: &ApplyEnvironment) -> Result<ApplyOu
         prune_empty_vstack_parents(generated);
     }
 
-    let _ = fs::remove_file(active_theme_marker_path(&env, &extra_name));
+    let _ = fs::remove_file(active_theme_marker_path(env, &extra_name));
     let _ = fs::remove_file(&path);
-    let _ = fs::remove_dir_all(revert_backup_dir(&env, &extra_name));
+    let _ = fs::remove_dir_all(revert_backup_dir(env, &extra_name));
 
     Ok(ApplyOutcome { notices })
 }
@@ -451,8 +451,8 @@ fn persist_revert_state(
     env: &ApplyEnvironment,
     applied: &[AppliedTargetRecord],
 ) -> Result<()> {
-    let state_path = revert_state_path(&env, &plan.extra_name);
-    let backup_dir = revert_backup_dir(&env, &plan.extra_name);
+    let state_path = revert_state_path(env, &plan.extra_name);
+    let backup_dir = revert_backup_dir(env, &plan.extra_name);
     fs::create_dir_all(&backup_dir)
         .with_context(|| format!("creating {}", backup_dir.display()))?;
 
@@ -542,10 +542,18 @@ fn prune_empty_vstack_parents(path: &Path) {
 }
 
 fn vscode_extension_id(package_json: &Path) -> Result<String> {
-    let raw = fs::read_to_string(package_json)
-        .with_context(|| format!("reading VS Code package manifest {}", package_json.display()))?;
-    let value: serde_json::Value = serde_json::from_str(&raw)
-        .with_context(|| format!("parsing VS Code package manifest {}", package_json.display()))?;
+    let raw = fs::read_to_string(package_json).with_context(|| {
+        format!(
+            "reading VS Code package manifest {}",
+            package_json.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&raw).with_context(|| {
+        format!(
+            "parsing VS Code package manifest {}",
+            package_json.display()
+        )
+    })?;
     let publisher = value
         .get("publisher")
         .and_then(|v| v.as_str())
@@ -1207,9 +1215,7 @@ fn build_target_plan(
     apply_ghostty_shaders: bool,
 ) -> Result<TargetPlan> {
     match target.kind {
-        TargetKind::Ghostty => {
-            build_ghostty_plan(extra, theme, target, env, apply_ghostty_shaders)
-        }
+        TargetKind::Ghostty => build_ghostty_plan(extra, theme, target, env, apply_ghostty_shaders),
         TargetKind::Vscode | TargetKind::Vscodium | TargetKind::Cursor => {
             build_vscode_family_plan(extra, theme, target, env)
         }
@@ -1863,14 +1869,12 @@ fn reload_running_tmux_servers(cli_path: &Path, config_file: &Path, silent: bool
                     );
                 }
             }
-            Err(err) => {
-                if !silent {
-                    eprintln!(
-                        "warning: could not run `tmux -S {} source-file {}`: {err}",
-                        socket.display(),
-                        config_file.display()
-                    );
-                }
+            Err(err) if !silent => {
+                eprintln!(
+                    "warning: could not run `tmux -S {} source-file {}`: {err}",
+                    socket.display(),
+                    config_file.display()
+                );
             }
             _ => {}
         }
@@ -2374,7 +2378,11 @@ theme-file = "ghostty/themes/forest.conf"
             .unwrap();
 
         assert_eq!(ghostty.copies.len(), 1);
-        assert!(ghostty.copies[0].destination.ends_with("themes/vstack/forest"));
+        assert!(
+            ghostty.copies[0]
+                .destination
+                .ends_with("themes/vstack/forest")
+        );
         let block = ghostty.managed_block.as_deref().unwrap();
         assert!(block.contains("config-file = themes/vstack/forest"));
         assert!(!block.contains("custom-shader"));

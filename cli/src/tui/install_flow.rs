@@ -568,11 +568,13 @@ fn handle_dialog_click(
         }
         if state.select.apply_picker_apply_area.contains(pos) {
             let action = state.select.apply_picker.as_ref().and_then(|dialog| {
-                dialog.cursor_theme_id().map(|theme_id| ConfirmAction::ApplyExtraTheme {
-                    extra_name: dialog.extra_name.clone(),
-                    theme_id: theme_id.to_string(),
-                    apply_ghostty_shaders: dialog.apply_ghostty_shaders,
-                })
+                dialog
+                    .cursor_theme_id()
+                    .map(|theme_id| ConfirmAction::ApplyExtraTheme {
+                        extra_name: dialog.extra_name.clone(),
+                        theme_id: theme_id.to_string(),
+                        apply_ghostty_shaders: dialog.apply_ghostty_shaders,
+                    })
             });
             if let Some(action) = action {
                 return execute_action(state, action);
@@ -1311,11 +1313,7 @@ fn handle_apply_picker_key(
     state: &mut FlowState,
     key: crossterm::event::KeyEvent,
 ) -> Result<Option<InstallFlowResult>> {
-    let visible_rows = state
-        .select
-        .apply_picker_row_areas
-        .len()
-        .max(1);
+    let visible_rows = state.select.apply_picker_row_areas.len().max(1);
     let mut action: Option<ConfirmAction> = None;
     let mut revert_extra: Option<String> = None;
     if let Some(dialog) = state.select.apply_picker.as_mut() {
@@ -1355,7 +1353,9 @@ fn handle_apply_picker_key(
             }
             KeyCode::Char(ch) => {
                 if let Some(idx) = dialog.themes.iter().position(|t| {
-                    t.id.chars().next().is_some_and(|c| c.eq_ignore_ascii_case(&ch))
+                    t.id.chars()
+                        .next()
+                        .is_some_and(|c| c.eq_ignore_ascii_case(&ch))
                 }) {
                     dialog.cursor = idx;
                 }
@@ -1395,7 +1395,6 @@ fn open_apply_revert_confirm(state: &mut FlowState, extra_name: String) {
 }
 
 /// Drive an interactive theme picker for the given extra name by suspending
-
 fn open_install_confirm(state: &mut FlowState) {
     let to_install = marked_install_items(&state.select);
 
@@ -2171,11 +2170,11 @@ fn apply_post_work(state: &mut FlowState<'_>, post: PostWork) -> Result<Option<I
             let outcome = result.lock().ok().and_then(|mut g| g.take());
             match outcome {
                 Some(Ok(apply_outcome)) => {
-                    if let Some(dialog) = state.select.apply_picker.as_mut() {
-                        if dialog.extra_name == extra_name {
-                            dialog.active_theme_id = Some(theme_id.clone());
-                            dialog.can_revert = true;
-                        }
+                    if let Some(dialog) = state.select.apply_picker.as_mut()
+                        && dialog.extra_name == extra_name
+                    {
+                        dialog.active_theme_id = Some(theme_id.clone());
+                        dialog.can_revert = true;
                     }
                     // Rebuild tabs so the extras list row picks up the new
                     // "active: <theme>" suffix from the cache marker.
@@ -2220,7 +2219,8 @@ fn apply_post_work(state: &mut FlowState<'_>, post: PostWork) -> Result<Option<I
                     state.select.flash_message = Some(msg);
                 }
                 Some(Err(err)) => {
-                    state.select.flash_message = Some(format!("Revert failed for {extra_name}: {err}"));
+                    state.select.flash_message =
+                        Some(format!("Revert failed for {extra_name}: {err}"));
                 }
                 None => {
                     state.select.flash_message = Some(format!(
