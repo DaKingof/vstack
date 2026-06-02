@@ -31,10 +31,24 @@ Resolves project root via `git rev-parse`, detects default branch automatically,
 | `exists` | Check if worktree exists for issue ID |
 | `check` | Pre-create git state check (JSON: uncommitted, unpushed) |
 | `push` | Push worktree branch with auto-rebase |
+| `codex-setup` | Apply env/config setup to a Codex Desktop app-created worktree |
+| `codex-branch` | Normalize a Codex Desktop app-created branch to an issue branch |
+| `codex-cleanup` | Non-destructive Codex Desktop cleanup hook; app owns deletion |
 
 `remove` deletes the worktree before deleting the local branch. Branch deletion uses safe `git branch -d`; if that fails after worktree removal, the script exits non-zero with a diagnostic naming the remaining branch and manual `git branch -D` recovery command.
 
 When a configured symlink path is already tracked in the worktree branch, the script marks that path assume-unchanged before replacing it so `git status` stays clean.
+
+### Codex Desktop hooks
+
+Let Codex Desktop own app-created worktree creation and deletion. Configure project setup/cleanup hooks to run:
+
+```bash
+"$CODEX_SOURCE_TREE_PATH/.agents/skills/worktree/scripts/worktree" codex-setup "$CODEX_WORKTREE_PATH"
+"$CODEX_SOURCE_TREE_PATH/.agents/skills/worktree/scripts/worktree" codex-cleanup "$CODEX_WORKTREE_PATH"
+```
+
+For issue workflows, run `codex-branch ISSUE_ID "$CODEX_WORKTREE_PATH"` before orchestration if the harness did not already normalize the branch.
 
 ### `create` flags
 

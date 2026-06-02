@@ -1,6 +1,6 @@
 #!/bin/bash
 # Portable git worktree manager
-# Usage: worktree create|list|remove|cleanup|path|exists|check|push|fix-links [ID] [options]
+# Usage: worktree create|list|remove|cleanup|path|exists|check|push|fix-links|codex-setup|codex-branch|codex-cleanup [ID] [options]
 #   create options:
 #     --base BRANCH   Checkout an existing remote branch into the worktree
 #     --from REF      Create a new branch starting from REF (branch, tag, or commit)
@@ -112,6 +112,10 @@ worktree_path() {
   echo "$TREES_DIR/$(echo "$1" | tr '[:upper:]' '[:lower:]')"
 }
 
+issue_branch_name() {
+  echo "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 # Symlink a path from main repo into worktree (handles tracked dirs with assume-unchanged)
 # Idempotently append a worktree-relative path to the COMMON git-dir's
 # info/exclude so git treats the symlink we lay down as ignored content.
@@ -202,7 +206,10 @@ setup_worktree_links() {
   # Project-configured mkdirs (run first so subsequent symlinks/copies can
   # land inside them if needed). Idempotent; ignores empty entries.
   for path in ${WORKTREE_MKDIRS:-}; do
-    [[ -n "$path" ]] && mkdir -p "$wt/$path"
+    if [[ -n "$path" ]]; then
+      mkdir -p "$wt/$path"
+      exclude_from_worktree_index "$wt" "$path"
+    fi
   done
 
   # Project-configured symlinks
@@ -213,6 +220,7 @@ setup_worktree_links() {
   # Project-configured copies
   for path in ${WORKTREE_COPIES:-}; do
     if [[ -f "$PROJECT_ROOT/$path" ]]; then
+      exclude_from_worktree_index "$wt" "$path"
       mkdir -p "$(dirname "$wt/$path")"
       cp "$PROJECT_ROOT/$path" "$wt/$path"
     fi
@@ -237,6 +245,54 @@ setup_worktree_links() {
     ln -sfn "$target" "$wt/$path"
     exclude_from_worktree_index "$wt" "$path"
   done
+}
+
+configure_worktree_git() {
+  local wt="$1"
+
+  # Required before writing per-worktree git config. Safe to repeat.
+  git -C "$PROJECT_ROOT" config extensions.worktreeConfig true 2>/dev/null || true
+
+  # Add bot remote for agent pushes (if configured).
+  if [[ -n "${BOT_REMOTE_NAME:-}" && -n "${BOT_REMOTE_URL:-}" ]]; then
+    git -C "$wt" remote add "$BOT_REMOTE_NAME" "$BOT_REMOTE_URL" 2>/dev/null || true
+  fi
+
+  # Set agent git identity (if configured).
+  if [[ -n "${BOT_NAME:-}" ]]; then
+    git -C "$wt" config --worktree user.name "$BOT_NAME"
+    git -C "$wt" config --worktree user.email "${BOT_EMAIL:-}"
+    if [[ -n "${BOT_SIGNING_KEY:-}" ]]; then
+      git -C "$wt" config --worktree gpg.format ssh
+      git -C "$wt" config --worktree user.signingkey "$BOT_SIGNING_KEY"
+      git -C "$wt" config --worktree commit.gpgsign true
+    fi
+  fi
+}
+
+install_worktree_dependencies() {
+  local wt="$1"
+
+  # Preserve the historical behavior for JS worktrees without blocking setup.
+  if [[ -f "$wt/package.json" ]] && command -v npm >/dev/null 2>&1; then
+    (
+      cd "$wt" || exit 0
+      npm install --no-audit --no-fund >/dev/null 2>&1
+    ) &
+  fi
+}
+
+setup_codex_worktree() {
+  local wt="$1"
+
+  setup_worktree_links "$wt"
+  configure_worktree_git "$wt"
+  install_worktree_dependencies "$wt"
+}
+
+is_git_worktree_path() {
+  local wt="$1"
+  [[ -f "$wt/.git" || -d "$wt/.git" ]]
 }
 
 case "${1:-}" in
@@ -272,8 +328,8 @@ case "${1:-}" in
           exit 1
         fi
       fi
-      # Refresh symlinks (rebase may have replaced symlinks with tracked content)
-      setup_worktree_links "$WT_PATH"
+      # Refresh setup (rebase may have replaced symlinks with tracked content)
+      setup_codex_worktree "$WT_PATH"
       echo "$WT_PATH"
       exit 0
     fi
@@ -305,7 +361,7 @@ case "${1:-}" in
         git -C "$WT_PATH" branch --set-upstream-to="$_REMOTE/$BRANCH" "$BRANCH" >/dev/null 2>&1 || true
         git -C "$WT_PATH" merge --ff-only "$_REMOTE/$BRANCH" >/dev/null 2>&1 || true
       fi
-      setup_worktree_links "$WT_PATH"
+      setup_codex_worktree "$WT_PATH"
       echo "$WT_PATH"
       exit 0
     fi
@@ -364,31 +420,7 @@ case "${1:-}" in
       fi
     fi
 
-    # Set up symlinks, copies, and bot config
-    setup_worktree_links "$WT_PATH"
-
-    # Add bot remote for agent pushes (if configured)
-    [[ -n "${BOT_REMOTE_NAME:-}" && -n "${BOT_REMOTE_URL:-}" ]] && \
-      git -C "$WT_PATH" remote add "$BOT_REMOTE_NAME" "$BOT_REMOTE_URL" 2>/dev/null || true
-
-    # Install dependencies if npm project detected.
-    if [[ -f "$WT_PATH/package.json" ]] && command -v npm >/dev/null 2>&1; then
-      (
-        cd "$WT_PATH" || exit 0
-        npm install --no-audit --no-fund >/dev/null 2>&1
-      ) &
-    fi
-
-    # Set agent git identity (if configured, requires extensions.worktreeConfig=true)
-    if [[ -n "${BOT_NAME:-}" ]]; then
-      git -C "$WT_PATH" config --worktree user.name "$BOT_NAME"
-      git -C "$WT_PATH" config --worktree user.email "${BOT_EMAIL:-}"
-      [[ -n "${BOT_SIGNING_KEY:-}" ]] && {
-        git -C "$WT_PATH" config --worktree gpg.format ssh
-        git -C "$WT_PATH" config --worktree user.signingkey "$BOT_SIGNING_KEY"
-        git -C "$WT_PATH" config --worktree commit.gpgsign true
-      }
-    fi
+    setup_codex_worktree "$WT_PATH"
     echo "$WT_PATH"
     ;;
 
@@ -517,7 +549,7 @@ case "${1:-}" in
       WT_PATH="$(worktree_path "$ARG")"
     fi
 
-    if [[ ! -d "$WT_PATH/.git" && ! -f "$WT_PATH/.git" ]]; then
+    if ! is_git_worktree_path "$WT_PATH"; then
       echo "Error: Not a git worktree: $WT_PATH" >&2
       exit 1
     fi
@@ -565,7 +597,7 @@ case "${1:-}" in
     else
       WT_PATH="$(worktree_path "$ARG")"
     fi
-    if [[ ! -f "$WT_PATH/.git" ]]; then
+    if ! is_git_worktree_path "$WT_PATH"; then
       echo "Error: Not a git worktree: $WT_PATH" >&2
       exit 1
     fi
@@ -573,8 +605,93 @@ case "${1:-}" in
     echo "Restored symlinks in $WT_PATH"
     ;;
 
+  codex-setup)
+    # Codex Desktop owns worktree creation. This command applies the same
+    # project-local setup that `create` applies after git has already created
+    # the worktree: env/config symlinks, configured copies/dirs, optional bot
+    # git config, optional bot remote, and lightweight dependency bootstrap.
+    ARG="${2:-}"
+    if [[ -z "$ARG" ]]; then
+      WT_PATH="$PWD"
+    elif [[ "$ARG" == */* ]]; then
+      WT_PATH="$ARG"
+    else
+      WT_PATH="$(worktree_path "$ARG")"
+    fi
+    if ! is_git_worktree_path "$WT_PATH"; then
+      echo "Error: Not a git worktree: $WT_PATH" >&2
+      exit 1
+    fi
+    setup_codex_worktree "$WT_PATH"
+    echo "Configured Codex worktree: $WT_PATH"
+    ;;
+
+  codex-branch)
+    # Codex Desktop may create an app-managed branch name. Normalize the
+    # current worktree to the issue branch expected by linear-orch before
+    # running `linear-orch start <ISSUE>`.
+    ISSUE="${2:?Error: codex-branch requires an issue ID or branch name}"
+    ARG="${3:-}"
+    if [[ -z "$ARG" ]]; then
+      WT_PATH="$PWD"
+    elif [[ "$ARG" == */* ]]; then
+      WT_PATH="$ARG"
+    else
+      WT_PATH="$(worktree_path "$ARG")"
+    fi
+    if ! is_git_worktree_path "$WT_PATH"; then
+      echo "Error: Not a git worktree: $WT_PATH" >&2
+      exit 1
+    fi
+
+    TARGET_BRANCH="$(issue_branch_name "$ISSUE")"
+    CURRENT_BRANCH="$(git -C "$WT_PATH" branch --show-current 2>/dev/null || true)"
+    if [[ "$CURRENT_BRANCH" == "$TARGET_BRANCH" ]]; then
+      echo "Codex worktree already on $TARGET_BRANCH: $WT_PATH"
+      exit 0
+    fi
+
+    fetch_origin
+    _REMOTE="${BOT_REMOTE_NAME:-origin}"
+    if git -C "$PROJECT_ROOT" show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
+      git -C "$WT_PATH" switch "$TARGET_BRANCH" >/dev/null 2>&1 || {
+        echo "Error: Branch '$TARGET_BRANCH' already exists and cannot be checked out in $WT_PATH" >&2
+        exit 1
+      }
+    elif git -C "$PROJECT_ROOT" rev-parse --verify "$_REMOTE/$TARGET_BRANCH" >/dev/null 2>&1; then
+      git -C "$WT_PATH" switch -c "$TARGET_BRANCH" --track "$_REMOTE/$TARGET_BRANCH" >/dev/null 2>&1
+    elif [[ -n "$CURRENT_BRANCH" ]]; then
+      git -C "$WT_PATH" branch -m "$TARGET_BRANCH"
+    else
+      git -C "$WT_PATH" switch -c "$TARGET_BRANCH" >/dev/null 2>&1
+    fi
+
+    if git -C "$WT_PATH" rev-parse --verify "$_REMOTE/$TARGET_BRANCH" >/dev/null 2>&1; then
+      git -C "$WT_PATH" branch --set-upstream-to="$_REMOTE/$TARGET_BRANCH" "$TARGET_BRANCH" >/dev/null 2>&1 || true
+    fi
+    setup_codex_worktree "$WT_PATH"
+    echo "Codex worktree branch ready: $TARGET_BRANCH ($WT_PATH)"
+    ;;
+
+  codex-cleanup)
+    # Codex Desktop owns worktree/branch deletion. This hook is intentionally
+    # non-destructive and does not remove symlinks: if the app fails to delete
+    # the worktree immediately after cleanup, mutating tracked symlink paths can
+    # leave the worktree dirty. Project-level teardown (containers, caches)
+    # belongs in the Codex environment cleanup script after this command.
+    ARG="${2:-}"
+    if [[ -z "$ARG" ]]; then
+      WT_PATH="$PWD"
+    elif [[ "$ARG" == */* ]]; then
+      WT_PATH="$ARG"
+    else
+      WT_PATH="$(worktree_path "$ARG")"
+    fi
+    echo "Codex cleanup hook complete; app owns worktree deletion: $WT_PATH"
+    ;;
+
   *)
-    echo "Usage: $0 create|list|remove|cleanup|path|exists|check|push|fix-links [ID|/path] [options]" >&2
+    echo "Usage: $0 create|list|remove|cleanup|path|exists|check|push|fix-links|codex-setup|codex-branch|codex-cleanup [ID|/path] [options]" >&2
     exit 1
     ;;
 esac

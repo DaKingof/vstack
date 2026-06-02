@@ -5,23 +5,6 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-SKILLS_DIR="$PROJECT_ROOT/.agents/skills"
-
-# Source project config/secrets. .env.local overrides .env when both exist.
-for ENV_FILE in "$PROJECT_ROOT/.env" "$PROJECT_ROOT/.env.local"; do
-  if [[ -f "$ENV_FILE" ]]; then
-    # shellcheck source=/dev/null
-    source "$ENV_FILE"
-  fi
-done
-unset ENV_FILE
-
-# Sibling skill scripts (resolved from install location)
-LINEAR="$SKILLS_DIR/linear/scripts/linear.sh"
-GITHUB="$SKILLS_DIR/github/scripts/github.sh"
-
 OUTPUT_FORMAT="dashboard"
 ISSUE_ID_ARG=""
 while [[ $# -gt 0 ]]; do
@@ -32,6 +15,55 @@ while [[ $# -gt 0 ]]; do
     *)      ISSUE_ID_ARG="$1"; shift ;;
   esac
 done
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+SKILLS_DIR="$PROJECT_ROOT/.agents/skills"
+
+source_project_env() {
+  local env_file
+  for env_file in "$PROJECT_ROOT/.env" "$PROJECT_ROOT/.env.local"; do
+    if [[ -f "$env_file" ]]; then
+      # shellcheck source=/dev/null
+      source "$env_file"
+    fi
+  done
+}
+
+is_codex_managed_worktree() {
+  local project_real codex_real
+  project_real="$(cd "$PROJECT_ROOT" 2>/dev/null && pwd -P)" || return 1
+
+  if [[ -n "${CODEX_WORKTREE_PATH:-}" ]]; then
+    codex_real="$(cd "$CODEX_WORKTREE_PATH" 2>/dev/null && pwd -P)" || codex_real=""
+    [[ -n "$codex_real" && "$project_real" == "$codex_real" ]] && return 0
+  fi
+
+  [[ -n "${HOME:-}" && "$project_real" == "$HOME/.codex/worktrees/"* ]]
+}
+
+normalize_codex_issue_branch() {
+  local issue_id="$1"
+  [[ -n "$issue_id" ]] || return 0
+  is_codex_managed_worktree || return 0
+
+  local worktree_script="$PROJECT_ROOT/.agents/skills/worktree/scripts/worktree"
+  [[ -x "$worktree_script" ]] || return 0
+
+  local target_branch current_branch
+  target_branch="$(printf '%s' "$issue_id" | tr '[:upper:]' '[:lower:]')"
+  current_branch="$(git -C "$PROJECT_ROOT" branch --show-current 2>/dev/null || true)"
+  [[ "$current_branch" == "$target_branch" ]] && return 0
+
+  "$worktree_script" codex-branch "$issue_id" "$PROJECT_ROOT" >/dev/null
+}
+
+# Source project config/secrets. .env.local overrides .env when both exist.
+source_project_env
+
+# Sibling skill scripts (resolved from install location)
+LINEAR="$SKILLS_DIR/linear/scripts/linear.sh"
+GITHUB="$SKILLS_DIR/github/scripts/github.sh"
 
 json_or_default() {
   local fallback="$1"
@@ -179,6 +211,12 @@ GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || echo "")
 if [[ -n "$GIT_COMMON_DIR" && "$GIT_COMMON_DIR" != ".git" && "$GIT_COMMON_DIR" != "$(pwd)/.git" ]]; then
   IS_WORKTREE="true"
   WORKTREE_NAME=$(basename "$(pwd)")
+  if [[ -n "$ISSUE_ID_ARG" ]]; then
+    normalize_codex_issue_branch "$ISSUE_ID"
+    source_project_env
+    BRANCH=$(git branch --show-current 2>/dev/null || echo "main")
+    ISSUE_ID="$ISSUE_ID_ARG"
+  fi
   # Fast path: worktree sessions skip full dashboard, check only auth + LSP
   WT_GH_OK="false"
   WT_GH_TOKEN="${GH_BOT_TOKEN_RESOLVED:-$GH_MAIN_TOKEN}"

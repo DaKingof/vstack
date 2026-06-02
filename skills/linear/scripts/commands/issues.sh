@@ -198,6 +198,7 @@ Update Options:
   --remove-parent       Remove parent (convert to top-level issue)
   --milestone <name|uuid> Set project milestone (name or UUID)
   --cycle <id>          Set cycle (sprint) ID
+  --clear-cycle         Remove cycle assignment
   --sort-order <float>  Manual sort position (lower = higher; parent/standalone only)
 
 Relation Options (add-relation):
@@ -231,6 +232,7 @@ Examples:
 
   # Cycle (sprint) assignment
   issues.sh update PROJ-42 --cycle 864d7ea0-2347-4048-80cd-5be977d904e4
+  issues.sh update PROJ-42 --clear-cycle
 
   # Bulk operations (reduces API calls)
   issues.sh list --project-id <uuid> --with-relations   # Single query with all relations
@@ -1037,6 +1039,7 @@ update_issue() {
     local remove_parent="false"
     local milestone=""
     local cycle=""
+    local clear_cycle="false"
     local estimate=""
     local sort_order=""
 
@@ -1132,6 +1135,10 @@ update_issue() {
             ;;
         --cycle=*)
             cycle="${1#*=}"
+            shift
+            ;;
+        --clear-cycle)
+            clear_cycle="true"
             shift
             ;;
         --sort-order)
@@ -1264,7 +1271,12 @@ update_issue() {
     fi
 
     # Handle cycle (sprint)
-    if [ -n "$cycle" ]; then
+    if [ "$clear_cycle" = "true" ] && [ -n "$cycle" ]; then
+        echo '{"error": "Use either --cycle or --clear-cycle, not both"}' >&2
+        return 1
+    elif [ "$clear_cycle" = "true" ]; then
+        input_parts+=("\"cycleId\": null")
+    elif [ -n "$cycle" ]; then
         input_parts+=("\"cycleId\": \"$cycle\"")
     fi
 

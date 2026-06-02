@@ -4,7 +4,7 @@ set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKTREE_SCRIPT="$(cd "$TEST_DIR/.." && pwd)/scripts/worktree"
-TMP_ROOT="$(mktemp -d)"
+TMP_ROOT="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 PASS=0
@@ -40,6 +40,17 @@ assert_path_absent() {
   else
     FAIL=$((FAIL + 1))
     printf '  FAIL  %s\n        still exists: %s\n' "$name" "$path"
+  fi
+}
+
+assert_path_exists() {
+  local path="$1" name="$2"
+  if [[ -e "$path" ]]; then
+    PASS=$((PASS + 1))
+    printf '  ok    %s\n' "$name"
+  else
+    FAIL=$((FAIL + 1))
+    printf '  FAIL  %s\n        missing path: %s\n' "$name" "$path"
   fi
 }
 
@@ -163,6 +174,49 @@ assert_symlink_target "$LINK_ROOT/trees/issue-links/.claude/settings.json" "$LIN
 assert_git_status_clean_for_path "$LINK_ROOT/trees/issue-links" ".claude/settings.json" "configured tracked file symlink is hidden from git status"
 assert_symlink_target "$LINK_ROOT/trees/issue-links/.claude/agents" "$LINK_ROOT/main/.claude/agents" "configured dir symlink points to main checkout"
 assert_symlink_target "$LINK_ROOT/trees/issue-links/.claude/CLAUDE.md" "../AGENTS.md" "relative symlink keeps worktree-local AGENTS target"
+
+# Codex Desktop owns worktree lifecycle. codex-setup applies project setup to
+# an already-created app worktree; codex-cleanup is a non-destructive hook and
+# leaves worktree/branch deletion to the app.
+CODEX_ROOT="$TMP_ROOT/codex"
+make_repo "$CODEX_ROOT/main"
+mkdir -p "$CODEX_ROOT/main/config"
+printf 'local-config\n' > "$CODEX_ROOT/main/config/local.txt"
+printf 'copied-config\n' > "$CODEX_ROOT/main/copied.txt"
+cat > "$CODEX_ROOT/main/.env.local" <<'ENV'
+WORKTREE_SYMLINKS=".env.local config/local.txt"
+WORKTREE_COPIES="copied.txt"
+WORKTREE_MKDIRS="tmp/cache"
+BOT_NAME="Codex Bot"
+BOT_EMAIL="codex@example.com"
+ENV
+git -C "$CODEX_ROOT/main" worktree add -q -b issue-codex "$CODEX_ROOT/trees/issue-codex" main
+codex_setup_out=$(cd "$CODEX_ROOT/main" && "$WORKTREE_SCRIPT" codex-setup "$CODEX_ROOT/trees/issue-codex")
+assert_eq "$codex_setup_out" "Configured Codex worktree: $CODEX_ROOT/trees/issue-codex" "codex-setup reports configured worktree"
+assert_symlink_target "$CODEX_ROOT/trees/issue-codex/.env.local" "$CODEX_ROOT/main/.env.local" "codex-setup links .env.local"
+assert_symlink_target "$CODEX_ROOT/trees/issue-codex/config/local.txt" "$CODEX_ROOT/main/config/local.txt" "codex-setup links configured file"
+assert_path_exists "$CODEX_ROOT/trees/issue-codex/tmp/cache" "codex-setup creates configured mkdir"
+assert_eq "$(cat "$CODEX_ROOT/trees/issue-codex/copied.txt")" "copied-config" "codex-setup copies configured file"
+assert_eq "$(git -C "$CODEX_ROOT/trees/issue-codex" config --worktree user.name)" "Codex Bot" "codex-setup configures worktree user.name"
+assert_eq "$(git -C "$CODEX_ROOT/trees/issue-codex" config --worktree user.email)" "codex@example.com" "codex-setup configures worktree user.email"
+codex_cleanup_out=$(cd "$CODEX_ROOT/main" && "$WORKTREE_SCRIPT" codex-cleanup "$CODEX_ROOT/trees/issue-codex")
+assert_eq "$codex_cleanup_out" "Codex cleanup hook complete; app owns worktree deletion: $CODEX_ROOT/trees/issue-codex" "codex-cleanup reports app-owned deletion"
+assert_symlink_target "$CODEX_ROOT/trees/issue-codex/.env.local" "$CODEX_ROOT/main/.env.local" "codex-cleanup leaves configured symlink intact"
+assert_git_worktree "$CODEX_ROOT/trees/issue-codex" "codex-cleanup leaves worktree for app deletion"
+assert_branch_exists "$CODEX_ROOT/main" "issue-codex" "codex-cleanup leaves branch for app deletion"
+assert_eq "$(git -C "$CODEX_ROOT/trees/issue-codex" status --short)" "" "codex-cleanup leaves worktree clean"
+
+CODEX_BRANCH_ROOT="$TMP_ROOT/codex-branch"
+make_repo "$CODEX_BRANCH_ROOT/main"
+cat > "$CODEX_BRANCH_ROOT/main/.env.local" <<'ENV'
+WORKTREE_MKDIRS="tmp"
+ENV
+git -C "$CODEX_BRANCH_ROOT/main" worktree add -q -b app-managed-branch "$CODEX_BRANCH_ROOT/trees/app-managed" main
+codex_branch_out=$(cd "$CODEX_BRANCH_ROOT/main" && "$WORKTREE_SCRIPT" codex-branch CC-999 "$CODEX_BRANCH_ROOT/trees/app-managed")
+assert_eq "$codex_branch_out" "Codex worktree branch ready: cc-999 ($CODEX_BRANCH_ROOT/trees/app-managed)" "codex-branch reports normalized branch"
+assert_eq "$(git -C "$CODEX_BRANCH_ROOT/trees/app-managed" branch --show-current)" "cc-999" "codex-branch renames app branch to issue branch"
+assert_branch_absent "$CODEX_BRANCH_ROOT/main" "app-managed-branch" "codex-branch removes old app branch name"
+assert_path_exists "$CODEX_BRANCH_ROOT/trees/app-managed/tmp" "codex-branch reapplies setup after branch normalization"
 
 # .env.local is not special-cased. It is only linked when listed in
 # WORKTREE_SYMLINKS.

@@ -63,3 +63,7 @@ Set in `.env` or `.env.local`, or export in the shell. Helper scripts source bot
 1. Install dependency skills: `linear`, `github`, `worktree`, `decider`, `project-management`.
 2. Set runtime config in `.env` or `.env.local` (`LINEAR_API_KEY`, `ORCH_STATE_DIR`, etc.).
 3. Verify each dependency skill works from the project root before invoking a workflow.
+
+## Codex Desktop Worktrees
+
+When Codex Desktop creates the worktree, configure the worktree skill's `codex-setup` and `codex-cleanup` hooks in the Codex environment. Then run `initialize [ISSUE_ID]` or `start [ISSUE_ID]` with the explicit issue ID; `session-init` will normalize the app-created branch before workflow state is initialized.

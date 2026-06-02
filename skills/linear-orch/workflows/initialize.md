@@ -23,6 +23,7 @@ Set up team, auth, cache, and workflow state for a worktree session.
 1. **Run**: `.agents/skills/linear-orch/scripts/session-init --json [ISSUE_ID]`
    - Pass `[ISSUE_ID]` as a positional argument if the caller provided one; otherwise omit it.
    - The script resolves `ISSUE_ID` from the argument or current branch (via `$GH_ISSUE_PATTERN`, case-insensitive) and returns it as `issue_id` in the JSON output (alongside `branch`).
+   - In Codex-managed worktrees with an explicit `[ISSUE_ID]`, the script normalizes the app-created branch to the lower-case issue branch before returning `branch`.
    - Read `issue_id` from the output and use it for subsequent steps. If empty (branch does not match the pattern), fall back to the sanitized branch name — replace `/` with `-` — so workflow-state and team naming still work for non-issue branches.
 
 2. **If `gh_auth` is false or `linear_auth.ok` is false** → report error and fix before proceeding.
