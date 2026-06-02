@@ -729,7 +729,11 @@ detect_bot_reviewers_from_inputs() {
             | select((.body // "") | test($marker_re; "i"))
             | .user.login
         ' <<<"$comments_json"
-        jq -r '.[].user.login | select(endswith("[bot]"))' <<<"$reactions_json"
+        jq -r --arg login_re "$login_re" '
+            .[]
+            | select((.user.login // "") | test($login_re))
+            | .user.login
+        ' <<<"$reactions_json"
     } | sort -u | grep -v '^$' || true
 }
 

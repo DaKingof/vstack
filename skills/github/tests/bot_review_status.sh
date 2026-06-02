@@ -218,6 +218,10 @@ detected=$(detect_bot_reviewers_from_inputs "$(fx empty.json)" "$(fx untrusted_s
 assert_eq "$detected" "" "detect excludes untrusted non-review bot status comment"
 selected=$(select_sticky_comment_from_comments "$(fx untrusted_status_comments.json)" "review-bot[bot]" true)
 assert_eq "$selected" "" "sticky fallback ignores non-review bot status comment"
+detected=$(detect_bot_reviewers_from_inputs "$(fx empty.json)" "$(fx empty.json)" "$(fx codex_eyes_body_reactions.json)" | paste -sd, -)
+assert_eq "$detected" "chatgpt-codex-connector[bot]" "detect includes known review bot PR-body reaction"
+detected=$(detect_bot_reviewers_from_inputs "$(fx empty.json)" "$(fx empty.json)" "$(fx untrusted_body_reactions.json)" | paste -sd, -)
+assert_eq "$detected" "" "detect excludes untrusted bot PR-body reaction"
 
 # --- Reaction normalization (REST + GraphQL forms) ---
 echo
