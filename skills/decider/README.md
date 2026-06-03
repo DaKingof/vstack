@@ -50,4 +50,4 @@ Optionally set `DECISIONS_DIR` in `.env.local` to override auto-discovery (searc
 
 - `bash` 4+
 - `jq`
-- `grep` with `-P` (PCRE)
+- GNU `grep` with `-P` (PCRE): available as `grep`, `ggrep`, or Homebrew `gnubin/grep`

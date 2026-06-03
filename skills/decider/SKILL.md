@@ -114,5 +114,5 @@ Do not create decision documents without explicit user approval. If your work in
 
 - `bash` 4+
 - `jq`
-- `grep` with `-P` (PCRE) support
+- GNU `grep` with `-P` (PCRE) support (`grep`, `ggrep`, or Homebrew `gnubin/grep`)
 - `sed`, `find`

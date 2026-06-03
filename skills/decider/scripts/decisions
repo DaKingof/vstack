@@ -31,6 +31,38 @@ if ! command -v jq &>/dev/null; then
   exit 1
 fi
 
+resolve_pcre_grep() {
+  local candidate
+  local candidates=()
+
+  if candidate="$(command -v grep 2>/dev/null)"; then
+    candidates+=("$candidate")
+  fi
+  if candidate="$(command -v ggrep 2>/dev/null)"; then
+    candidates+=("$candidate")
+  fi
+  candidates+=(
+    "/opt/homebrew/opt/grep/libexec/gnubin/grep"
+    "/usr/local/opt/grep/libexec/gnubin/grep"
+  )
+
+  local seen=":"
+  for candidate in "${candidates[@]}"; do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    case "$seen" in
+      *":$candidate:"*) continue ;;
+    esac
+    seen+="$candidate:"
+
+    if printf 'probe\n' | "$candidate" -qP '^probe$' >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 # --- Configuration -----------------------------------------------------------
 
 # Auto-discover decisions directory if not set
@@ -65,6 +97,17 @@ if [[ ! -f "$INDEX_FILE" ]]; then
   exit 1
 fi
 
+PCRE_GREP="$(resolve_pcre_grep || true)"
+if [[ -z "$PCRE_GREP" ]]; then
+  cat >&2 <<'EOF'
+Error: GNU grep with -P (PCRE) support is required.
+Install GNU grep (ggrep) or add Homebrew GNU grep to PATH, for example:
+  export PATH="/opt/homebrew/opt/grep/libexec/gnubin:$PATH"
+  export PATH="/usr/local/opt/grep/libexec/gnubin:$PATH"
+EOF
+  exit 1
+fi
+
 # --- Helpers ------------------------------------------------------------------
 
 trim() { echo "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
@@ -88,7 +131,7 @@ parse_index() {
     rationale=$(trim "$rationale")
     status=$(trim "$status")
     local path=""
-    path=$(echo "$link" | grep -oP '\(([^)]+)\)' | head -1 | tr -d '()' || true)
+    path=$(echo "$link" | "$PCRE_GREP" -oP '\(([^)]+)\)' | head -1 | tr -d '()' || true)
     # Make path relative to DECISIONS_DIR so agents can read it directly
     if [[ -n "$path" ]]; then path="$DECISIONS_DIR/$path"; fi
 
@@ -228,7 +271,7 @@ cmd_next_id() {
     if [[ "$decimal" -gt "$max_num" ]]; then
       max_num="$decimal"
     fi
-  done < <(grep -oP 'D(\d+)' "$INDEX_FILE" | grep -oP '\d+' | sort -n || true)
+  done < <("$PCRE_GREP" -oP 'D(\d+)' "$INDEX_FILE" | "$PCRE_GREP" -oP '\d+' | sort -n || true)
 
   printf "D%03d\n" $((max_num + 1))
 }
@@ -252,7 +295,7 @@ cmd_get() {
   path=$(echo "$match" | jq -r '.path')
   local date="unknown"
   if [[ -f "$path" ]]; then
-    date=$(grep -P '^\*\*Date\*\*:' "$path" | head -1 | sed 's/\*\*Date\*\*: //' || echo "unknown")
+    date=$("$PCRE_GREP" -P '^\*\*Date\*\*:' "$path" | head -1 | sed 's/\*\*Date\*\*: //' || echo "unknown")
   fi
 
   echo "$match" | jq --arg date "$date" '. + {date: $date}'
