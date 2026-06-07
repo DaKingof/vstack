@@ -3,7 +3,7 @@
 # name: pre-commit-check
 # event: PreToolUse
 # matcher: Bash
-# description: Validate formatting and lint before git commits on source files. Currently supports Rust (cargo fmt + clippy).
+# description: Validate formatting and lint before git commits on source files. Supports Rust (cargo fmt + clippy) and Biome projects (JS/TS/JSON).
 # safety: Prevents committing code that fails format or lint checks.
 # ---
 
@@ -58,6 +58,36 @@ if echo "$STAGED" | grep -qE '\.rs$'; then
   if ! cargo clippy "${MANIFEST_ARGS[@]}" --workspace --all-targets -- -D warnings 2>/dev/null; then
     echo "cargo clippy found warnings. Fix them before committing." >&2
     exit 2
+  fi
+fi
+
+# Check for JS/TS/JSON files in Biome projects (no-op when the repo doesn't
+# use Biome). Checks only the staged paths, so it stays fast in any repo size.
+if echo "$STAGED" | grep -qE '\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc)$'; then
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$REPO_ROOT" ] && { [ -f "$REPO_ROOT/biome.json" ] || [ -f "$REPO_ROOT/biome.jsonc" ]; }; then
+    # Prefer the project-pinned binary; fall back to PATH. Never npx-install.
+    BIOME=""
+    if [ -x "$REPO_ROOT/node_modules/.bin/biome" ]; then
+      BIOME="$REPO_ROOT/node_modules/.bin/biome"
+    elif command -v biome > /dev/null 2>&1; then
+      BIOME="biome"
+    fi
+    if [ -n "$BIOME" ]; then
+      # Only staged paths that still exist (renames/deletes drop out), as
+      # paths relative to the repo root since that's where biome.json lives.
+      FILES=$(echo "$STAGED" | grep -E '\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc)$' | while IFS= read -r path; do
+        [ -f "$REPO_ROOT/$path" ] && echo "$path"
+      done || true)
+      if [ -n "$FILES" ]; then
+        # shellcheck disable=SC2086 -- intentional word splitting of file list
+        if ! OUTPUT=$(cd "$REPO_ROOT" && "$BIOME" check $FILES 2>&1); then
+          echo "biome check failed on staged files. Run 'biome check --write' first." >&2
+          echo "$OUTPUT" | head -20 >&2
+          exit 2
+        fi
+      fi
+    fi
   fi
 fi
 
