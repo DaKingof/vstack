@@ -34,7 +34,7 @@
 
             sourceRoot = "source/cli";
 
-            cargoHash = "sha256-ifmlOan4DTcxt5GbuYwNqFlPATNU5nul+E4wI9J/SPE=";
+            cargoHash = "sha256-z3vko8rNBmqVBpBQPxp+Ircn9nM6tnjb/CC0ZpVnHvo=";
 
             nativeBuildInputs = with pkgs; [
               git
